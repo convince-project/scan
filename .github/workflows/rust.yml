@@ -44,10 +44,10 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           # Upload docs folder
-          path: 'docs'
+          path: 'target/doc'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
         with:
-          folder: docs # The folder the action should deploy.
+          folder: target/doc # The folder the action should deploy.
 
