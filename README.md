@@ -12,7 +12,7 @@ There is no released version yet.
 
 ## Documentation
 
-API docs for the library crates are hosted at [https://convince-project.github.io/scan]().
+API docs for the library crates are hosted at [https://convince-project.github.io/scan/scan](https://convince-project.github.io/scan/scan).
 
 There is currently no user documentation/manual yet.
 
