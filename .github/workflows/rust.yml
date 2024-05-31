@@ -5,7 +5,7 @@ permissions:
   pages: write
   id-token: write
   
-on: [push, pull_request]
+on: [pull_request]
 
 env:
   CARGO_TERM_COLOR: always
