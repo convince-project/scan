@@ -285,9 +285,9 @@ impl ModelBuilder {
                 event_received,
                 step,
                 loc_tick,
-                Some(Expression::Equal(Box::new((
-                    Expression::Component(0, Box::new(Expression::Var(ext_event_var))),
-                    Expression::Integer(tick_idx),
+                Some(CsExpression::Equal(Box::new((
+                    CsExpression::Component(0, Box::new(CsExpression::Var(ext_event_var))),
+                    CsExpression::Integer(tick_idx),
                 )))),
             )
             .expect("hope this works");
@@ -297,9 +297,9 @@ impl ModelBuilder {
                 event_received,
                 step,
                 loc_halt,
-                Some(Expression::Equal(Box::new((
-                    Expression::Component(0, Box::new(Expression::Var(ext_event_var))),
-                    Expression::Integer(halt_idx),
+                Some(CsExpression::Equal(Box::new((
+                    CsExpression::Component(0, Box::new(CsExpression::Var(ext_event_var))),
+                    CsExpression::Integer(halt_idx),
                 )))),
             )
             .expect("hope this works");
@@ -320,13 +320,13 @@ impl ModelBuilder {
     fn build_bt_node(
         &mut self,
         pg_id: PgId,
-        pt_tick: CsLocation,
-        pt_success: CsLocation,
-        pt_running: CsLocation,
-        pt_failure: CsLocation,
-        pt_halt: CsLocation,
-        pt_ack: CsLocation,
-        step: CsAction,
+        pt_tick: Location,
+        pt_success: Location,
+        pt_running: Location,
+        pt_failure: Location,
+        pt_halt: Location,
+        pt_ack: Location,
+        step: Action,
         node: &BtNode,
     ) -> anyhow::Result<()> {
         match node {
@@ -342,7 +342,7 @@ impl ModelBuilder {
                             pg_id,
                             halt_after_failure,
                             halting_after_failure,
-                            Expression::Boolean(true),
+                            CsExpression::Boolean(true),
                         )
                         .expect("hand-picked arguments");
                     let failure_after_halting =
@@ -352,7 +352,7 @@ impl ModelBuilder {
                             pg_id,
                             failure_after_halting,
                             halting_after_failure,
-                            Expression::Boolean(false),
+                            CsExpression::Boolean(false),
                         )
                         .expect("hand-picked arguments");
                     // If receives tick from parent, tick first child.
@@ -420,7 +420,7 @@ impl ModelBuilder {
                             prev_ack,
                             step,
                             pt_ack,
-                            Some(Expression::Not(Box::new(Expression::Var(
+                            Some(CsExpression::Not(Box::new(CsExpression::Var(
                                 halting_after_failure,
                             )))),
                         )
@@ -432,7 +432,7 @@ impl ModelBuilder {
                             prev_ack,
                             failure_after_halting,
                             pt_failure,
-                            Some(Expression::Var(halting_after_failure)),
+                            Some(CsExpression::Var(halting_after_failure)),
                         )
                         .expect("hand-made args");
                 } else {
@@ -451,7 +451,7 @@ impl ModelBuilder {
                             pg_id,
                             halt_after_success,
                             halting_after_success,
-                            Expression::Boolean(true),
+                            CsExpression::Boolean(true),
                         )
                         .expect("hand-picked arguments");
                     let success_after_halting =
@@ -461,7 +461,7 @@ impl ModelBuilder {
                             pg_id,
                             success_after_halting,
                             halting_after_success,
-                            Expression::Boolean(false),
+                            CsExpression::Boolean(false),
                         )
                         .expect("hand-picked arguments");
                     let loc_tick = self.cs.new_location(pg_id)?;
@@ -539,7 +539,7 @@ impl ModelBuilder {
                             prev_ack,
                             step,
                             pt_ack,
-                            Some(Expression::Not(Box::new(Expression::Var(
+                            Some(CsExpression::Not(Box::new(CsExpression::Var(
                                 halting_after_success,
                             )))),
                         )
@@ -551,7 +551,7 @@ impl ModelBuilder {
                             prev_ack,
                             success_after_halting,
                             pt_success,
-                            Some(Expression::Var(halting_after_success)),
+                            Some(CsExpression::Var(halting_after_success)),
                         )
                         .expect("hand-made args");
                 } else {
@@ -588,8 +588,8 @@ impl ModelBuilder {
                     pg_id,
                     target_ext_queue,
                     Message::Send(CsExpression::Tuple(vec![
-                        Expression::Integer(event_idx as Integer),
-                        Expression::Integer(pg_idx),
+                        CsExpression::Integer(event_idx as Integer),
+                        CsExpression::Integer(pg_idx),
                     ])),
                 )?;
                 let tick_sent = self.cs.new_location(pg_id)?;
@@ -645,9 +645,9 @@ impl ModelBuilder {
                         got_tick_response_param,
                         step,
                         pt_success,
-                        Some(Expression::Equal(Box::new((
-                            Expression::Var(tick_response_param),
-                            Expression::Integer(*self.enums.get("SUCCESS").unwrap()),
+                        Some(CsExpression::Equal(Box::new((
+                            CsExpression::Var(tick_response_param),
+                            CsExpression::Integer(*self.enums.get("SUCCESS").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -657,9 +657,9 @@ impl ModelBuilder {
                         got_tick_response_param,
                         step,
                         pt_failure,
-                        Some(Expression::Equal(Box::new((
-                            Expression::Var(tick_response_param),
-                            Expression::Integer(*self.enums.get("FAILURE").unwrap()),
+                        Some(CsExpression::Equal(Box::new((
+                            CsExpression::Var(tick_response_param),
+                            CsExpression::Integer(*self.enums.get("FAILURE").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -669,9 +669,9 @@ impl ModelBuilder {
                         got_tick_response_param,
                         step,
                         pt_running,
-                        Some(Expression::Equal(Box::new((
-                            Expression::Var(tick_response_param),
-                            Expression::Integer(*self.enums.get("RUNNING").unwrap()),
+                        Some(CsExpression::Equal(Box::new((
+                            CsExpression::Var(tick_response_param),
+                            CsExpression::Integer(*self.enums.get("RUNNING").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -684,8 +684,8 @@ impl ModelBuilder {
                     pg_id,
                     target_ext_queue,
                     Message::Send(CsExpression::Tuple(vec![
-                        Expression::Integer(event_idx as Integer),
-                        Expression::Integer(pg_idx),
+                        CsExpression::Integer(event_idx as Integer),
+                        CsExpression::Integer(pg_idx),
                     ])),
                 )?;
                 let halt_sent = self.cs.new_location(pg_id)?;
@@ -836,8 +836,8 @@ impl ModelBuilder {
             .expect("hand-coded args");
 
         // Create variables and channels for the storage of the parameters sent by external events.
-        let mut param_vars: HashMap<(usize, String), (CsVar, Type)> = HashMap::new();
-        let mut param_actions: HashMap<(PgId, usize, String), CsAction> = HashMap::new();
+        let mut param_vars: HashMap<(usize, String), (Var, Type)> = HashMap::new();
+        let mut param_actions: HashMap<(PgId, usize, String), Action> = HashMap::new();
         for event_builder in self
             .events
             .iter()
@@ -987,14 +987,14 @@ impl ModelBuilder {
                         .expect("sender must exist")
                         .1
                         .index;
-                    let mut is_event_sender = Some(Expression::And(vec![
-                        Expression::Equal(Box::new((
-                            Expression::Integer(event_index as Integer),
-                            Expression::Var(current_event_var),
+                    let mut is_event_sender = Some(CsExpression::And(vec![
+                        CsExpression::Equal(Box::new((
+                            CsExpression::Integer(event_index as Integer),
+                            CsExpression::Var(current_event_var),
                         ))),
-                        Expression::Equal(Box::new((
-                            Expression::Integer(sender_index as Integer),
-                            Expression::Var(origin_var),
+                        CsExpression::Equal(Box::new((
+                            CsExpression::Integer(sender_index as Integer),
+                            CsExpression::Var(origin_var),
                         ))),
                     ]));
                     let mut current_loc = ext_event_processing_param;
@@ -1049,7 +1049,7 @@ impl ModelBuilder {
                         .iter()
                         .filter(|((ev_ix, _), _)| *ev_ix == event_index)
                         .map(|((_, name), (var, tp))| (name.to_owned(), (*var, tp.to_owned())))
-                        .collect::<HashMap<String, (CsVar, Type)>>();
+                        .collect::<HashMap<String, (Var, Type)>>();
                 } else {
                     exec_origin = None;
                     exec_params = HashMap::new();
@@ -1165,12 +1165,12 @@ impl ModelBuilder {
         pg_id: PgId,
         pg_idx: Integer,
         int_queue: Channel,
-        loc: CsLocation,
-        vars: &HashMap<String, (CsVar, Type)>,
-        origin: Option<CsVar>,
-        params: &HashMap<String, (CsVar, Type)>,
+        loc: Location,
+        vars: &HashMap<String, (Var, Type)>,
+        origin: Option<Var>,
+        params: &HashMap<String, (Var, Type)>,
         interner: &boa_interner::Interner,
-    ) -> Result<CsLocation, anyhow::Error> {
+    ) -> Result<Location, anyhow::Error> {
         match executable {
             Executable::Raise { event } => {
                 // Create event, if it does not exist already.
@@ -1206,8 +1206,8 @@ impl ModelBuilder {
                             pg_id,
                             target_builder.ext_queue,
                             Message::Send(CsExpression::Tuple(vec![
-                                Expression::Integer(event_idx as Integer),
-                                Expression::Integer(pg_idx),
+                                CsExpression::Integer(event_idx as Integer),
+                                CsExpression::Integer(pg_idx),
                             ])),
                         )
                         .expect("must work");
@@ -1252,8 +1252,8 @@ impl ModelBuilder {
                                 pg_id,
                                 target_ext_queue,
                                 Message::Send(CsExpression::Tuple(vec![
-                                    Expression::Integer(event_idx as Integer),
-                                    Expression::Integer(pg_idx),
+                                    CsExpression::Integer(event_idx as Integer),
+                                    CsExpression::Integer(pg_idx),
                                 ])),
                             )
                             .expect("params are hard-coded");
@@ -1310,12 +1310,12 @@ impl ModelBuilder {
         target_id: PgId,
         param: &Param,
         event_idx: usize,
-        param_loc: CsLocation,
-        vars: &HashMap<String, (CsVar, Type)>,
-        origin: Option<CsVar>,
-        params: &HashMap<String, (CsVar, Type)>,
+        param_loc: Location,
+        vars: &HashMap<String, (Var, Type)>,
+        origin: Option<Var>,
+        params: &HashMap<String, (Var, Type)>,
         interner: &boa_interner::Interner,
-    ) -> Result<CsLocation, anyhow::Error> {
+    ) -> Result<Location, anyhow::Error> {
         // Get param type.
         let scan_type = self
             .scan_types
@@ -1344,9 +1344,9 @@ impl ModelBuilder {
         &mut self,
         expr: &boa_ast::Expression,
         interner: &boa_interner::Interner,
-        vars: &HashMap<String, (CsVar, Type)>,
-        origin: Option<CsVar>,
-        params: &HashMap<String, (CsVar, Type)>,
+        vars: &HashMap<String, (Var, Type)>,
+        origin: Option<Var>,
+        params: &HashMap<String, (Var, Type)>,
     ) -> anyhow::Result<CsExpression> {
         let expr = match expr {
             boa_ast::Expression::This => todo!(),
@@ -1361,7 +1361,7 @@ impl ModelBuilder {
                     ident => self
                         .enums
                         .get(ident)
-                        .map(|i| Expression::Integer(*i))
+                        .map(|i| CsExpression::Integer(*i))
                         .or_else(|| vars.get(ident).map(|(var, _)| CsExpression::Var(*var)))
                         .ok_or(anyhow!("unknown identifier"))?,
                 }
@@ -1371,9 +1371,9 @@ impl ModelBuilder {
                 match lit {
                     Literal::String(_) => todo!(),
                     Literal::Num(_) => todo!(),
-                    Literal::Int(i) => Expression::Integer(*i),
+                    Literal::Int(i) => CsExpression::Integer(*i),
                     Literal::BigInt(_) => todo!(),
-                    Literal::Bool(b) => Expression::Boolean(*b),
+                    Literal::Bool(b) => CsExpression::Boolean(*b),
                     Literal::Null => todo!(),
                     Literal::Undefined => todo!(),
                 }

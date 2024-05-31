@@ -13,7 +13,7 @@
 use thiserror::Error;
 
 use crate::grammar::*;
-use crate::program_graph::*;
+use crate::program_graph::{Action as PgAction, Location as PgLocation, Var as PgVar, *};
 use std::{collections::HashMap, rc::Rc};
 
 /// An indexing object for PGs in a CS.
@@ -35,24 +35,24 @@ pub struct Channel(usize);
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct CsLocation(PgId, Location);
+pub struct Location(PgId, PgLocation);
 
 /// An indexing object for actions in a CS.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct CsAction(PgId, Action);
+pub struct Action(PgId, PgAction);
 
 /// An indexing object for typed variables in a CS.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct CsVar(PgId, Var);
+pub struct Var(PgId, PgVar);
 
 /// An expression using CS's [`CsVar`] as variables.
-pub type CsExpression = super::grammar::Expression<CsVar>;
+pub type CsExpression = super::grammar::Expression<Var>;
 
 impl TryFrom<(PgId, CsExpression)> for PgExpression {
     type Error = CsError;
@@ -135,7 +135,7 @@ pub enum Message {
     /// Sending the computed value of an expression to a channel.
     Send(CsExpression),
     /// Retrieving a value out of a channel and associating it to a variable.
-    Receive(CsVar),
+    Receive(Var),
     /// Checking whether a channel is empty.
     ProbeEmptyQueue,
 }
@@ -157,16 +157,16 @@ pub enum CsError {
     Empty(Channel),
     /// There is no such communication action in the CS.
     #[error("communication {0:?} has not been defined")]
-    NoCommunication(CsAction),
+    NoCommunication(Action),
     /// There is no such action in the CS.
     #[error("action {0:?} does not belong to program graph {1:?}")]
-    ActionNotInPg(CsAction, PgId),
+    ActionNotInPg(Action, PgId),
     /// There is no such variable in the given PG.
     #[error("variable {0:?} does not belong to program graph {1:?}")]
-    VarNotInPg(CsVar, PgId),
+    VarNotInPg(Var, PgId),
     /// There is no such location in the given PG.
     #[error("location {0:?} does not belong to program graph {1:?}")]
-    LocationNotInPg(CsLocation, PgId),
+    LocationNotInPg(Location, PgId),
     /// The given PGs do not match.
     #[error("program graphs {0:?} and {1:?} do not match")]
     DifferentPgs(PgId, PgId),
@@ -174,7 +174,7 @@ pub enum CsError {
     ///
     /// Is returned when trying to associate an effect to a communication action.
     #[error("action {0:?} is a communication")]
-    ActionIsCommunication(CsAction),
+    ActionIsCommunication(Action),
     /// There is no such channel in the CS.
     #[error("channel {0:?} does not exists")]
     MissingChannel(Channel),
@@ -185,7 +185,7 @@ pub enum CsError {
 pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
     channels: Vec<(Type, Option<usize>)>,
-    communications: HashMap<CsAction, (Channel, Message)>,
+    communications: HashMap<Action, (Channel, Message)>,
 }
 
 impl ChannelSystemBuilder {
@@ -206,33 +206,33 @@ impl ChannelSystemBuilder {
     /// Gets the initial location of the given PG.
     ///
     /// Fails if the CS contains no such PG.
-    pub fn initial_location(&mut self, pg_id: PgId) -> Result<CsLocation, CsError> {
+    pub fn initial_location(&mut self, pg_id: PgId) -> Result<Location, CsError> {
         let pg = self
             .program_graphs
             .get(pg_id.0)
             .ok_or(CsError::MissingPg(pg_id))?;
-        let initial = CsLocation(pg_id, pg.initial_location());
+        let initial = Location(pg_id, pg.initial_location());
         Ok(initial)
     }
 
     /// Adds a new variable of the given type to the given PG.
     ///
     /// Fails if the CS contains no such PG.
-    pub fn new_var(&mut self, pg_id: PgId, var_type: Type) -> Result<CsVar, CsError> {
+    pub fn new_var(&mut self, pg_id: PgId, var_type: Type) -> Result<Var, CsError> {
         self.program_graphs
             .get_mut(pg_id.0)
             .ok_or(CsError::MissingPg(pg_id))
-            .map(|pg| CsVar(pg_id, pg.new_var(var_type)))
+            .map(|pg| Var(pg_id, pg.new_var(var_type)))
     }
 
     /// Adds a new action to the given PG.
     ///
     /// Fails if the CS contains no such PG.
-    pub fn new_action(&mut self, pg_id: PgId) -> Result<CsAction, CsError> {
+    pub fn new_action(&mut self, pg_id: PgId) -> Result<Action, CsError> {
         self.program_graphs
             .get_mut(pg_id.0)
             .ok_or(CsError::MissingPg(pg_id))
-            .map(|pg| CsAction(pg_id, pg.new_action()))
+            .map(|pg| Action(pg_id, pg.new_action()))
     }
 
     /// Adds an effect to the given action of the given PG.
@@ -241,8 +241,8 @@ impl ChannelSystemBuilder {
     pub fn add_effect(
         &mut self,
         pg_id: PgId,
-        action: CsAction,
-        var: CsVar,
+        action: Action,
+        var: Var,
         effect: CsExpression,
     ) -> Result<(), CsError> {
         if action.0 != pg_id {
@@ -265,11 +265,11 @@ impl ChannelSystemBuilder {
     }
 
     /// Adds a new location to the given PG.
-    pub fn new_location(&mut self, pg_id: PgId) -> Result<CsLocation, CsError> {
+    pub fn new_location(&mut self, pg_id: PgId) -> Result<Location, CsError> {
         self.program_graphs
             .get_mut(pg_id.0)
             .ok_or(CsError::MissingPg(pg_id))
-            .map(|pg| CsLocation(pg_id, pg.new_location()))
+            .map(|pg| Location(pg_id, pg.new_location()))
     }
 
     /// Adds a transition to the PG.
@@ -278,9 +278,9 @@ impl ChannelSystemBuilder {
     pub fn add_transition(
         &mut self,
         pg_id: PgId,
-        pre: CsLocation,
-        action: CsAction,
-        post: CsLocation,
+        pre: Location,
+        action: Action,
+        post: Location,
         guard: Option<CsExpression>,
     ) -> Result<(), CsError> {
         if action.0 != pg_id {
@@ -322,7 +322,7 @@ impl ChannelSystemBuilder {
         pg_id: PgId,
         channel: Channel,
         message: Message,
-    ) -> Result<CsAction, CsError> {
+    ) -> Result<Action, CsError> {
         let channel_type = self
             .channels
             .get(channel.0)
@@ -394,7 +394,7 @@ impl ChannelSystemBuilder {
 pub struct ChannelSystem {
     program_graphs: Vec<ProgramGraph>,
     channels: Rc<Vec<(Type, Option<usize>)>>,
-    communications: Rc<HashMap<CsAction, (Channel, Message)>>,
+    communications: Rc<HashMap<Action, (Channel, Message)>>,
     message_queue: Vec<Vec<Val>>,
 }
 
@@ -404,15 +404,15 @@ impl ChannelSystem {
     /// An admittable transition is characterized by the PG it executes on, the required action and the post-state
     /// (the pre-state being necessarily the current state of the machine).
     /// The (eventual) guard is guaranteed to be satisfied.
-    pub fn possible_transitions(&self) -> impl Iterator<Item = (PgId, CsAction, CsLocation)> + '_ {
+    pub fn possible_transitions(&self) -> impl Iterator<Item = (PgId, Action, Location)> + '_ {
         self.program_graphs
             .iter()
             .enumerate()
             .flat_map(move |(id, pg)| {
                 let pg_id = PgId(id);
                 pg.possible_transitions().filter_map(move |(action, post)| {
-                    let action = CsAction(pg_id, action);
-                    let post = CsLocation(pg_id, post);
+                    let action = Action(pg_id, action);
+                    let post = Location(pg_id, post);
                     if self.communications.contains_key(&action)
                         && self.check_communication(pg_id, action).is_err()
                     {
@@ -424,7 +424,7 @@ impl ChannelSystem {
             })
     }
 
-    fn check_communication(&self, pg_id: PgId, action: CsAction) -> Result<(), CsError> {
+    fn check_communication(&self, pg_id: PgId, action: Action) -> Result<(), CsError> {
         if action.0 != pg_id {
             Err(CsError::ActionNotInPg(action, pg_id))
         } else if let Some((channel, message)) = self.communications.get(&action) {
@@ -451,8 +451,8 @@ impl ChannelSystem {
     pub fn transition(
         &mut self,
         pg_id: PgId,
-        action: CsAction,
-        post: CsLocation,
+        action: Action,
+        post: Location,
     ) -> Result<(), CsError> {
         // If action is a communication, check it is legal
         if self.communications.contains_key(&action) {
