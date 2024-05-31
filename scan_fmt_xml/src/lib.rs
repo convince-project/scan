@@ -1,4 +1,4 @@
-//! Parser and model builder for SCAN's XML specification format.
+//! Parser and model builder for SCAN's CONVINCE-XML specification format.
 
 mod builder;
 mod parser;

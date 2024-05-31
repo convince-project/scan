@@ -16,26 +16,42 @@ use crate::grammar::*;
 use crate::program_graph::*;
 use std::{collections::HashMap, rc::Rc};
 
-// Use of "Newtype" pattern to define different types of indexes.
+/// An indexing object for PGs in a CS.
+///
+/// These cannot be directly created or manipulated,
+/// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct PgId(usize);
 
-// Use of "Newtype" pattern to define different types of indexes.
+/// An indexing object for channels in a CS.
+///
+/// These cannot be directly created or manipulated,
+/// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Channel(usize);
 
-// Use of "Newtype" pattern to define different types of indexes.
+/// An indexing object for locations in a CS.
+///
+/// These cannot be directly created or manipulated,
+/// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct CsLocation(PgId, Location);
 
-// Use of "Newtype" pattern to define different types of indexes.
+/// An indexing object for actions in a CS.
+///
+/// These cannot be directly created or manipulated,
+/// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct CsAction(PgId, Action);
 
-// Use of "Newtype" pattern to define different types of indexes.
+/// An indexing object for typed variables in a CS.
+///
+/// These cannot be directly created or manipulated,
+/// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct CsVar(PgId, Var);
 
+/// An expression using CS's [`CsVar`] as variables.
 pub type CsExpression = super::grammar::Expression<CsVar>;
 
 impl TryFrom<(PgId, CsExpression)> for PgExpression {
@@ -113,43 +129,58 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
     }
 }
 
+/// A message to be sent through a CS's channel.
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Sending the computed value of an expression to a channel.
     Send(CsExpression),
+    /// Retrieving a value out of a channel and associating it to a variable.
     Receive(CsVar),
+    /// Checking whether a channel is empty.
     ProbeEmptyQueue,
 }
 
+/// The error type for operations with [`ChannelSystemBuilder`]s and [`ChannelSystem`]s.
 #[derive(Debug, Clone, Error)]
 pub enum CsError {
+    /// A PG within the CS returned an error of its own.
     #[error("error from program graph {0:?}")]
     ProgramGraph(PgId, #[source] PgError),
+    /// There is no such PG in the CS.
     #[error("program graph {0:?} does not belong to the channel system")]
     MissingPg(PgId),
+    /// The channel is at full capacity and can accept no more incoming messages.
     #[error("channel {0:?} is at full capacity")]
     OutOfCapacity(Channel),
+    /// The channel is empty and there is no message to be retrieved.
     #[error("channel {0:?} is empty")]
     Empty(Channel),
+    /// There is no such communication action in the CS.
     #[error("communication {0:?} has not been defined")]
     NoCommunication(CsAction),
+    /// There is no such action in the CS.
     #[error("action {0:?} does not belong to program graph {1:?}")]
     ActionNotInPg(CsAction, PgId),
+    /// There is no such variable in the given PG.
     #[error("variable {0:?} does not belong to program graph {1:?}")]
     VarNotInPg(CsVar, PgId),
+    /// There is no such location in the given PG.
     #[error("location {0:?} does not belong to program graph {1:?}")]
     LocationNotInPg(CsLocation, PgId),
+    /// The given PGs do not match.
     #[error("program graphs {0:?} and {1:?} do not match")]
     DifferentPgs(PgId, PgId),
+    /// Action is a communication.
+    ///
+    /// Is returned when trying to associate an effect to a communication action.
     #[error("action {0:?} is a communication")]
     ActionIsCommunication(CsAction),
+    /// There is no such channel in the CS.
     #[error("channel {0:?} does not exists")]
     MissingChannel(Channel),
-    #[error("not a tuple")]
-    NotATuple,
-    #[error("index out-of-bounds")]
-    BadIndex,
 }
 
+/// The object used to define and build a CS.
 #[derive(Debug, Default, Clone)]
 pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
@@ -158,10 +189,13 @@ pub struct ChannelSystemBuilder {
 }
 
 impl ChannelSystemBuilder {
+    /// Creates a new [`ProgramGraphBuilder`].
+    /// At creation, this will be completely empty.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Add a new PG to the CS.
     pub fn new_program_graph(&mut self) -> PgId {
         let pg_id = PgId(self.program_graphs.len());
         let pg = ProgramGraphBuilder::new();
@@ -169,6 +203,9 @@ impl ChannelSystemBuilder {
         pg_id
     }
 
+    /// Gets the initial location of the given PG.
+    ///
+    /// Fails if the CS contains no such PG.
     pub fn initial_location(&mut self, pg_id: PgId) -> Result<CsLocation, CsError> {
         let pg = self
             .program_graphs
@@ -178,6 +215,9 @@ impl ChannelSystemBuilder {
         Ok(initial)
     }
 
+    /// Adds a new variable of the given type to the given PG.
+    ///
+    /// Fails if the CS contains no such PG.
     pub fn new_var(&mut self, pg_id: PgId, var_type: Type) -> Result<CsVar, CsError> {
         self.program_graphs
             .get_mut(pg_id.0)
@@ -185,6 +225,9 @@ impl ChannelSystemBuilder {
             .map(|pg| CsVar(pg_id, pg.new_var(var_type)))
     }
 
+    /// Adds a new action to the given PG.
+    ///
+    /// Fails if the CS contains no such PG.
     pub fn new_action(&mut self, pg_id: PgId) -> Result<CsAction, CsError> {
         self.program_graphs
             .get_mut(pg_id.0)
@@ -192,6 +235,9 @@ impl ChannelSystemBuilder {
             .map(|pg| CsAction(pg_id, pg.new_action()))
     }
 
+    /// Adds an effect to the given action of the given PG.
+    ///
+    /// Fails if the CS contains no such PG, or if the given action or variable do not belong to it.
     pub fn add_effect(
         &mut self,
         pg_id: PgId,
@@ -218,6 +264,7 @@ impl ChannelSystemBuilder {
         }
     }
 
+    /// Adds a new location to the given PG.
     pub fn new_location(&mut self, pg_id: PgId) -> Result<CsLocation, CsError> {
         self.program_graphs
             .get_mut(pg_id.0)
@@ -225,6 +272,9 @@ impl ChannelSystemBuilder {
             .map(|pg| CsLocation(pg_id, pg.new_location()))
     }
 
+    /// Adds a transition to the PG.
+    ///
+    /// Fails if the CS contains no such PG, or if the given action, variable or locations do not belong to it.
     pub fn add_transition(
         &mut self,
         pg_id: PgId,
@@ -254,12 +304,19 @@ impl ChannelSystemBuilder {
         }
     }
 
+    /// Adds a new channel of the given type and capacity to the CS.
+    ///
+    /// - [`None`] capacity means that the channel's capacity is unlimited.
+    /// - [`Some(0)`] capacity means the channel uses the handshake protocol (NOT YET IMPLEMENTED!)
     pub fn new_channel(&mut self, var_type: Type, capacity: Option<usize>) -> Channel {
         let channel = Channel(self.channels.len());
         self.channels.push((var_type, capacity));
         channel
     }
 
+    /// Adds a new communication action to the given PG.
+    ///
+    /// Fails if the channel and message types do not match.
     pub fn new_communication(
         &mut self,
         pg_id: PgId,
@@ -304,6 +361,7 @@ impl ChannelSystemBuilder {
         Ok(action)
     }
 
+    /// Produces a [`Channel System`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
     pub fn build(mut self) -> ChannelSystem {
         let mut program_graphs: Vec<ProgramGraph> = self
             .program_graphs
@@ -322,6 +380,16 @@ impl ChannelSystemBuilder {
     }
 }
 
+/// Representation of a CS that can be executed transition-by-transition.
+///
+/// The structure of the CS cannot be changed,
+/// meaning that it is not possible to introduce new PGs or modifying them, or add new channels.
+/// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
+/// because only the internal state needs to be duplicated.
+///
+/// The only way to produce a [`ChannelSystem`] is through a [`ChannelSystemBuilder`].
+/// This guarantees that there are no type errors involved in the definition of its PGs,
+/// and thus the CS will always be in a consistent state.
 #[derive(Debug, Clone)]
 pub struct ChannelSystem {
     program_graphs: Vec<ProgramGraph>,
@@ -331,6 +399,11 @@ pub struct ChannelSystem {
 }
 
 impl ChannelSystem {
+    /// Iterates over all transitions that can be admitted in the current state.
+    ///
+    /// An admittable transition is characterized by the PG it executes on, the required action and the post-state
+    /// (the pre-state being necessarily the current state of the machine).
+    /// The (eventual) guard is guaranteed to be satisfied.
     pub fn possible_transitions(&self) -> impl Iterator<Item = (PgId, CsAction, CsLocation)> + '_ {
         self.program_graphs
             .iter()
@@ -372,6 +445,9 @@ impl ChannelSystem {
         }
     }
 
+    /// Executes a transition on the given PG characterized by the argument action and post-state.
+    ///
+    /// Fails if the requested transition is not admissible.
     pub fn transition(
         &mut self,
         pg_id: PgId,

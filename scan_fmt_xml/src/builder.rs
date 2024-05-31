@@ -31,6 +31,7 @@ struct EventBuilder {
     index: usize,
 }
 
+/// Builder turning a [`Parser`] into a [`ChannelSystem`].
 #[derive(Debug)]
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder,
@@ -56,6 +57,11 @@ pub struct ModelBuilder {
 }
 
 impl ModelBuilder {
+    /// Turns the [`Parser`] into a [`ChannelSystem`].
+    ///
+    /// Can fail if the model specification contains semantic errors
+    /// (particularly type mismatches)
+    /// or references to non-existing items.
     pub fn visit(parser: Parser) -> anyhow::Result<CsModel> {
         // Add base types
         // FIXME: Is there a better way? Const object?

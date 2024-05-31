@@ -11,28 +11,28 @@ use super::grammar::*;
 use std::{collections::HashMap, rc::Rc};
 use thiserror::Error;
 
-// Use of "Newtype" pattern to define different types of indexes.
 /// An indexing object for locations in a PG.
+///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Location(usize);
 
-// Use of "Newtype" pattern to define different types of indexes.
 /// An indexing object for actions in a PG.
+///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Action(usize);
 
-// Use of "Newtype" pattern to define different types of indexes.
 /// An indexing object for typed variables in a PG.
+///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Var(usize);
 
-/// An expression using [`Var`] as variables.
+/// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
 
 /// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
@@ -53,7 +53,8 @@ pub enum PgError {
     /// The PG does not allow this transition.
     #[error("There is no such transition")]
     MissingTransition,
-    /// Types that should be matching are not.
+    /// Types that should be matching are not,
+    /// or are not compatible with each other.
     #[error("type mismatch")]
     TypeMismatch,
     /// Transition's guard is not satisfied.
@@ -84,7 +85,7 @@ impl Default for ProgramGraphBuilder {
 impl ProgramGraphBuilder {
     const INITIAL_LOCATION: Location = Location(0);
 
-    /// Create a new [`ProgramGraphBuilder`].
+    /// Creates a new [`ProgramGraphBuilder`].
     /// At creation, this will only have the inital location with no variables, no actions and no transitions.
     pub fn new() -> Self {
         let mut pgb = Self {
@@ -99,25 +100,25 @@ impl ProgramGraphBuilder {
         pgb
     }
 
-    /// Get the initial location of the PG.
+    /// Gets the initial location of the PG.
     /// This is created toghether with the [`ProgramGraphBuilder`] by default.
     pub fn initial_location(&self) -> Location {
         Self::INITIAL_LOCATION
     }
 
-    /// Get the type of a variable.
-    pub fn var_type(&self, var: Var) -> Result<&Type, PgError> {
+    /// Gets the type of a variable.
+    pub(crate) fn var_type(&self, var: Var) -> Result<&Type, PgError> {
         self.vars.get(var.0).ok_or(PgError::MissingVar(var))
     }
 
-    /// Add a new variable of the given type to the PG.
+    /// Adds a new variable of the given type to the PG.
     pub fn new_var(&mut self, var_type: Type) -> Var {
         let idx = self.vars.len();
         self.vars.push(var_type);
         Var(idx)
     }
 
-    /// Add a new action to the PG.
+    /// Adds a new action to the PG.
     pub fn new_action(&mut self) -> Action {
         // Actions are indexed progressively
         let idx = self.effects.len();
@@ -125,9 +126,9 @@ impl ProgramGraphBuilder {
         Action(idx)
     }
 
-    /// Add an effect to the given action.
-    /// This requires specifying which variable is assigned the value of which expression whenever the action triggers a transition.
-    /// It can fail, in particular, if the type of the variable and that of the expression do not match.
+    /// Adds an effect to the given action.
+    /// Requires specifying which variable is assigned the value of which expression whenever the action triggers a transition.
+    /// It fails if the type of the variable and that of the expression do not match.
     pub fn add_effect(
         &mut self,
         action: Action,
@@ -148,7 +149,7 @@ impl ProgramGraphBuilder {
         }
     }
 
-    /// Add a new location to the PG.
+    /// Adds a new location to the PG.
     pub fn new_location(&mut self) -> Location {
         // Locations are indexed progressively
         let idx = self.transitions.len();
@@ -156,13 +157,15 @@ impl ProgramGraphBuilder {
         Location(idx)
     }
 
-    /// Add a transition to the PG.
-    /// This requires specifying:
-    /// - state pre-transition
-    /// - action triggering the transition
-    /// - state post-transition
-    /// - (optional) boolean expression guarding the transition
-    /// This can fail if, in particular, the provided guard is not a boolean expression.
+    /// Adds a transition to the PG.
+    /// Requires specifying:
+    ///
+    /// - state pre-transition,
+    /// - action triggering the transition,
+    /// - state post-transition, and
+    /// - (optionally) boolean expression guarding the transition.
+    ///
+    /// Fails if the provided guard is not a boolean expression.
     pub fn add_transition(
         &mut self,
         pre: Location,
@@ -205,7 +208,10 @@ impl ProgramGraphBuilder {
         }
     }
 
-    pub fn r#type(&self, expr: &PgExpression) -> Result<Type, PgError> {
+    /// Computes the type of an expression.
+    /// Fails if the expression is badly typed,
+    /// e.g., if variables in it have type incompatible with the expression.
+    pub(crate) fn r#type(&self, expr: &PgExpression) -> Result<Type, PgError> {
         match expr {
             PgExpression::Boolean(_) => Ok(Type::Boolean),
             PgExpression::Integer(_) => Ok(Type::Integer),
@@ -295,6 +301,7 @@ impl ProgramGraphBuilder {
         }
     }
 
+    /// Produces a [`ProgramGraph`] defined by the [`ProgramGraphBuilder`]'s data and consuming it.
     pub fn build(mut self) -> ProgramGraph {
         // Since vectors of effects and transitions will become unmutable,
         // they should be shrunk to take as little space as possible
@@ -314,6 +321,16 @@ impl ProgramGraphBuilder {
     }
 }
 
+/// Representation of a PG that can be executed transition-by-transition.
+///
+/// The structure of the PG cannot be changed,
+/// meaning that it is not possible to introduce new locations, actions, variables, etc.
+/// Though, this restriction makes it so that cloning the [`ProgramGraph`] is cheap,
+/// because only the internal state needs to be duplicated.
+///
+/// The only way to produce a [`ProgramGraph`] is through a [`ProgramGraphBuilder`].
+/// This guarantees that there are no type errors involved in the definition of action's effects and transitions' guards,
+/// and thus the PG will always be in a consistent state.
 #[derive(Debug, Clone)]
 pub struct ProgramGraph {
     current_location: Location,
@@ -324,6 +341,11 @@ pub struct ProgramGraph {
 }
 
 impl ProgramGraph {
+    /// Iterates over all transitions that can be admitted in the current state.
+    ///
+    /// An admittable transition is characterized by the required action and the post-state
+    /// (the pre-state being necessarily the current state of the machine).
+    /// The (eventual) guard is guaranteed to be satisfied.
     pub fn possible_transitions(&self) -> impl Iterator<Item = (Action, Location)> + '_ {
         self.transitions[self.current_location.0]
             .iter()
@@ -344,6 +366,9 @@ impl ProgramGraph {
             })
     }
 
+    /// Executes a transition characterized by the argument action and post-state.
+    ///
+    /// Fails if the requested transition is not admissible.
     pub fn transition(&mut self, action: Action, post_state: Location) -> Result<(), PgError> {
         let guard = self.transitions[self.current_location.0]
             .get(&(action, post_state))

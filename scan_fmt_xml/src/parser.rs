@@ -28,26 +28,16 @@ use scan_core::channel_system::*;
 pub enum ParserErrorType {
     #[error("reader failed")]
     Reader(#[from] XmlError),
-    // #[error("an unknown or unexpected event was received: `{0:?}`")]
-    // UnknownEvent(Event<'static>),
     #[error("error from an attribute")]
     Attr(#[from] AttrError),
     #[error("unknown key: `{0}`")]
     UnknownKey(String),
-    // #[error("unknown key val: `{0}`")]
-    // UnknownVal(String),
     #[error("utf8 error")]
     Utf8(#[from] Utf8Error),
     #[error("channel system error")]
     Cs(#[from] CsError),
-    // #[error("unexpected start tag: `{0}`")]
-    // UnexpectedStartTag(String),
     #[error("unexpected end tag: `{0}`")]
     UnexpectedEndTag(String),
-    // #[error("location does not exist")]
-    // MissingLocation,
-    // #[error("unknown variable `{0}`")]
-    // UnknownVar(String),
     #[error("missing `expr` attribute")]
     MissingExpr,
     #[error("missing attribute `{0}`")]
@@ -98,6 +88,18 @@ impl From<ConvinceTag> for &'static str {
 }
 
 #[derive(Debug)]
+pub(crate) enum MoC {
+    Fsm(Box<Fsm>),
+    Bt(Bt),
+}
+
+#[derive(Debug)]
+pub(crate) struct Process {
+    pub(crate) moc: MoC,
+}
+
+/// Represents a model specified in the CONVINCE-XML format.
+#[derive(Debug)]
 pub struct Parser {
     root_folder: PathBuf,
     pub(crate) process_list: HashMap<String, Process>,
@@ -105,18 +107,10 @@ pub struct Parser {
     // properties: PathBuf,
 }
 
-#[derive(Debug)]
-pub enum MoC {
-    Fsm(Box<Fsm>),
-    Bt(Bt),
-}
-
-#[derive(Debug)]
-pub struct Process {
-    pub(crate) moc: MoC,
-}
-
 impl Parser {
+    /// Builds a [`Parser`] representation by parsing the given main file of a model specification in the CONVINCE-XML format.
+    ///
+    /// Fails if the parsed content contains syntactic errors.
     pub fn parse(file: PathBuf) -> anyhow::Result<Parser> {
         let mut reader = Reader::from_file(&file)?;
         let root_folder = file
