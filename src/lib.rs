@@ -8,7 +8,7 @@
 //! SCAN is being developed to accept models specified in multiple, rich modeling languages.
 //! At the moment the following languages are planned or implemented:
 //!
-//! - [x] State Charts specified in [SCXML format](https://www.w3.org/TR/scxml/).
+//! - [x] [State Chart XML (SCXML)](https://www.w3.org/TR/scxml/).
 //! - [ ] [Promela](https://spinroot.com/spin/Man/Manual.html)
 //! - [ ] [JANI](https://jani-spec.org/)
 //!
