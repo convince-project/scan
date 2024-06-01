@@ -14,13 +14,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  if_merged:
+  docs-build:
     if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-  docs-build-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     
     steps:
@@ -30,15 +25,33 @@ jobs:
         run: |
           cargo doc --no-deps --workspace
           echo "<meta http-equiv=\"refresh\" content=\"0; url=scan\">" > target/doc/index.html
+      - name: Archive production artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: 'target/doc'
+
+  docs-deploy:
+    if: github.event.pull_request.merged == true
+    needs: docs-build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    
+    steps:
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      - name: Download a single artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docs
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload docs folder
-          path: 'target/doc'
+          name: docs
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
         with:
-          folder: target/doc # The folder the action should deploy.
+          name: docs
