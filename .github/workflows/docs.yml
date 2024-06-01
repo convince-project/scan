@@ -18,7 +18,6 @@ env:
 
 jobs:
   docs-build:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     
     steps:
@@ -35,7 +34,6 @@ jobs:
           path: 'target/doc'
 
   docs-deploy:
-    if: github.event.pull_request.merged == true
     needs: docs-build
     environment:
       name: github-pages
