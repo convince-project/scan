@@ -1,9 +1,7 @@
 name: Rust
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+
 permissions:
   contents: read
-  pages: write
-  id-token: write
   
 on: [pull_request]
 
@@ -16,34 +14,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
+    - name: Check
+      run: cargo check --verbose
     - name: Run tests
       run: cargo test --verbose --workspace
-
-  docs-build-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout 🛎️
-        uses: actions/checkout@v4
-      - name: Install and Build 🔧 
-        run: |
-          cargo doc --no-deps --workspace
-          echo "<meta http-equiv=\"refresh\" content=\"0; url=scan\">" > target/doc/index.html
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          # Upload docs folder
-          path: 'target/doc'
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-        with:
-          folder: target/doc # The folder the action should deploy.
-
