@@ -158,13 +158,13 @@ pub enum CsError {
     /// There is no such communication action in the CS.
     #[error("communication {0:?} has not been defined")]
     NoCommunication(Action),
-    /// There is no such action in the CS.
+    /// The action does not belong to the PG.
     #[error("action {0:?} does not belong to program graph {1:?}")]
     ActionNotInPg(Action, PgId),
-    /// There is no such variable in the given PG.
+    /// The variable does not belong to the PG.
     #[error("variable {0:?} does not belong to program graph {1:?}")]
     VarNotInPg(Var, PgId),
-    /// There is no such location in the given PG.
+    /// The location does not belong to the PG.
     #[error("location {0:?} does not belong to program graph {1:?}")]
     LocationNotInPg(Location, PgId),
     /// The given PGs do not match.
