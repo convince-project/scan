@@ -1,4 +1,5 @@
 use clap::{Parser as ClapParser, Subcommand};
+use rand::seq::IteratorRandom;
 use scan_fmt_xml::{ModelBuilder, Parser};
 use std::{error::Error, path::PathBuf};
 
@@ -51,16 +52,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Commands::Execute => {
             println!("Executing model");
+            let mut rng = rand::thread_rng();
             let model = Parser::parse(cli.model.to_owned())?;
             let mut model = ModelBuilder::visit(model)?;
             println!("Transitions list:");
             let mut trans: u32 = 0;
-            while let Some((pg_id, action, destination)) = model
-                .cs
-                .possible_transitions()
-                .take(1)
-                .collect::<Vec<_>>()
-                .pop()
+            while let Some((pg_id, action, destination)) =
+                model.cs.possible_transitions().choose(&mut rng)
             {
                 let pg = model
                     .fsm_names
