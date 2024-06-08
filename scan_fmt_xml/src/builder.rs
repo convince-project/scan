@@ -89,7 +89,7 @@ impl ModelBuilder {
         for (_id, declaration) in parser.process_list.iter() {
             match &declaration.moc {
                 MoC::Fsm(fsm) => model.build_fsm(fsm)?,
-                MoC::Bt(_bt) => todo!(), // model.build_bt(bt)?,
+                MoC::Bt(bt) => model.build_bt(bt)?,
             }
         }
 
@@ -152,7 +152,7 @@ impl ModelBuilder {
             let pg_id = self.fsm_builder(id).pg_id;
             match &declaration.moc {
                 MoC::Fsm(fsm) => self.prebuild_fsms(pg_id, fsm)?,
-                MoC::Bt(_bt) => todo!(), // self.prebuild_bt(pg_id, bt)?,
+                MoC::Bt(bt) => self.prebuild_bt(pg_id, bt)?,
             }
         }
         Ok(())
@@ -243,6 +243,7 @@ impl ModelBuilder {
         let pg_builder = self.fsm_builder(&bt.id);
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
+        let bt_index = pg_builder.index;
         // Locations are relative to what the node receives
         let loc_idle = self.cs.initial_location(pg_id)?;
         let loc_tick = self.cs.new_location(pg_id)?;
@@ -271,22 +272,46 @@ impl ModelBuilder {
         let receive_event =
             self.cs
                 .new_communication(pg_id, ext_queue, Message::Receive(ext_event_var))?;
+        let process_event = self.cs.new_action(pg_id).unwrap();
+        let ext_event_index = self.cs.new_var(pg_id, Type::Integer).unwrap();
+        let ext_origin_var = self.cs.new_var(pg_id, Type::Integer).unwrap();
+        self.cs
+            .add_effect(
+                pg_id,
+                process_event,
+                ext_event_index,
+                CsExpression::Component(0, Box::new(CsExpression::Var(ext_event_var))),
+            )
+            .unwrap();
+        self.cs
+            .add_effect(
+                pg_id,
+                process_event,
+                ext_origin_var,
+                CsExpression::Component(1, Box::new(CsExpression::Var(ext_event_var))),
+            )
+            .unwrap();
         let event_received = self.cs.new_location(pg_id)?;
         self.cs
             .add_transition(pg_id, loc_idle, receive_event, event_received, None)?;
+        let event_processed = self.cs.new_location(pg_id)?;
+        self.cs
+            .add_transition(pg_id, event_received, process_event, event_processed, None)
+            .unwrap();
 
         // TICK
         // Create event, if it does not exist already.
         let tick_idx = *self.event_indexes.get(TICK_CALL).unwrap() as Integer;
+        let tick_return_idx = *self.event_indexes.get(TICK_RETURN).unwrap() as Integer;
         let halt_idx = *self.event_indexes.get(HALT_CALL).unwrap() as Integer;
         self.cs
             .add_transition(
                 pg_id,
-                event_received,
+                event_processed,
                 step,
                 loc_tick,
                 Some(CsExpression::Equal(Box::new((
-                    CsExpression::Component(0, Box::new(CsExpression::Var(ext_event_var))),
+                    CsExpression::Var(ext_event_index),
                     CsExpression::Integer(tick_idx),
                 )))),
             )
@@ -298,11 +323,84 @@ impl ModelBuilder {
                 step,
                 loc_halt,
                 Some(CsExpression::Equal(Box::new((
-                    CsExpression::Component(0, Box::new(CsExpression::Var(ext_event_var))),
+                    CsExpression::Var(ext_event_index),
                     CsExpression::Integer(halt_idx),
                 )))),
             )
             .expect("hope this works");
+
+        // Send tick return value
+        let result = self.cs.new_var(pg_id, Type::Integer).expect("must work");
+        let send_result_loc = self.cs.new_location(pg_id).unwrap();
+        let success = self.cs.new_action(pg_id).unwrap();
+        let success_val = *self.enums.get(&(String::from("SUCCESS"))).unwrap();
+        self.cs
+            .add_effect(pg_id, success, result, Expression::Integer(success_val))
+            .unwrap();
+        self.cs
+            .add_transition(pg_id, loc_success, success, send_result_loc, None)
+            .unwrap();
+        let running = self.cs.new_action(pg_id).unwrap();
+        let running_val = *self.enums.get(&(String::from("RUNNING"))).unwrap();
+        self.cs
+            .add_effect(pg_id, running, result, Expression::Integer(running_val))
+            .unwrap();
+        self.cs
+            .add_transition(pg_id, loc_running, running, send_result_loc, None)
+            .unwrap();
+        let failure = self.cs.new_action(pg_id).unwrap();
+        let failure_val = *self.enums.get(&(String::from("FAILURE"))).unwrap();
+        self.cs
+            .add_effect(pg_id, failure, result, Expression::Integer(failure_val))
+            .unwrap();
+        self.cs
+            .add_transition(pg_id, loc_failure, failure, send_result_loc, None)
+            .unwrap();
+        for (_, origin) in self.fsm_builders.iter() {
+            let send_event_loc = self.cs.new_location(pg_id).unwrap();
+            let channel = self
+                .parameters
+                .entry((
+                    pg_id,
+                    origin.pg_id,
+                    tick_return_idx as usize,
+                    RESULT.to_owned(),
+                ))
+                .or_insert_with(|| self.cs.new_channel(Type::Integer, None));
+            let send_result = self
+                .cs
+                .new_communication(pg_id, *channel, Message::Send(Expression::Var(result)))
+                .unwrap();
+            self.cs
+                .add_transition(
+                    pg_id,
+                    send_result_loc,
+                    send_result,
+                    send_event_loc,
+                    Some(Expression::Equal(Box::new((
+                        Expression::Var(ext_origin_var),
+                        Expression::Integer(origin.index as Integer),
+                    )))),
+                )
+                .unwrap();
+            let send_event = self
+                .cs
+                .new_communication(
+                    pg_id,
+                    origin.ext_queue,
+                    Message::Send(Expression::Tuple(vec![
+                        Expression::Integer(tick_return_idx),
+                        Expression::Integer(bt_index as Integer),
+                    ])),
+                )
+                .unwrap();
+            self.cs
+                .add_transition(pg_id, send_event_loc, send_event, loc_idle, None)
+                .unwrap();
+        }
+
+        // TODO: Send halt acknowledgement
+
         Ok(())
     }
 
@@ -464,12 +562,12 @@ impl ModelBuilder {
                             CsExpression::Boolean(false),
                         )
                         .expect("hand-picked arguments");
-                    let loc_tick = self.cs.new_location(pg_id)?;
-                    let loc_success = self.cs.new_location(pg_id)?;
-                    let loc_running = self.cs.new_location(pg_id)?;
-                    let loc_failure = self.cs.new_location(pg_id)?;
-                    let loc_halt = self.cs.new_location(pg_id)?;
-                    let loc_ack = self.cs.new_location(pg_id)?;
+                    let loc_tick = self.cs.new_location(pg_id).unwrap();
+                    let loc_success = self.cs.new_location(pg_id).unwrap();
+                    let loc_running = self.cs.new_location(pg_id).unwrap();
+                    let loc_failure = self.cs.new_location(pg_id).unwrap();
+                    let loc_halt = self.cs.new_location(pg_id).unwrap();
+                    let loc_ack = self.cs.new_location(pg_id).unwrap();
                     // If receives tick from parent, tick first child.
                     self.cs
                         .add_transition(pg_id, pt_tick, step, loc_tick, None)?;
@@ -491,12 +589,12 @@ impl ModelBuilder {
                     let mut prev_failure = loc_failure;
                     let mut prev_ack = loc_ack;
                     for branch in branches.iter().skip(1) {
-                        let loc_tick = self.cs.new_location(pg_id)?;
-                        let loc_success = self.cs.new_location(pg_id)?;
-                        let loc_running = self.cs.new_location(pg_id)?;
-                        let loc_failure = self.cs.new_location(pg_id)?;
-                        let loc_halt = self.cs.new_location(pg_id)?;
-                        let loc_ack = self.cs.new_location(pg_id)?;
+                        let loc_tick = self.cs.new_location(pg_id).unwrap();
+                        let loc_success = self.cs.new_location(pg_id).unwrap();
+                        let loc_running = self.cs.new_location(pg_id).unwrap();
+                        let loc_failure = self.cs.new_location(pg_id).unwrap();
+                        let loc_halt = self.cs.new_location(pg_id).unwrap();
+                        let loc_ack = self.cs.new_location(pg_id).unwrap();
                         // If receives failure from previous child, tick current child.
                         self.cs
                             .add_transition(pg_id, prev_failure, step, loc_tick, None)?;
