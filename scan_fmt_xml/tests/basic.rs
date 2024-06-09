@@ -54,6 +54,16 @@ fn param_triangle() -> anyhow::Result<()> {
     test(PathBuf::from_str("./tests/test_param_triangle/model.xml")?)
 }
 
+#[test]
+fn param_tennis() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_param_tennis/model.xml")?)
+}
+
+#[test]
+fn conditional() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_if/model.xml")?)
+}
+
 fn test(file: PathBuf) -> anyhow::Result<()> {
     let parser = Parser::parse(file)?;
     let mut model = ModelBuilder::visit(parser)?;
