@@ -38,6 +38,7 @@ pub const ATTR_PATH: &str = "path";
 // pub const TAG_XMLNS: &str = "xmlns";
 pub const TAG_DATAMODEL: &str = "datamodel";
 pub const TAG_DATA: &str = "data";
+pub const TAG_IF: &str = "if";
 // pub const TAG_BOOL: &str = "bool";
 // pub const TAG_INT: &str = "int";
 // pub const TAG_UNIT: &str = "unit";

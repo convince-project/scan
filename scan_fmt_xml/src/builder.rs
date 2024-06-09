@@ -2,6 +2,7 @@
 
 use crate::parser::*;
 use anyhow::anyhow;
+use boa_ast::expression::operator::Unary;
 use log::{info, trace};
 use scan_core::{channel_system::*, *};
 use std::collections::{HashMap, HashSet};
@@ -66,7 +67,7 @@ impl ModelBuilder {
         // Add base types
         // FIXME: Is there a better way? Const object?
         let base_types: [(String, Type); 3] = [
-            (String::from("Boolean"), Type::Boolean),
+            (String::from("boolean"), Type::Boolean),
             (String::from("int32"), Type::Integer),
             (String::from("URI"), Type::Integer),
         ];
@@ -210,6 +211,12 @@ impl ModelBuilder {
                             return Err(anyhow!("type parameter mismatch"));
                         }
                     }
+                }
+                Ok(())
+            }
+            Executable::If { cond: _, execs } => {
+                for executable in execs {
+                    self.prebuild_exec(pg_id, executable)?;
                 }
                 Ok(())
             }
@@ -993,6 +1000,7 @@ impl ModelBuilder {
                     pg_id,
                     pg_index,
                     int_queue,
+                    step,
                     onentry_loc,
                     &vars,
                     None,
@@ -1217,6 +1225,7 @@ impl ModelBuilder {
                         pg_id,
                         pg_index,
                         int_queue,
+                        step,
                         exec_trans_loc,
                         &vars,
                         exec_origin,
@@ -1263,6 +1272,7 @@ impl ModelBuilder {
         pg_id: PgId,
         pg_idx: Integer,
         int_queue: Channel,
+        step: Action,
         loc: Location,
         vars: &HashMap<String, (Var, Type)>,
         origin: Option<Var>,
@@ -1334,7 +1344,6 @@ impl ModelBuilder {
                         .ok_or(anyhow!("event not found"))?;
                     // Location representing having sent the event to the correct target after evaluating expression.
                     let done_loc = self.cs.new_location(pg_id).expect("PG exists");
-                    let complete_send = self.cs.new_action(pg_id).expect("PG exists");
                     for &target_id in self.events[event_idx].receivers.clone().iter() {
                         // FIXME TODO: there should be an indexing to avoid search
                         let (_target_name, target_builder) = self
@@ -1381,7 +1390,7 @@ impl ModelBuilder {
                         }
                         // Once sending event and args done, get to exit-point
                         self.cs
-                            .add_transition(pg_id, next_loc, complete_send, done_loc, None)
+                            .add_transition(pg_id, next_loc, step, done_loc, None)
                             .expect("hand-made args");
                     }
 
@@ -1395,8 +1404,30 @@ impl ModelBuilder {
                 let (var, _scan_type) = vars.get(location).ok_or(anyhow!("undefined variable"))?;
                 let assign = self.cs.new_action(pg_id).expect("PG exists");
                 self.cs.add_effect(pg_id, assign, *var, expr)?;
-                let next_loc = self.cs.new_location(pg_id)?;
+                let next_loc = self.cs.new_location(pg_id).unwrap();
                 self.cs.add_transition(pg_id, loc, assign, next_loc, None)?;
+                Ok(next_loc)
+            }
+            Executable::If { cond, execs } => {
+                let mut next_loc = self.cs.new_location(pg_id).unwrap();
+                let cond = self.expression(cond, interner, vars, origin, params)?;
+                self.cs
+                    .add_transition(pg_id, loc, step, next_loc, Some(cond.to_owned()))?;
+                for exec in execs {
+                    next_loc = self.add_executable(
+                        exec, pg_id, pg_idx, int_queue, step, next_loc, vars, origin, params,
+                        interner,
+                    )?;
+                }
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        loc,
+                        step,
+                        next_loc,
+                        Some(Expression::Not(Box::new(cond))),
+                    )
+                    .unwrap();
                 Ok(next_loc)
             }
         }
@@ -1530,7 +1561,20 @@ impl ModelBuilder {
             boa_ast::Expression::NewTarget => todo!(),
             boa_ast::Expression::ImportMeta => todo!(),
             boa_ast::Expression::Assign(_) => todo!(),
-            boa_ast::Expression::Unary(_) => todo!(),
+            boa_ast::Expression::Unary(unary) => {
+                use boa_ast::expression::operator::unary::UnaryOp;
+                match unary.op() {
+                    UnaryOp::Minus => todo!(),
+                    UnaryOp::Plus => todo!(),
+                    UnaryOp::Not => self
+                        .expression(unary.target(), interner, vars, origin, params)
+                        .map(|expr| Expression::Not(Box::new(expr)))?,
+                    UnaryOp::Tilde => todo!(),
+                    UnaryOp::TypeOf => todo!(),
+                    UnaryOp::Delete => todo!(),
+                    UnaryOp::Void => todo!(),
+                }
+            }
             boa_ast::Expression::Update(_) => todo!(),
             boa_ast::Expression::Binary(bin) => {
                 use boa_ast::expression::operator::binary::{ArithmeticOp, BinaryOp, RelationalOp};

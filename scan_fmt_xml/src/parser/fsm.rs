@@ -16,6 +16,7 @@ enum ScxmlTag {
     Transition,
     Scxml,
     Datamodel,
+    If,
     OnEntry,
     OnExit,
     Send,
@@ -28,6 +29,7 @@ impl From<ScxmlTag> for &'static str {
             ScxmlTag::Transition => TAG_TRANSITION,
             ScxmlTag::Scxml => TAG_SCXML,
             ScxmlTag::Datamodel => TAG_DATAMODEL,
+            ScxmlTag::If => TAG_IF,
             ScxmlTag::OnEntry => TAG_ONENTRY,
             ScxmlTag::OnExit => TAG_ONEXIT,
             ScxmlTag::Send => TAG_SEND,
@@ -39,7 +41,7 @@ impl ScxmlTag {
     pub fn is_executable(&self) -> bool {
         matches!(
             self,
-            ScxmlTag::OnEntry | ScxmlTag::OnExit | ScxmlTag::Transition
+            ScxmlTag::OnEntry | ScxmlTag::OnExit | ScxmlTag::Transition | ScxmlTag::If
         )
     }
 }
@@ -78,6 +80,10 @@ pub enum Executable {
         event: String,
         target: Target,
         params: Vec<Param>,
+    },
+    If {
+        cond: boa_ast::Expression,
+        execs: Vec<Executable>,
     },
 }
 
@@ -147,6 +153,10 @@ impl Fsm {
                         TAG_SEND if stack.iter().rev().any(|tag| tag.is_executable()) => {
                             fsm.parse_send(tag, reader, &stack)?;
                             stack.push(ScxmlTag::Send);
+                        }
+                        TAG_IF if stack.iter().rev().any(|tag| tag.is_executable()) => {
+                            fsm.parse_if(tag, reader, &stack)?;
+                            stack.push(ScxmlTag::If);
                         }
                         TAG_ONENTRY
                             if stack
@@ -524,6 +534,59 @@ impl Fsm {
         Ok(())
     }
 
+    fn parse_if<R: BufRead>(
+        &mut self,
+        tag: events::BytesStart<'_>,
+        reader: &mut Reader<R>,
+        stack: &[ScxmlTag],
+    ) -> anyhow::Result<()> {
+        let mut cond: Option<String> = None;
+        for attr in tag
+            .attributes()
+            .collect::<Result<Vec<Attribute>, AttrError>>()?
+        {
+            match str::from_utf8(attr.key.as_ref())? {
+                ATTR_COND => {
+                    cond = Some(String::from_utf8(attr.value.into_owned())?);
+                }
+                key => {
+                    error!("found unknown attribute {key} in {TAG_TRANSITION}");
+                    return Err(anyhow::Error::new(ParserError(
+                        reader.buffer_position(),
+                        ParserErrorType::UnknownKey(key.to_owned()),
+                    )));
+                }
+            }
+        }
+        let cond = cond.ok_or(anyhow!(ParserError(
+            reader.buffer_position(),
+            ParserErrorType::MissingAttr(ATTR_COND.to_string())
+        )))?;
+        if let StatementListItem::Statement(boa_ast::Statement::Expression(cond)) =
+            boa_parser::Parser::new(boa_parser::Source::from_bytes(cond.as_bytes()))
+                .parse_script(&mut self.interner)
+                .expect("hope this works")
+                .statements()
+                .first()
+                .expect("hopefully there is a statement")
+                .to_owned()
+        {
+            self.add_executable(
+                stack,
+                reader,
+                Executable::If {
+                    cond,
+                    execs: Vec::new(),
+                },
+            )
+        } else {
+            Err(anyhow!(ParserError(
+                reader.buffer_position(),
+                ParserErrorType::EcmaScriptParsing,
+            )))
+        }
+    }
+
     fn parse_assign<R: BufRead>(
         &mut self,
         tag: events::BytesStart<'_>,
@@ -584,7 +647,6 @@ impl Fsm {
     ) -> Result<(), anyhow::Error> {
         let state_id: &str = stack
             .iter()
-            .rev()
             .find_map(|tag| {
                 if let ScxmlTag::State(state) = tag {
                     Some(state)
@@ -597,28 +659,63 @@ impl Fsm {
             .states
             .get_mut(state_id)
             .expect("State in stack has to exist");
-        match stack
+        let (i, tag) = stack
             .iter()
-            .rfind(|tag| tag.is_executable())
-            .expect("there must be an executable tag")
-        {
+            .enumerate()
+            .find(|(_, tag)| tag.is_executable())
+            .expect("there must be an executable tag");
+        let stack = &stack[i + 1..];
+        match tag {
             ScxmlTag::OnEntry => {
-                state.on_entry.push(executable);
+                Self::put_executable(stack, executable, &mut state.on_entry, reader)?;
             }
             ScxmlTag::OnExit => {
-                state.on_exit.push(executable);
+                Self::put_executable(stack, executable, &mut state.on_exit, reader)?;
             }
             ScxmlTag::Transition => {
-                state
-                    .transitions
-                    .last_mut()
-                    .expect("inside a `Transition` tag")
-                    .effects
-                    .push(executable);
+                Self::put_executable(
+                    stack,
+                    executable,
+                    &mut state
+                        .transitions
+                        .last_mut()
+                        .expect("inside a `Transition` tag")
+                        .effects,
+                    reader,
+                )?;
             }
             _ => panic!("non executable tag"),
         }
         Ok(())
+    }
+
+    fn put_executable<R: BufRead>(
+        stack: &[ScxmlTag],
+        executable: Executable,
+        into: &mut Vec<Executable>,
+        reader: &mut Reader<R>,
+    ) -> Result<(), anyhow::Error> {
+        if stack.is_empty() {
+            into.push(executable);
+            Ok(())
+        } else {
+            match stack
+                .iter()
+                .find(|tag| tag.is_executable())
+                .expect("there must be an executable tag")
+            {
+                ScxmlTag::If => match into
+                    .last_mut()
+                    .ok_or_else(|| anyhow!("no executable found"))?
+                {
+                    Executable::If { cond: _, execs } => {
+                        Self::put_executable(&stack[1..], executable, execs, reader)
+                    }
+                    _ => Err(anyhow!("no nested executable found")),
+                },
+                _ => panic!("non executable tag"),
+            }
+        }
     }
 
     fn parse_param<R: BufRead>(
@@ -713,11 +810,13 @@ impl Fsm {
         // The `Send` must be the last `Executable` being parsed.
         // Then, push the `Param`.
         // TODO: Handle errors.
-        match stack
+        let (i, tag) = stack
             .iter()
-            .rfind(|tag| tag.is_executable())
-            .expect("there must be an executable tag")
-        {
+            .enumerate()
+            .find(|(_, tag)| tag.is_executable())
+            .expect("there must be an executable tag");
+        let stack = &stack[i + 1..];
+        match tag {
             ScxmlTag::OnEntry => {
                 if let Some(Executable::Send {
                     event: _,
@@ -739,23 +838,53 @@ impl Fsm {
                 }
             }
             ScxmlTag::Transition => {
-                if let Some(Executable::Send {
-                    event: _,
-                    target: _,
-                    params,
-                }) = state
-                    .transitions
-                    .last_mut()
-                    .expect("inside a `Transition` tag")
-                    .effects
-                    .last_mut()
-                {
-                    params.push(param);
-                }
+                Self::put_param(
+                    stack,
+                    param,
+                    &mut state
+                        .transitions
+                        .last_mut()
+                        .expect("inside a `Transition` tag")
+                        .effects,
+                    reader,
+                )?;
             }
             _ => panic!("non executable tag"),
         }
         Ok(())
+    }
+
+    fn put_param<R: BufRead>(
+        stack: &[ScxmlTag],
+        param: Param,
+        into: &mut Vec<Executable>,
+        reader: &mut Reader<R>,
+    ) -> Result<(), anyhow::Error> {
+        match stack.first().expect("there must be an executable tag") {
+            ScxmlTag::Send => {
+                if let Executable::Send {
+                    event: _,
+                    target: _,
+                    params,
+                } = into.last_mut().ok_or_else(|| anyhow!(""))?
+                {
+                    params.push(param);
+                    Ok(())
+                } else {
+                    Err(anyhow!(""))
+                }
+            }
+            ScxmlTag::If => match into
+                .last_mut()
+                .ok_or_else(|| anyhow!("no executable found"))?
+            {
+                Executable::If { cond: _, execs } => {
+                    Self::put_param(&stack[1..], param, execs, reader)
+                }
+                _ => Err(anyhow!("no nested executable found")),
+            },
+            _ => panic!("non executable tag"),
+        }
     }
 
     fn parse_data<R: BufRead>(
