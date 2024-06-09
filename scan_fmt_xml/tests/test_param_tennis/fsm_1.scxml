@@ -1,0 +1,62 @@
+<scxml 
+  version="1.0"
+  xmlns="http://www.w3.org/2005/07/scxml"
+  datamodel="ecmascript"
+  name="fsm_1"
+  initial="initial">
+
+  <state id="initial">
+    <onentry>
+      <send event="tick" target="fsm_2"/>
+    </onentry>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == FAILURE"/>
+    <transition event="tickResponse" target="running_1" cond="_event.data.result == RUNNING"/>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == SUCCESS"/>
+  </state>
+
+  <state id="running_1">
+    <onentry>
+      <send event="tick" target="fsm_2"/>
+    </onentry>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == FAILURE"/>
+    <transition event="tickResponse" target="running_2" cond="_event.data.result == RUNNING"/>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == SUCCESS"/>
+  </state>
+
+  <state id="running_2">
+    <onentry>
+      <send event="tick" target="fsm_2"/>
+    </onentry>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == FAILURE"/>
+    <transition event="tickResponse" target="running_3" cond="_event.data.result == RUNNING"/>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == SUCCESS"/>
+  </state>
+
+  <state id="running_3">
+    <onentry>
+      <send event="tick" target="fsm_2"/>
+    </onentry>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == FAILURE"/>
+    <transition event="tickResponse" target="running_4" cond="_event.data.result == RUNNING"/>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == SUCCESS"/>
+  </state>
+
+  <state id="running_4">
+    <onentry>
+      <send event="tick" target="fsm_2"/>
+    </onentry>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == FAILURE"/>
+    <transition event="tickResponse" target="loop" cond="_event.data.result == RUNNING"/>
+    <transition event="tickResponse" target="success" cond="_event.data.result == SUCCESS"/>
+  </state>
+
+  <state id="fail">
+    <transition event="tickResponse" target="loop"/>
+  </state>
+
+  <state id="success"/>
+
+  <state id="loop">
+    <transition target="loop"/>
+  </state>
+</scxml>
