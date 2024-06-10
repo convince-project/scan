@@ -1,0 +1,27 @@
+<scxml 
+  version="1.0"
+  xmlns="http://www.w3.org/2005/07/scxml"
+  datamodel="ecmascript"
+  name="RAction"
+  initial="idle">
+
+  <state id="idle">
+    <transition event="tickCall" target="running">
+      <send event="tickReturn" targetexpr="_event.origin">
+        <!-- TYPE result:TickResponse -->
+        <param name="result" expr="RUNNING"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="running">
+    <transition event="tickCall" target="finished">
+      <send event="tickReturn" targetexpr="_event.origin">
+        <!-- TYPE result:TickResponse -->
+        <param name="result" expr="FAILURE"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="finished"/>
+</scxml>

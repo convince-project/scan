@@ -1,0 +1,17 @@
+<specification xmlns="..." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="...">
+
+  <model>
+
+    <types path="./types.xml" />
+    
+    <processList>
+      <process id="TickGen" moc="fsm" path="./TickGen.scxml" />
+      <process id="BT" moc="bt" path="./BT.xml" />
+      <process id="Action" moc="fsm" path="./Action.scxml" />
+    </processList>
+ 
+  </model>
+
+  <properties path="./properties.xml"/>
+</specification>

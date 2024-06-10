@@ -64,6 +64,36 @@ fn conditional() -> anyhow::Result<()> {
     test(PathBuf::from_str("./tests/test_if/model.xml")?)
 }
 
+#[test]
+fn bt_success() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_bt_success/model.xml")?)
+}
+
+#[test]
+fn bt_failure() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_bt_failure/model.xml")?)
+}
+
+#[test]
+fn bt_rseq_success() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_bt_rseq_success/model.xml")?)
+}
+
+#[test]
+fn bt_rseq_failure() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_bt_rseq_failure/model.xml")?)
+}
+
+#[test]
+fn bt_rfbk_success() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_bt_rfbk_success/model.xml")?)
+}
+
+#[test]
+fn bt_rfbk_failure() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/test_bt_rfbk_failure/model.xml")?)
+}
+
 fn test(file: PathBuf) -> anyhow::Result<()> {
     let parser = Parser::parse(file)?;
     let mut model = ModelBuilder::visit(parser)?;

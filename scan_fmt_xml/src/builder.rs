@@ -2,7 +2,6 @@
 
 use crate::parser::*;
 use anyhow::anyhow;
-use boa_ast::expression::operator::Unary;
 use log::{info, trace};
 use scan_core::{channel_system::*, *};
 use std::collections::{HashMap, HashSet};
@@ -252,18 +251,14 @@ impl ModelBuilder {
         let ext_queue = pg_builder.ext_queue;
         let bt_index = pg_builder.index;
         // Locations are relative to what the node receives
-        let loc_idle = self.cs.initial_location(pg_id)?;
-        let loc_tick = self.cs.new_location(pg_id)?;
-        let loc_success = self.cs.new_location(pg_id)?;
-        let loc_running = self.cs.new_location(pg_id)?;
-        let loc_failure = self.cs.new_location(pg_id)?;
-        let loc_halt = self.cs.new_location(pg_id)?;
-        let loc_ack = self.cs.new_location(pg_id)?;
-        let step = self.cs.new_action(pg_id)?;
-        let ext_event_var = self
-            .cs
-            .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
-            .expect("{pg_id:?} exists");
+        let loc_idle = self.cs.initial_location(pg_id).unwrap();
+        let loc_tick = self.cs.new_location(pg_id).unwrap();
+        let loc_success = self.cs.new_location(pg_id).unwrap();
+        let loc_running = self.cs.new_location(pg_id).unwrap();
+        let loc_failure = self.cs.new_location(pg_id).unwrap();
+        let loc_halt = self.cs.new_location(pg_id).unwrap();
+        let loc_ack = self.cs.new_location(pg_id).unwrap();
+        let step = self.cs.new_action(pg_id).unwrap();
         self.build_bt_node(
             pg_id,
             loc_tick,
@@ -276,9 +271,14 @@ impl ModelBuilder {
             &bt.root,
         )?;
 
-        let receive_event =
-            self.cs
-                .new_communication(pg_id, ext_queue, Message::Receive(ext_event_var))?;
+        let ext_event_var = self
+            .cs
+            .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
+            .expect("{pg_id:?} exists");
+        let receive_event = self
+            .cs
+            .new_communication(pg_id, ext_queue, Message::Receive(ext_event_var))
+            .unwrap();
         let process_event = self.cs.new_action(pg_id).unwrap();
         let ext_event_index = self.cs.new_var(pg_id, Type::Integer).unwrap();
         let ext_origin_var = self.cs.new_var(pg_id, Type::Integer).unwrap();
@@ -298,10 +298,11 @@ impl ModelBuilder {
                 CsExpression::Component(1, Box::new(CsExpression::Var(ext_event_var))),
             )
             .unwrap();
-        let event_received = self.cs.new_location(pg_id)?;
+        let event_received = self.cs.new_location(pg_id).unwrap();
         self.cs
-            .add_transition(pg_id, loc_idle, receive_event, event_received, None)?;
-        let event_processed = self.cs.new_location(pg_id)?;
+            .add_transition(pg_id, loc_idle, receive_event, event_received, None)
+            .unwrap();
+        let event_processed = self.cs.new_location(pg_id).unwrap();
         self.cs
             .add_transition(pg_id, event_received, process_event, event_processed, None)
             .unwrap();
@@ -311,6 +312,7 @@ impl ModelBuilder {
         let tick_idx = *self.event_indexes.get(TICK_CALL).unwrap() as Integer;
         let tick_return_idx = *self.event_indexes.get(TICK_RETURN).unwrap() as Integer;
         let halt_idx = *self.event_indexes.get(HALT_CALL).unwrap() as Integer;
+        let halt_return_idx = *self.event_indexes.get(HALT_RETURN).unwrap() as Integer;
         self.cs
             .add_transition(
                 pg_id,
@@ -323,10 +325,11 @@ impl ModelBuilder {
                 )))),
             )
             .expect("hope this works");
+        // HALT
         self.cs
             .add_transition(
                 pg_id,
-                event_received,
+                event_processed,
                 step,
                 loc_halt,
                 Some(CsExpression::Equal(Box::new((
@@ -363,20 +366,29 @@ impl ModelBuilder {
         self.cs
             .add_transition(pg_id, loc_failure, failure, send_result_loc, None)
             .unwrap();
-        for (_, origin) in self.fsm_builders.iter() {
+
+        // Send tickReturn event with result param
+        let callers = &self.events.get(tick_idx as usize).unwrap().senders;
+        for &caller in callers.iter() {
+            // TODO: improve this search
+            let caller_builder = self
+                .fsm_builders
+                .values()
+                .find(|b| b.pg_id == caller)
+                .expect("it must exist");
+            let caller_index = caller_builder.index;
             let send_event_loc = self.cs.new_location(pg_id).unwrap();
-            let channel = self
+            let param_channel = self
                 .parameters
-                .entry((
-                    pg_id,
-                    origin.pg_id,
-                    tick_return_idx as usize,
-                    RESULT.to_owned(),
-                ))
+                .entry((pg_id, caller, tick_return_idx as usize, RESULT.to_owned()))
                 .or_insert_with(|| self.cs.new_channel(Type::Integer, None));
             let send_result = self
                 .cs
-                .new_communication(pg_id, *channel, Message::Send(Expression::Var(result)))
+                .new_communication(
+                    pg_id,
+                    *param_channel,
+                    Message::Send(Expression::Var(result)),
+                )
                 .unwrap();
             self.cs
                 .add_transition(
@@ -386,7 +398,7 @@ impl ModelBuilder {
                     send_event_loc,
                     Some(Expression::Equal(Box::new((
                         Expression::Var(ext_origin_var),
-                        Expression::Integer(origin.index as Integer),
+                        Expression::Integer(caller_index as Integer),
                     )))),
                 )
                 .unwrap();
@@ -394,7 +406,7 @@ impl ModelBuilder {
                 .cs
                 .new_communication(
                     pg_id,
-                    origin.ext_queue,
+                    caller_builder.ext_queue,
                     Message::Send(Expression::Tuple(vec![
                         Expression::Integer(tick_return_idx),
                         Expression::Integer(bt_index as Integer),
@@ -406,7 +418,40 @@ impl ModelBuilder {
                 .unwrap();
         }
 
-        // TODO: Send halt acknowledgement
+        // Send halt acknowledgement
+        let callers = &self.events.get(halt_idx as usize).unwrap().senders;
+        for &caller in callers.iter() {
+            // TODO: improve this search
+            let caller_builder = self
+                .fsm_builders
+                .values()
+                .find(|b| b.pg_id == caller)
+                .expect("it must exist");
+            let caller_index = caller_builder.index;
+            let send_event = self
+                .cs
+                .new_communication(
+                    pg_id,
+                    caller_builder.ext_queue,
+                    Message::Send(Expression::Tuple(vec![
+                        Expression::Integer(halt_return_idx),
+                        Expression::Integer(bt_index as Integer),
+                    ])),
+                )
+                .unwrap();
+            self.cs
+                .add_transition(
+                    pg_id,
+                    loc_ack,
+                    send_event,
+                    loc_idle,
+                    Some(Expression::Equal(Box::new((
+                        Expression::Var(ext_origin_var),
+                        Expression::Integer(caller_index as Integer),
+                    )))),
+                )
+                .unwrap();
+        }
 
         Ok(())
     }
@@ -436,38 +481,44 @@ impl ModelBuilder {
     ) -> anyhow::Result<()> {
         match node {
             BtNode::RSeq(branches) => {
-                if let Some(branch) = branches.first() {
-                    let halt_after_failure = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
-                    let halting_after_failure = self
-                        .cs
-                        .new_var(pg_id, Type::Boolean)
-                        .expect("{pg_id:?} exists");
+                let halt_after_failure = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
+                let halting_after_failure = self
+                    .cs
+                    .new_var(pg_id, Type::Boolean)
+                    .expect("{pg_id:?} exists");
+                self.cs
+                    .add_effect(
+                        pg_id,
+                        halt_after_failure,
+                        halting_after_failure,
+                        CsExpression::Boolean(true),
+                    )
+                    .expect("hand-picked arguments");
+                let failure_after_halting = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
+                self.cs
+                    .add_effect(
+                        pg_id,
+                        failure_after_halting,
+                        halting_after_failure,
+                        CsExpression::Boolean(false),
+                    )
+                    .expect("hand-picked arguments");
+
+                let mut prev_ack = pt_halt;
+                let mut prev_success = pt_tick;
+                // this value is irrelevant
+                let mut prev_failure = self.cs.new_location(pg_id).unwrap();
+
+                for branch in branches.iter() {
+                    let loc_tick = prev_success;
+                    let loc_success = self.cs.new_location(pg_id).unwrap();
+                    let loc_running = pt_running;
+                    let loc_failure = self.cs.new_location(pg_id).unwrap();
+                    let loc_halt = prev_ack;
+                    let loc_ack = self.cs.new_location(pg_id).unwrap();
                     self.cs
-                        .add_effect(
-                            pg_id,
-                            halt_after_failure,
-                            halting_after_failure,
-                            CsExpression::Boolean(true),
-                        )
-                        .expect("hand-picked arguments");
-                    let failure_after_halting =
-                        self.cs.new_action(pg_id).expect("{pg_id:?} exists");
-                    self.cs
-                        .add_effect(
-                            pg_id,
-                            failure_after_halting,
-                            halting_after_failure,
-                            CsExpression::Boolean(false),
-                        )
-                        .expect("hand-picked arguments");
-                    // If receives tick from parent, tick first child.
-                    let loc_tick = pt_tick;
-                    let loc_success = self.cs.new_location(pg_id)?;
-                    let loc_running = self.cs.new_location(pg_id)?;
-                    let loc_failure = self.cs.new_location(pg_id)?;
-                    // If parent sends halt, halt first child.
-                    let loc_halt = pt_halt;
-                    let loc_ack = self.cs.new_location(pg_id)?;
+                        .add_transition(pg_id, prev_failure, halt_after_failure, loc_halt, None)
+                        .unwrap();
                     self.build_bt_node(
                         pg_id,
                         loc_tick,
@@ -479,108 +530,80 @@ impl ModelBuilder {
                         step,
                         branch,
                     )?;
-                    let mut prev_success = loc_success;
-                    let mut prev_failure = loc_failure;
-                    let mut prev_ack = loc_ack;
-                    for branch in branches.iter().skip(1) {
-                        // If receives success from previous child, tick current child.
-                        let loc_tick = prev_success;
-                        let loc_success = self.cs.new_location(pg_id)?;
-                        // If receives running from current child, return running to parent
-                        let loc_running = pt_running;
-                        let loc_failure = self.cs.new_location(pg_id)?;
-                        let loc_halt = self.cs.new_location(pg_id)?;
-                        // If previous child acknowledge halting, halts current child.
-                        let loc_ack = prev_ack;
-                        // If receives failure from previous child, halt current child.
-                        self.cs.add_transition(
-                            pg_id,
-                            prev_failure,
-                            halt_after_failure,
-                            loc_halt,
-                            None,
-                        )?;
-                        self.build_bt_node(
-                            pg_id,
-                            loc_tick,
-                            loc_success,
-                            loc_running,
-                            loc_failure,
-                            loc_halt,
-                            loc_ack,
-                            step,
-                            branch,
-                        )?;
-                        prev_success = loc_success;
-                        prev_failure = loc_failure;
-                        prev_ack = loc_ack;
-                    }
-                    // If all children are successful, return success to father node.
-                    self.cs
-                        .add_transition(pg_id, prev_success, step, pt_success, None)?;
-                    // If all children acknowledge halting, return ack to father node.
-                    self.cs
-                        .add_transition(
-                            pg_id,
-                            prev_ack,
-                            step,
-                            pt_ack,
-                            Some(CsExpression::Not(Box::new(CsExpression::Var(
-                                halting_after_failure,
-                            )))),
-                        )
-                        .expect("hand-made args");
-                    // If all children acknowledge halting after a failure, return failure to father node.
-                    self.cs
-                        .add_transition(
-                            pg_id,
-                            prev_ack,
-                            failure_after_halting,
-                            pt_failure,
-                            Some(CsExpression::Var(halting_after_failure)),
-                        )
-                        .expect("hand-made args");
-                } else {
-                    todo!()
+                    prev_success = loc_success;
+                    prev_failure = loc_failure;
+                    prev_ack = loc_ack;
                 }
+                // If all children are successful, return success to father node.
+                self.cs
+                    .add_transition(pg_id, prev_success, step, pt_success, None)
+                    .unwrap();
+                // If last child fails, return failure to father node.
+                self.cs
+                    .add_transition(pg_id, prev_failure, step, pt_failure, None)
+                    .unwrap();
+                // If all children acknowledge halting, return ack to father node.
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        prev_ack,
+                        step,
+                        pt_ack,
+                        Some(CsExpression::Not(Box::new(CsExpression::Var(
+                            halting_after_failure,
+                        )))),
+                    )
+                    .expect("hand-made args");
+                // If all children acknowledge halting after a failure, return failure to father node.
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        prev_ack,
+                        failure_after_halting,
+                        pt_failure,
+                        Some(CsExpression::Var(halting_after_failure)),
+                    )
+                    .expect("hand-made args");
             }
             BtNode::RFbk(branches) => {
-                if let Some(branch) = branches.first() {
-                    let halt_after_success = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
-                    let halting_after_success = self
-                        .cs
-                        .new_var(pg_id, Type::Boolean)
-                        .expect("{pg_id:?} exists");
-                    self.cs
-                        .add_effect(
-                            pg_id,
-                            halt_after_success,
-                            halting_after_success,
-                            CsExpression::Boolean(true),
-                        )
-                        .expect("hand-picked arguments");
-                    let success_after_halting =
-                        self.cs.new_action(pg_id).expect("{pg_id:?} exists");
-                    self.cs
-                        .add_effect(
-                            pg_id,
-                            success_after_halting,
-                            halting_after_success,
-                            CsExpression::Boolean(false),
-                        )
-                        .expect("hand-picked arguments");
-                    let loc_tick = self.cs.new_location(pg_id).unwrap();
-                    let loc_success = self.cs.new_location(pg_id).unwrap();
-                    let loc_running = self.cs.new_location(pg_id).unwrap();
+                let halt_after_success = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
+                let halting_after_success = self
+                    .cs
+                    .new_var(pg_id, Type::Boolean)
+                    .expect("{pg_id:?} exists");
+                self.cs
+                    .add_effect(
+                        pg_id,
+                        halt_after_success,
+                        halting_after_success,
+                        CsExpression::Boolean(true),
+                    )
+                    .expect("hand-picked arguments");
+                let success_after_halting = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
+                self.cs
+                    .add_effect(
+                        pg_id,
+                        success_after_halting,
+                        halting_after_success,
+                        CsExpression::Boolean(false),
+                    )
+                    .expect("hand-picked arguments");
+
+                let mut prev_ack = pt_halt;
+                let mut prev_failure = pt_tick;
+                // this value is irrelevant
+                let mut prev_success = self.cs.new_location(pg_id).unwrap();
+
+                for branch in branches.iter() {
+                    let loc_tick = prev_failure;
                     let loc_failure = self.cs.new_location(pg_id).unwrap();
-                    let loc_halt = self.cs.new_location(pg_id).unwrap();
+                    let loc_running = pt_running;
+                    let loc_success = self.cs.new_location(pg_id).unwrap();
+                    let loc_halt = prev_ack;
                     let loc_ack = self.cs.new_location(pg_id).unwrap();
-                    // If receives tick from parent, tick first child.
                     self.cs
-                        .add_transition(pg_id, pt_tick, step, loc_tick, None)?;
-                    // If parent sends halt, halt first child.
-                    self.cs
-                        .add_transition(pg_id, pt_halt, step, loc_halt, None)?;
+                        .add_transition(pg_id, prev_success, halt_after_success, loc_halt, None)
+                        .unwrap();
                     self.build_bt_node(
                         pg_id,
                         loc_tick,
@@ -592,76 +615,38 @@ impl ModelBuilder {
                         step,
                         branch,
                     )?;
-                    let mut prev_success = loc_success;
-                    let mut prev_failure = loc_failure;
-                    let mut prev_ack = loc_ack;
-                    for branch in branches.iter().skip(1) {
-                        let loc_tick = self.cs.new_location(pg_id).unwrap();
-                        let loc_success = self.cs.new_location(pg_id).unwrap();
-                        let loc_running = self.cs.new_location(pg_id).unwrap();
-                        let loc_failure = self.cs.new_location(pg_id).unwrap();
-                        let loc_halt = self.cs.new_location(pg_id).unwrap();
-                        let loc_ack = self.cs.new_location(pg_id).unwrap();
-                        // If receives failure from previous child, tick current child.
-                        self.cs
-                            .add_transition(pg_id, prev_failure, step, loc_tick, None)?;
-                        // If receives running from current child, return running to parent
-                        self.cs
-                            .add_transition(pg_id, loc_running, step, pt_running, None)?;
-                        // If receives success from previous child, halt current child.
-                        self.cs.add_transition(
-                            pg_id,
-                            prev_success,
-                            halt_after_success,
-                            loc_halt,
-                            None,
-                        )?;
-                        // If previous child acknowledge halting, halts current child.
-                        self.cs
-                            .add_transition(pg_id, prev_ack, step, loc_halt, None)?;
-                        self.build_bt_node(
-                            pg_id,
-                            loc_tick,
-                            loc_success,
-                            loc_running,
-                            loc_failure,
-                            loc_halt,
-                            loc_ack,
-                            step,
-                            branch,
-                        )?;
-                        prev_success = loc_success;
-                        prev_failure = loc_failure;
-                        prev_ack = loc_ack;
-                    }
-                    // If all children are failures, return failure to father node.
-                    self.cs
-                        .add_transition(pg_id, prev_failure, step, pt_failure, None)?;
-                    // If all children acknowledge halting, return ack to father node.
-                    self.cs
-                        .add_transition(
-                            pg_id,
-                            prev_ack,
-                            step,
-                            pt_ack,
-                            Some(CsExpression::Not(Box::new(CsExpression::Var(
-                                halting_after_success,
-                            )))),
-                        )
-                        .expect("hand-made args");
-                    // If all children acknowledge halting after a success, return success to father node.
-                    self.cs
-                        .add_transition(
-                            pg_id,
-                            prev_ack,
-                            success_after_halting,
-                            pt_success,
-                            Some(CsExpression::Var(halting_after_success)),
-                        )
-                        .expect("hand-made args");
-                } else {
-                    todo!()
+                    prev_success = loc_success;
+                    prev_failure = loc_failure;
+                    prev_ack = loc_ack;
                 }
+                self.cs
+                    .add_transition(pg_id, prev_success, step, pt_success, None)
+                    .unwrap();
+                self.cs
+                    .add_transition(pg_id, prev_failure, step, pt_failure, None)
+                    .unwrap();
+                // If all children acknowledge halting, return ack to father node.
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        prev_ack,
+                        step,
+                        pt_ack,
+                        Some(CsExpression::Not(Box::new(CsExpression::Var(
+                            halting_after_success,
+                        )))),
+                    )
+                    .expect("hand-made args");
+                // If all children acknowledge halting after a failure, return failure to father node.
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        prev_ack,
+                        success_after_halting,
+                        pt_success,
+                        Some(CsExpression::Var(halting_after_success)),
+                    )
+                    .expect("hand-made args");
             }
             BtNode::MSeq(_branches) => todo!(),
             BtNode::MFbk(_branches) => todo!(),
@@ -682,24 +667,29 @@ impl ModelBuilder {
                 let pg_idx = builder.index as Integer;
                 let ext_queue = builder.ext_queue;
                 let target = id;
-                let target_builder = self.fsm_builders.get(target).unwrap();
+                let target_builder = self
+                    .fsm_builders
+                    .get(target)
+                    .ok_or_else(|| anyhow!("Action/condition {id} not found"))?;
                 let target_ext_queue = target_builder.ext_queue;
 
                 // TICK
-                let event = TICK_CALL;
-                // Create event, if it does not exist already.
-                let event_idx = *self.event_indexes.get(event).unwrap();
-                let send_event = self.cs.new_communication(
-                    pg_id,
-                    target_ext_queue,
-                    Message::Send(CsExpression::Tuple(vec![
-                        CsExpression::Integer(event_idx as Integer),
-                        CsExpression::Integer(pg_idx),
-                    ])),
-                )?;
-                let tick_sent = self.cs.new_location(pg_id)?;
+                let tick_call_idx = *self.event_indexes.get(TICK_CALL).unwrap();
+                let send_event = self
+                    .cs
+                    .new_communication(
+                        pg_id,
+                        target_ext_queue,
+                        Message::Send(CsExpression::Tuple(vec![
+                            CsExpression::Integer(tick_call_idx as Integer),
+                            CsExpression::Integer(pg_idx),
+                        ])),
+                    )
+                    .unwrap();
+                let tick_sent = self.cs.new_location(pg_id).unwrap();
                 self.cs
-                    .add_transition(pg_id, pt_tick, send_event, tick_sent, None)?;
+                    .add_transition(pg_id, pt_tick, send_event, tick_sent, None)
+                    .unwrap();
                 let tick_response = self
                     .cs
                     .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
