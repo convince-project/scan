@@ -657,7 +657,7 @@ impl ModelBuilder {
                     branch,
                 )?;
             }
-            BtNode::LAct(id) | BtNode::LCnd(id) => {
+            BtNode::LAct(id) => {
                 trace!("building bt leaf {id}");
                 let builder = self
                     .fsm_builders
@@ -797,6 +797,115 @@ impl ModelBuilder {
                 let got_halt_response = pt_ack;
                 self.cs
                     .add_transition(pg_id, halt_sent, get_halt_response, got_halt_response, None)
+                    .expect("hand-made args");
+            }
+            BtNode::LCnd(id) => {
+                trace!("building bt leaf {id}");
+                let builder = self
+                    .fsm_builders
+                    .values()
+                    .find(|b| b.pg_id == pg_id)
+                    .expect("it must exist");
+                let pg_idx = builder.index as Integer;
+                let ext_queue = builder.ext_queue;
+                let target = id;
+                let target_builder = self
+                    .fsm_builders
+                    .get(target)
+                    .ok_or_else(|| anyhow!("Action/condition {id} not found"))?;
+                let target_ext_queue = target_builder.ext_queue;
+
+                // TICK
+                let tick_call_idx = *self.event_indexes.get(TICK_CALL).unwrap();
+                let send_event = self
+                    .cs
+                    .new_communication(
+                        pg_id,
+                        target_ext_queue,
+                        Message::Send(CsExpression::Tuple(vec![
+                            CsExpression::Integer(tick_call_idx as Integer),
+                            CsExpression::Integer(pg_idx),
+                        ])),
+                    )
+                    .unwrap();
+                let tick_sent = self.cs.new_location(pg_id).unwrap();
+                self.cs
+                    .add_transition(pg_id, pt_tick, send_event, tick_sent, None)
+                    .unwrap();
+                let tick_response = self
+                    .cs
+                    .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
+                    .expect("{pg_id:?} exists");
+                let get_tick_response = self
+                    .cs
+                    .new_communication(pg_id, ext_queue, Message::Receive(tick_response))
+                    .expect("hand-made args");
+                let got_tick_response = self.cs.new_location(pg_id).expect("{pg_id:?} exists");
+                self.cs
+                    .add_transition(pg_id, tick_sent, get_tick_response, got_tick_response, None)
+                    .expect("hand-made args");
+                let tick_response_param_chn = *self
+                    .parameters
+                    .entry((
+                        target_builder.pg_id,
+                        pg_id,
+                        *self.event_indexes.get(TICK_RETURN).unwrap(),
+                        RESULT.to_owned(),
+                    ))
+                    .or_insert(self.cs.new_channel(Type::Integer, None));
+                let tick_response_param = self
+                    .cs
+                    .new_var(pg_id, Type::Integer)
+                    .expect("{pg_id:?} exists");
+                let get_tick_response_param = self
+                    .cs
+                    .new_communication(
+                        pg_id,
+                        tick_response_param_chn,
+                        Message::Receive(tick_response_param),
+                    )
+                    .expect("hand-made args");
+                let got_tick_response_param =
+                    self.cs.new_location(pg_id).expect("{pg_id:?} exists");
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        got_tick_response,
+                        get_tick_response_param,
+                        got_tick_response_param,
+                        None,
+                    )
+                    .expect("hand-made args");
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        got_tick_response_param,
+                        step,
+                        pt_success,
+                        Some(CsExpression::Equal(Box::new((
+                            CsExpression::Var(tick_response_param),
+                            CsExpression::Integer(*self.enums.get("SUCCESS").unwrap()),
+                        )))),
+                    )
+                    .expect("hope this works");
+                self.cs
+                    .add_transition(
+                        pg_id,
+                        got_tick_response_param,
+                        step,
+                        pt_failure,
+                        Some(CsExpression::Equal(Box::new((
+                            CsExpression::Var(tick_response_param),
+                            CsExpression::Integer(*self.enums.get("FAILURE").unwrap()),
+                        )))),
+                    )
+                    .expect("hope this works");
+
+                // HALT
+                let halt_sent = pt_halt;
+                let got_halt_response = pt_ack;
+                self.cs
+                    .add_transition(pg_id, halt_sent, step, got_halt_response, None)
                     .expect("hand-made args");
             }
         }
