@@ -11,5 +11,5 @@ boa_interner = "0.18.0"
 boa_parser = "0.18.0"
 env_logger = { workspace = true }
 log = { workspace = true }
-quick-xml = "0.32.0"
+quick-xml = "0.33.0"
 thiserror = "1.0.56"
