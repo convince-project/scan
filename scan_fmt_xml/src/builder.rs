@@ -1190,8 +1190,9 @@ impl ModelBuilder {
                             .expect("hand-coded args");
                         current_loc = next_loc;
                     }
+                    // Check if event and sender are the correct ones in case of event with no parameter.
                     self.cs
-                        .add_transition(pg_id, current_loc, step, eventful_trans, None)
+                        .add_transition(pg_id, current_loc, step, eventful_trans, is_event_sender)
                         .expect("has to work");
                 }
             }
