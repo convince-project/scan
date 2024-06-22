@@ -33,9 +33,9 @@ pub struct Action(usize);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Var(usize);
 
-impl Into<usize> for Var {
-    fn into(self) -> usize {
-        self.0
+impl From<Var> for usize {
+    fn from(val: Var) -> Self {
+        val.0
     }
 }
 

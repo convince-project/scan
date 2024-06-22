@@ -300,7 +300,7 @@ impl Fsm {
                     self.initial = String::from_utf8(attr.value.into_owned())?;
                 }
                 key => {
-                    error!("found unknown attribute {key} in {TAG_STATE}, ignoring");
+                    warn!("found unknown attribute {key} in {TAG_STATE}, ignoring");
                     continue;
                 }
             }
@@ -857,7 +857,7 @@ impl Fsm {
     fn put_param<R: BufRead>(
         stack: &[ScxmlTag],
         param: Param,
-        into: &mut Vec<Executable>,
+        into: &mut [Executable],
         reader: &mut Reader<R>,
     ) -> Result<(), anyhow::Error> {
         match stack.first().expect("there must be an executable tag") {
