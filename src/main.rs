@@ -1,4 +1,5 @@
 use clap::{Parser as ClapParser, Subcommand};
+use log::{info, trace};
 use rand::seq::IteratorRandom;
 use scan_fmt_xml::{ModelBuilder, Parser};
 use std::{error::Error, path::PathBuf};
@@ -55,8 +56,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut rng = rand::thread_rng();
             let model = Parser::parse(cli.model.to_owned())?;
             let mut model = ModelBuilder::visit(model)?;
-            println!("Transitions list:");
             let mut trans: u32 = 0;
+            let mut events: u32 = 0;
             while let Some((pg_id, action, destination)) =
                 model.cs.possible_transitions().choose(&mut rng)
             {
@@ -66,8 +67,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .cloned()
                     .unwrap_or_else(|| format!("{pg_id:?}"));
                 trans += 1;
-                println!("#{trans:04}: PG {pg} by {action:?} to {destination:?}");
-                model.cs.transition(pg_id, action, destination)?;
+                trace!("TR #{trans:05}: {pg} transition by {action:?} to {destination:?}",);
+                if let Some(event) = model.cs.transition(pg_id, action, destination)? {
+                    events += 1;
+                    info!(
+                        // "#{trans:04}: PG {pg} event {:?} on channel {:?} by {action:?} to {destination:?}",
+                        "EV #{events:05}: {pg} event {:?} on channel {:?}",
+                        event.event_type, event.channel,
+                    );
+                }
             }
             println!("Model run to termination");
         }

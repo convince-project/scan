@@ -400,6 +400,28 @@ impl ChannelSystemBuilder {
     }
 }
 
+/// A Channel System event related to a channel.
+#[derive(Debug, Clone)]
+pub struct Event {
+    /// The PG producing the event in the course of a transition.
+    pub pg_id: PgId,
+    /// The channel involved in the event.
+    pub channel: Channel,
+    /// The type of event produced.
+    pub event_type: EventType,
+}
+
+/// A Channel System event type related to a channel.
+#[derive(Debug, Clone)]
+pub enum EventType {
+    /// Sending a value to a channel.
+    Send(Val),
+    /// Retrieving a value out of a channel.
+    Receive(Val),
+    /// Checking whether a channel is empty.
+    ProbeEmptyQueue,
+}
+
 /// A message to be sent through a CS's channel.
 #[derive(Debug)]
 enum FnMessage {
@@ -484,7 +506,7 @@ impl ChannelSystem {
         pg_id: PgId,
         action: Action,
         post: Location,
-    ) -> Result<(), CsError> {
+    ) -> Result<Option<Event>, CsError> {
         // If action is a communication, check it is legal
         if self.communications.contains_key(&action) {
             self.check_communication(pg_id, action)?;
@@ -505,26 +527,35 @@ impl ChannelSystem {
         if let Some((channel, message)) = self.communications.get(&action) {
             // communication has been verified before so there is a queue for channel.0
             let queue = &mut self.message_queue[channel.0];
-            match message {
+            let event_type = match message {
                 FnMessage::Send(effect) => {
                     // let effect = (pg_id, effect.to_owned()).try_into()?;
                     let val = pg.eval(effect);
-                    queue.push(val);
+                    queue.push(val.clone());
+                    EventType::Send(val)
                 }
                 FnMessage::Receive(var) => {
                     let val = queue.pop().expect("communication has been verified before");
-                    pg.assign(var.1, val)
+                    pg.assign(var.1, val.clone())
                         .expect("communication has been verified before");
+                    EventType::Receive(val)
                 }
                 FnMessage::ProbeEmptyQueue => {
                     assert!(
                         queue.is_empty(),
                         "by definition, ProbeEmptyQueue is only possible if the queue is empty"
                     );
+                    EventType::ProbeEmptyQueue
                 }
-            }
+            };
+            Ok(Some(Event {
+                pg_id,
+                channel: *channel,
+                event_type,
+            }))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 }
 
