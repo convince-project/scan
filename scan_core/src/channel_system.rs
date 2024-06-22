@@ -24,6 +24,12 @@ use std::{collections::HashMap, rc::Rc};
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct PgId(usize);
 
+impl From<PgId> for usize {
+    fn from(val: PgId) -> Self {
+        val.0
+    }
+}
+
 /// An indexing object for channels in a CS.
 ///
 /// These cannot be directly created or manipulated,

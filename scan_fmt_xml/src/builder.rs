@@ -20,7 +20,6 @@ pub struct CsModel {
 struct FsmBuilder {
     pg_id: PgId,
     ext_queue: Channel,
-    index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +40,7 @@ pub struct ModelBuilder {
     enums: HashMap<String, Integer>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
+    fsm_names: HashMap<PgId, String>,
     fsm_builders: HashMap<String, FsmBuilder>,
     // Each event is associated to a unique global index and parameter(s).
     // WARN FIXME TODO: name clashes
@@ -75,6 +75,7 @@ impl ModelBuilder {
             cs: ChannelSystemBuilder::new(),
             scan_types: HashMap::from_iter(base_types),
             enums: HashMap::new(),
+            fsm_names: HashMap::new(),
             fsm_builders: HashMap::new(),
             events: Vec::new(),
             event_indexes: HashMap::new(),
@@ -132,17 +133,13 @@ impl ModelBuilder {
 
     fn fsm_builder(&mut self, id: &str) -> &FsmBuilder {
         if !self.fsm_builders.contains_key(id) {
-            let index = self.fsm_builders.len();
             let pg_id = self.cs.new_program_graph();
             let ext_queue = self
                 .cs
                 .new_channel(Type::Product(vec![Type::Integer, Type::Integer]), None);
-            let fsm = FsmBuilder {
-                pg_id,
-                ext_queue,
-                index,
-            };
+            let fsm = FsmBuilder { pg_id, ext_queue };
             self.fsm_builders.insert(id.to_string(), fsm);
+            self.fsm_names.insert(pg_id, id.to_string());
         }
         self.fsm_builders.get(id).expect("just inserted")
     }
@@ -249,7 +246,6 @@ impl ModelBuilder {
         let pg_builder = self.fsm_builder(&bt.id);
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
-        let bt_index = pg_builder.index;
         // Locations are relative to what the node receives
         let loc_idle = self.cs.initial_location(pg_id).unwrap();
         let loc_tick = self.cs.new_location(pg_id).unwrap();
@@ -370,13 +366,9 @@ impl ModelBuilder {
         // Send tickReturn event with result param
         let callers = &self.events.get(tick_idx as usize).unwrap().senders;
         for &caller in callers.iter() {
-            // TODO: improve this search
-            let caller_builder = self
-                .fsm_builders
-                .values()
-                .find(|b| b.pg_id == caller)
-                .expect("it must exist");
-            let caller_index = caller_builder.index;
+            let caller_name = self.fsm_names.get(&caller).unwrap();
+            let caller_builder = self.fsm_builders.get(caller_name).expect("it must exist");
+            let caller_ext_queue = caller_builder.ext_queue;
             let send_event_loc = self.cs.new_location(pg_id).unwrap();
             let param_channel = self
                 .parameters
@@ -398,7 +390,7 @@ impl ModelBuilder {
                     send_event_loc,
                     Some(Expression::Equal(Box::new((
                         Expression::Var(ext_origin_var),
-                        Expression::Integer(caller_index as Integer),
+                        Expression::Integer(usize::from(caller) as Integer),
                     )))),
                 )
                 .unwrap();
@@ -406,10 +398,10 @@ impl ModelBuilder {
                 .cs
                 .new_communication(
                     pg_id,
-                    caller_builder.ext_queue,
+                    caller_ext_queue,
                     Message::Send(Expression::Tuple(vec![
                         Expression::Integer(tick_return_idx),
-                        Expression::Integer(bt_index as Integer),
+                        Expression::Integer(usize::from(pg_id) as Integer),
                     ])),
                 )
                 .unwrap();
@@ -421,21 +413,17 @@ impl ModelBuilder {
         // Send halt acknowledgement
         let callers = &self.events.get(halt_idx as usize).unwrap().senders;
         for &caller in callers.iter() {
-            // TODO: improve this search
-            let caller_builder = self
-                .fsm_builders
-                .values()
-                .find(|b| b.pg_id == caller)
-                .expect("it must exist");
-            let caller_index = caller_builder.index;
+            let caller_name = self.fsm_names.get(&caller).unwrap();
+            let caller_builder = self.fsm_builders.get(caller_name).expect("it must exist");
+            let caller_ext_queue = caller_builder.ext_queue;
             let send_event = self
                 .cs
                 .new_communication(
                     pg_id,
-                    caller_builder.ext_queue,
+                    caller_ext_queue,
                     Message::Send(Expression::Tuple(vec![
                         Expression::Integer(halt_return_idx),
-                        Expression::Integer(bt_index as Integer),
+                        Expression::Integer(usize::from(pg_id) as Integer),
                     ])),
                 )
                 .unwrap();
@@ -447,7 +435,7 @@ impl ModelBuilder {
                     loc_idle,
                     Some(Expression::Equal(Box::new((
                         Expression::Var(ext_origin_var),
-                        Expression::Integer(caller_index as Integer),
+                        Expression::Integer(usize::from(caller) as Integer),
                     )))),
                 )
                 .unwrap();
@@ -659,13 +647,9 @@ impl ModelBuilder {
             }
             BtNode::LAct(id) => {
                 trace!("building bt leaf {id}");
-                let builder = self
-                    .fsm_builders
-                    .values()
-                    .find(|b| b.pg_id == pg_id)
-                    .expect("it must exist");
-                let pg_idx = builder.index as Integer;
-                let ext_queue = builder.ext_queue;
+                let caller_name = self.fsm_names.get(&pg_id).unwrap();
+                let caller_builder = self.fsm_builders.get(caller_name).expect("it must exist");
+                let ext_queue = caller_builder.ext_queue;
                 let target = id;
                 let target_builder = self
                     .fsm_builders
@@ -682,7 +666,7 @@ impl ModelBuilder {
                         target_ext_queue,
                         Message::Send(CsExpression::Tuple(vec![
                             CsExpression::Integer(tick_call_idx as Integer),
-                            CsExpression::Integer(pg_idx),
+                            CsExpression::Integer(usize::from(pg_id) as Integer),
                         ])),
                     )
                     .unwrap();
@@ -780,7 +764,7 @@ impl ModelBuilder {
                     target_ext_queue,
                     Message::Send(CsExpression::Tuple(vec![
                         CsExpression::Integer(event_idx as Integer),
-                        CsExpression::Integer(pg_idx),
+                        CsExpression::Integer(usize::from(pg_id) as Integer),
                     ])),
                 )?;
                 let halt_sent = self.cs.new_location(pg_id)?;
@@ -801,13 +785,9 @@ impl ModelBuilder {
             }
             BtNode::LCnd(id) => {
                 trace!("building bt leaf {id}");
-                let builder = self
-                    .fsm_builders
-                    .values()
-                    .find(|b| b.pg_id == pg_id)
-                    .expect("it must exist");
-                let pg_idx = builder.index as Integer;
-                let ext_queue = builder.ext_queue;
+                let caller_name = self.fsm_names.get(&pg_id).unwrap();
+                let caller_builder = self.fsm_builders.get(caller_name).expect("it must exist");
+                let ext_queue = caller_builder.ext_queue;
                 let target = id;
                 let target_builder = self
                     .fsm_builders
@@ -824,7 +804,7 @@ impl ModelBuilder {
                         target_ext_queue,
                         Message::Send(CsExpression::Tuple(vec![
                             CsExpression::Integer(tick_call_idx as Integer),
-                            CsExpression::Integer(pg_idx),
+                            CsExpression::Integer(usize::from(pg_id) as Integer),
                         ])),
                     )
                     .unwrap();
@@ -921,7 +901,6 @@ impl ModelBuilder {
             .get(&fsm.id)
             .unwrap_or_else(|| panic!("builder for {} must already exist", fsm.id));
         let pg_id = pg_builder.pg_id;
-        let pg_index = pg_builder.index as Integer;
         let ext_queue = pg_builder.ext_queue;
         // Generic action that progresses the execution of the FSM.
         // WARN DO NOT ADD EFFECTS!
@@ -1002,7 +981,7 @@ impl ModelBuilder {
                 pg_id,
                 set_int_origin,
                 origin_var,
-                CsExpression::Integer(pg_index),
+                CsExpression::Integer(usize::from(pg_id) as Integer),
             )
             .expect("hand-coded args");
         // Implement external queue
@@ -1097,7 +1076,6 @@ impl ModelBuilder {
                 onentry_loc = self.add_executable(
                     executable,
                     pg_id,
-                    pg_index,
                     int_queue,
                     step,
                     onentry_loc,
@@ -1183,29 +1161,21 @@ impl ModelBuilder {
                 .filter(|eb| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
             {
                 let event_index = event_builder.index;
-                for sender_id in event_builder.senders.iter() {
-                    // TODO FIXME fsm builders should be indexed
-                    let sender_index = self
-                        .fsm_builders
-                        .iter()
-                        .find(|(_, b)| b.pg_id == *sender_id)
-                        .expect("sender must exist")
-                        .1
-                        .index;
+                for &sender_id in &event_builder.senders {
                     let mut is_event_sender = Some(CsExpression::And(vec![
                         CsExpression::Equal(Box::new((
                             CsExpression::Integer(event_index as Integer),
                             CsExpression::Var(current_event_var),
                         ))),
                         CsExpression::Equal(Box::new((
-                            CsExpression::Integer(sender_index as Integer),
+                            CsExpression::Integer(usize::from(sender_id) as Integer),
                             CsExpression::Var(origin_var),
                         ))),
                     ]));
                     let mut current_loc = ext_event_processing_param;
                     for (param_name, _) in event_builder.params.iter() {
                         let read_param = *param_actions
-                            .get(&(*sender_id, event_index, param_name.to_owned()))
+                            .get(&(sender_id, event_index, param_name.to_owned()))
                             .expect("has to be there");
                         let next_loc = self.cs.new_location(pg_id).expect("program graph exists!");
                         self.cs
@@ -1322,7 +1292,6 @@ impl ModelBuilder {
                     exec_trans_loc = self.add_executable(
                         exec,
                         pg_id,
-                        pg_index,
                         int_queue,
                         step,
                         exec_trans_loc,
@@ -1369,7 +1338,6 @@ impl ModelBuilder {
         &mut self,
         executable: &Executable,
         pg_id: PgId,
-        pg_idx: Integer,
         int_queue: Channel,
         step: Action,
         loc: Location,
@@ -1403,6 +1371,7 @@ impl ModelBuilder {
                         .get(target)
                         .ok_or(anyhow!(format!("target {target} not found")))?;
                     let target_id = target_builder.pg_id;
+                    let target_ext_queue = target_builder.ext_queue;
                     let event_idx = *self
                         .event_indexes
                         .get(event)
@@ -1411,10 +1380,10 @@ impl ModelBuilder {
                         .cs
                         .new_communication(
                             pg_id,
-                            target_builder.ext_queue,
+                            target_ext_queue,
                             Message::Send(CsExpression::Tuple(vec![
                                 CsExpression::Integer(event_idx as Integer),
-                                CsExpression::Integer(pg_idx),
+                                CsExpression::Integer(usize::from(pg_id) as Integer),
                             ])),
                         )
                         .expect("must work");
@@ -1443,14 +1412,10 @@ impl ModelBuilder {
                         .ok_or(anyhow!("event not found"))?;
                     // Location representing having sent the event to the correct target after evaluating expression.
                     let done_loc = self.cs.new_location(pg_id).expect("PG exists");
-                    for &target_id in self.events[event_idx].receivers.clone().iter() {
-                        // FIXME TODO: there should be an indexing to avoid search
-                        let (_target_name, target_builder) = self
-                            .fsm_builders
-                            .iter()
-                            .find(|(_, b)| b.pg_id == target_id)
-                            .expect("fsm has to be here");
-                        let target_index = target_builder.index;
+                    for target_id in self.events[event_idx].receivers.clone() {
+                        let target_name = self.fsm_names.get(&target_id).unwrap();
+                        let target_builder =
+                            self.fsm_builders.get(target_name).expect("it must exist");
                         let target_ext_queue = target_builder.ext_queue;
                         let send_event = self
                             .cs
@@ -1459,7 +1424,7 @@ impl ModelBuilder {
                                 target_ext_queue,
                                 Message::Send(CsExpression::Tuple(vec![
                                     CsExpression::Integer(event_idx as Integer),
-                                    CsExpression::Integer(pg_idx),
+                                    CsExpression::Integer(usize::from(pg_id) as Integer),
                                 ])),
                             )
                             .expect("params are hard-coded");
@@ -1473,7 +1438,7 @@ impl ModelBuilder {
                                 send_event,
                                 next_loc,
                                 Some(CsExpression::Equal(Box::new((
-                                    CsExpression::Integer(target_index as Integer),
+                                    CsExpression::Integer(usize::from(target_id) as Integer),
                                     targetexpr.to_owned(),
                                 )))),
                             )
@@ -1514,8 +1479,7 @@ impl ModelBuilder {
                     .add_transition(pg_id, loc, step, next_loc, Some(cond.to_owned()))?;
                 for exec in execs {
                     next_loc = self.add_executable(
-                        exec, pg_id, pg_idx, int_queue, step, next_loc, vars, origin, params,
-                        interner,
+                        exec, pg_id, int_queue, step, next_loc, vars, origin, params, interner,
                     )?;
                 }
                 self.cs
@@ -1731,14 +1695,9 @@ impl ModelBuilder {
     }
 
     fn build(self) -> CsModel {
-        let fsm_names = self
-            .fsm_builders
-            .iter()
-            .map(|(name, id)| (id.pg_id, name.to_owned()))
-            .collect();
         CsModel {
             cs: self.cs.build(),
-            fsm_names,
+            fsm_names: self.fsm_names,
         }
     }
 }
