@@ -8,6 +8,7 @@
 
 // TODO: use fast hasher (?)
 use super::grammar::*;
+use log::info;
 use std::{collections::HashMap, rc::Rc};
 use thiserror::Error;
 
@@ -31,6 +32,12 @@ pub struct Action(usize);
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Var(usize);
+
+impl Into<usize> for Var {
+    fn into(self) -> usize {
+        self.0
+    }
+}
 
 /// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
@@ -312,11 +319,37 @@ impl ProgramGraphBuilder {
         // but their number will be constant anyway
         self.vars.shrink_to_fit();
         // Build program graph
+        info!(
+            "create Program Graph with:\n{} locations\n{} actions\n{} vars",
+            self.transitions.len(),
+            self.effects.len(),
+            self.vars.len()
+        );
         ProgramGraph {
             current_location: Self::INITIAL_LOCATION,
             vars: self.vars.iter().map(Type::default_value).collect(),
-            effects: Rc::new(self.effects),
-            transitions: Rc::new(self.transitions),
+            effects: Rc::new(
+                self.effects
+                    .into_iter()
+                    .map(|effects| {
+                        effects
+                            .into_iter()
+                            .map(|(var, expr)| -> (Var, FnExpression) { (var, expr.into()) })
+                            .collect()
+                    })
+                    .collect(),
+            ),
+            transitions: Rc::new(
+                self.transitions
+                    .into_iter()
+                    .map(|effects| {
+                        effects
+                            .into_iter()
+                            .map(|(p, expr)| (p, expr.map(FnExpression::from)))
+                            .collect()
+                    })
+                    .collect(),
+            ),
         }
     }
 }
@@ -331,13 +364,13 @@ impl ProgramGraphBuilder {
 /// The only way to produce a [`ProgramGraph`] is through a [`ProgramGraphBuilder`].
 /// This guarantees that there are no type errors involved in the definition of action's effects and transitions' guards,
 /// and thus the PG will always be in a consistent state.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ProgramGraph {
     current_location: Location,
     vars: Vec<Val>,
     // TODO: use SmallVec optimization
-    effects: Rc<Vec<Vec<(Var, PgExpression)>>>,
-    transitions: Rc<Vec<HashMap<(Action, Location), Option<PgExpression>>>>,
+    effects: Rc<Vec<Vec<(Var, FnExpression)>>>,
+    transitions: Rc<Vec<HashMap<(Action, Location), Option<FnExpression>>>>,
 }
 
 impl ProgramGraph {
@@ -351,7 +384,7 @@ impl ProgramGraph {
             .iter()
             .filter_map(|((action, post), guard)| {
                 if let Some(guard) = guard {
-                    if let Val::Boolean(pass) = self.eval(guard).expect("guard must evaluate") {
+                    if let Val::Boolean(pass) = guard.eval(&self.vars) {
                         if pass {
                             Some((*action, *post))
                         } else {
@@ -374,7 +407,7 @@ impl ProgramGraph {
             .get(&(action, post_state))
             .ok_or(PgError::MissingTransition)?;
         if guard.as_ref().map_or(true, |guard| {
-            if let Val::Boolean(pass) = self.eval(guard).expect("guard must evaluate") {
+            if let Val::Boolean(pass) = guard.eval(&self.vars) {
                 pass
             } else {
                 panic!("guard is not a boolean");
@@ -384,9 +417,7 @@ impl ProgramGraph {
                 // Not using the 'Self::assign' method because:
                 // - borrow checker
                 // - effects are validated before, so no need to type-check again
-                self.vars[var.0] = self
-                    .eval(effect)
-                    .expect("effect has already been validated");
+                self.vars[var.0] = effect.eval(&self.vars);
             }
             self.current_location = post_state;
             Ok(())
@@ -395,158 +426,11 @@ impl ProgramGraph {
         }
     }
 
-    pub(super) fn eval(&self, expr: &PgExpression) -> Result<Val, PgError> {
-        match expr {
-            PgExpression::Boolean(b) => Ok(Val::Boolean(*b)),
-            PgExpression::Integer(i) => Ok(Val::Integer(*i)),
-            PgExpression::Var(var) => self
-                .vars
-                .get(var.0)
-                .ok_or_else(|| PgError::MissingVar(var.to_owned()))
-                .cloned(),
-            PgExpression::Tuple(entries) => entries
-                .iter()
-                .map(|e| self.eval(e))
-                .collect::<Result<Vec<Val>, PgError>>()
-                .map(Val::Tuple),
-            PgExpression::Component(index, expr) => {
-                if let Val::Tuple(components) = self.eval(expr)? {
-                    components
-                        .get(*index)
-                        .cloned()
-                        .ok_or(PgError::MissingComponent(*index))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::And(props) => Ok(Val::Boolean(
-                props
-                    .iter()
-                    .map(|prop| {
-                        if let Val::Boolean(val) = self.eval(prop)? {
-                            Ok(val)
-                        } else {
-                            Err(PgError::TypeMismatch)
-                        }
-                    })
-                    .collect::<Result<Vec<bool>, PgError>>()?
-                    .iter()
-                    .all(|val| *val),
-            )),
-            PgExpression::Or(props) => Ok(Val::Boolean(
-                props
-                    .iter()
-                    .map(|prop| {
-                        if let Val::Boolean(val) = self.eval(prop)? {
-                            Ok(val)
-                        } else {
-                            Err(PgError::TypeMismatch)
-                        }
-                    })
-                    .collect::<Result<Vec<bool>, PgError>>()?
-                    .iter()
-                    .any(|val| *val),
-            )),
-            PgExpression::Implies(props) => {
-                if let (Val::Boolean(lhs), Val::Boolean(rhs)) =
-                    (self.eval(&props.0)?, self.eval(&props.1)?)
-                {
-                    Ok(Val::Boolean(rhs || !lhs))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Not(prop) => {
-                if let Val::Boolean(arg) = self.eval(prop)? {
-                    Ok(Val::Boolean(!arg))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Opposite(expr) => {
-                if let Val::Integer(arg) = self.eval(expr)? {
-                    Ok(Val::Integer(-arg))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Sum(exprs) => Ok(Val::Integer(
-                exprs
-                    .iter()
-                    .map(|prop| {
-                        if let Val::Integer(val) = self.eval(prop)? {
-                            Ok(val)
-                        } else {
-                            Err(PgError::TypeMismatch)
-                        }
-                    })
-                    .collect::<Result<Vec<Integer>, PgError>>()?
-                    .iter()
-                    .sum(),
-            )),
-            PgExpression::Mult(exprs) => Ok(Val::Integer(
-                exprs
-                    .iter()
-                    .map(|prop| {
-                        if let Val::Integer(val) = self.eval(prop)? {
-                            Ok(val)
-                        } else {
-                            Err(PgError::TypeMismatch)
-                        }
-                    })
-                    .collect::<Result<Vec<Integer>, PgError>>()?
-                    .iter()
-                    .fold(1, |tot, val| tot * *val),
-            )),
-            PgExpression::Equal(exprs) => {
-                if let (Val::Integer(lhs), Val::Integer(rhs)) =
-                    (self.eval(&exprs.0)?, self.eval(&exprs.1)?)
-                {
-                    Ok(Val::Boolean(lhs == rhs))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Greater(exprs) => {
-                if let (Val::Integer(lhs), Val::Integer(rhs)) =
-                    (self.eval(&exprs.0)?, self.eval(&exprs.1)?)
-                {
-                    Ok(Val::Boolean(lhs > rhs))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::GreaterEq(exprs) => {
-                if let (Val::Integer(lhs), Val::Integer(rhs)) =
-                    (self.eval(&exprs.0)?, self.eval(&exprs.1)?)
-                {
-                    Ok(Val::Boolean(lhs >= rhs))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Less(exprs) => {
-                if let (Val::Integer(lhs), Val::Integer(rhs)) =
-                    (self.eval(&exprs.0)?, self.eval(&exprs.1)?)
-                {
-                    Ok(Val::Boolean(lhs < rhs))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::LessEq(exprs) => {
-                if let (Val::Integer(lhs), Val::Integer(rhs)) =
-                    (self.eval(&exprs.0)?, self.eval(&exprs.1)?)
-                {
-                    Ok(Val::Boolean(lhs <= rhs))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-        }
+    pub(crate) fn eval(&self, expr: &FnExpression) -> Val {
+        expr.eval(&self.vars)
     }
 
-    pub(super) fn assign(&mut self, var: Var, val: Val) -> Result<Val, PgError> {
+    pub(crate) fn assign(&mut self, var: Var, val: Val) -> Result<Val, PgError> {
         let var_content = self
             .vars
             .get_mut(var.0)

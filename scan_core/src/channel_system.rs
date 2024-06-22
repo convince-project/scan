@@ -10,6 +10,7 @@
 //! and can be executed by performing transitions,
 //! though the definition of the CS itself can no longer be altered.
 
+use log::info;
 use thiserror::Error;
 
 use crate::grammar::*;
@@ -363,21 +364,51 @@ impl ChannelSystemBuilder {
 
     /// Produces a [`Channel System`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
     pub fn build(mut self) -> ChannelSystem {
+        info!(
+            "create Channel System with:\n{} Program Graphs\n{} channels",
+            self.program_graphs.len(),
+            self.channels.len(),
+        );
         let mut program_graphs: Vec<ProgramGraph> = self
             .program_graphs
             .into_iter()
             .map(|builder| builder.build())
             .collect();
+        let mut communications = HashMap::new();
+        for (act, (chn, msg)) in self.communications.into_iter() {
+            let msg = match msg {
+                Message::Send(expr) => FnMessage::Send(
+                    TryInto::<PgExpression>::try_into((act.0, expr))
+                        .expect("")
+                        .into(),
+                ),
+                Message::Receive(val) => FnMessage::Receive(val),
+                Message::ProbeEmptyQueue => FnMessage::ProbeEmptyQueue,
+            };
+            communications.insert(act, (chn, msg));
+        }
+
         program_graphs.shrink_to_fit();
         self.channels.shrink_to_fit();
-        self.communications.shrink_to_fit();
+        communications.shrink_to_fit();
         ChannelSystem {
             program_graphs,
-            communications: Rc::new(self.communications),
+            communications: Rc::new(communications),
             message_queue: vec![Vec::default(); self.channels.len()],
             channels: Rc::new(self.channels),
         }
     }
+}
+
+/// A message to be sent through a CS's channel.
+#[derive(Debug)]
+enum FnMessage {
+    /// Sending the computed value of an expression to a channel.
+    Send(FnExpression),
+    /// Retrieving a value out of a channel and associating it to a variable.
+    Receive(Var),
+    /// Checking whether a channel is empty.
+    ProbeEmptyQueue,
 }
 
 /// Representation of a CS that can be executed transition-by-transition.
@@ -394,7 +425,7 @@ impl ChannelSystemBuilder {
 pub struct ChannelSystem {
     program_graphs: Vec<ProgramGraph>,
     channels: Rc<Vec<(Type, Option<usize>)>>,
-    communications: Rc<HashMap<Action, (Channel, Message)>>,
+    communications: Rc<HashMap<Action, (Channel, FnMessage)>>,
     message_queue: Vec<Vec<Val>>,
 }
 
@@ -433,11 +464,11 @@ impl ChannelSystem {
             // Channel capacity must never be exeeded!
             assert!(capacity.is_none() || capacity.is_some_and(|cap| queue.len() <= cap));
             match message {
-                Message::Send(_) if capacity.is_some_and(|cap| queue.len() == cap) => {
+                FnMessage::Send(_) if capacity.is_some_and(|cap| queue.len() == cap) => {
                     Err(CsError::OutOfCapacity(*channel))
                 }
-                Message::Receive(_) if queue.is_empty() => Err(CsError::Empty(*channel)),
-                Message::ProbeEmptyQueue if !queue.is_empty() => Err(CsError::Empty(*channel)),
+                FnMessage::Receive(_) if queue.is_empty() => Err(CsError::Empty(*channel)),
+                FnMessage::ProbeEmptyQueue if !queue.is_empty() => Err(CsError::Empty(*channel)),
                 _ => Ok(()),
             }
         } else {
@@ -475,19 +506,17 @@ impl ChannelSystem {
             // communication has been verified before so there is a queue for channel.0
             let queue = &mut self.message_queue[channel.0];
             match message {
-                Message::Send(effect) => {
-                    let effect = (pg_id, effect.to_owned()).try_into()?;
-                    let val = pg
-                        .eval(&effect)
-                        .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
+                FnMessage::Send(effect) => {
+                    // let effect = (pg_id, effect.to_owned()).try_into()?;
+                    let val = pg.eval(effect);
                     queue.push(val);
                 }
-                Message::Receive(var) => {
+                FnMessage::Receive(var) => {
                     let val = queue.pop().expect("communication has been verified before");
                     pg.assign(var.1, val)
                         .expect("communication has been verified before");
                 }
-                Message::ProbeEmptyQueue => {
+                FnMessage::ProbeEmptyQueue => {
                     assert!(
                         queue.is_empty(),
                         "by definition, ProbeEmptyQueue is only possible if the queue is empty"
