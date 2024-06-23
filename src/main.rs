@@ -67,12 +67,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .cloned()
                     .unwrap_or_else(|| format!("{pg_id:?}"));
                 trans += 1;
-                trace!("TR #{trans:05}: {pg} transition by {action:?} to {destination:?}",);
+                trace!("TRS #{trans:05}: {pg} transition by {action:?} to {destination:?}");
                 if let Some(event) = model.cs.transition(pg_id, action, destination)? {
                     events += 1;
                     info!(
-                        // "#{trans:04}: PG {pg} event {:?} on channel {:?} by {action:?} to {destination:?}",
-                        "EV #{events:05}: {pg} event {:?} on channel {:?}",
+                        "MSG #{events:05}: {pg} message {:?} on {:?}",
                         event.event_type, event.channel,
                     );
                 }
