@@ -1251,13 +1251,15 @@ impl ModelBuilder {
                 // Has to be defined depending on the type of transition, etc...
                 let guard;
                 // Proceed on whether the transition is eventless or activated by event.
-                if let Some(event) = &transition.event {
-                    let event_idx =
-                        *self.event_indexes.get(event).expect("already exists") as Integer;
+                if let Some(event_name) = transition.event.as_ref() {
+                    let event_index = *self
+                        .event_indexes
+                        .get(event_name)
+                        .expect("event must be registered");
                     // Check if the current event (internal or external) corresponds to the event activating the transition.
                     let event_match = CsExpression::Equal(Box::new((
                         CsExpression::Var(current_event_var),
-                        CsExpression::Integer(event_idx),
+                        CsExpression::Integer(event_index as Integer),
                     )));
                     // TODO FIXME: optimize And/Or expressions
                     guard = cond
