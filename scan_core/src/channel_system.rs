@@ -15,6 +15,7 @@ use thiserror::Error;
 
 use crate::grammar::*;
 use crate::program_graph::{Action as PgAction, Location as PgLocation, Var as PgVar, *};
+use std::collections::VecDeque;
 use std::{collections::HashMap, rc::Rc};
 
 /// An indexing object for PGs in a CS.
@@ -400,7 +401,7 @@ impl ChannelSystemBuilder {
         ChannelSystem {
             program_graphs,
             communications: Rc::new(communications),
-            message_queue: vec![Vec::default(); self.channels.len()],
+            message_queue: vec![VecDeque::default(); self.channels.len()],
             channels: Rc::new(self.channels),
         }
     }
@@ -454,7 +455,7 @@ pub struct ChannelSystem {
     program_graphs: Vec<ProgramGraph>,
     channels: Rc<Vec<(Type, Option<usize>)>>,
     communications: Rc<HashMap<Action, (Channel, FnMessage)>>,
-    message_queue: Vec<Vec<Val>>,
+    message_queue: Vec<VecDeque<Val>>,
 }
 
 impl ChannelSystem {
@@ -537,11 +538,13 @@ impl ChannelSystem {
                 FnMessage::Send(effect) => {
                     // let effect = (pg_id, effect.to_owned()).try_into()?;
                     let val = pg.eval(effect);
-                    queue.push(val.clone());
+                    queue.push_back(val.clone());
                     EventType::Send(val)
                 }
                 FnMessage::Receive(var) => {
-                    let val = queue.pop().expect("communication has been verified before");
+                    let val = queue
+                        .pop_front()
+                        .expect("communication has been verified before");
                     pg.assign(var.1, val.clone())
                         .expect("communication has been verified before");
                     EventType::Receive(val)
