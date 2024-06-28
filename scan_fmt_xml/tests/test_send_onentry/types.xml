@@ -56,44 +56,9 @@ NOTE: alias for string
 
 <dataTypeList>
 
-  <!-- Here are some examples on how ROS2 data types can be encoded easily -->
-
-  <!-- From https://wiki.ros.org/msg#headerSect -->
-  <structure id="Header">
-    <field id="stamp" type="time"/>
-    <field id="frame_id" type="string"/>
-  </structure>
-
-  <!-- From geometry_msgs/msg/Point.msg -->
-  <structure id="Point">
-    <field id="x" type="float64"/>
-    <field id="y" type="float64"/>
-    <field id="z" type="float64"/>
-  </structure>
-
-  <!-- From geometry_msgs/msg/Point.msg -->
-  <structure id="Point32">
-    <field id="x" type="float32"/>
-    <field id="y" type="float32"/>
-    <field id="z" type="float32"/>
-  </structure>
-  
-  <!-- From geometry_msgs/msg/PointStamped.msg -->
-  <structure id="PointStamped">
-    <field id="header" type="Header"/>
-    <field id="point" type="Point"/>
-  </structure>
-
-  <!-- From geometry_msgs/msg/Polygon.msg -->
-  <structure id="Polygon">
-    <field id="points" type="Point32[]"/>
-  </structure>
-
-  <!-- End of example section -->
-
   <!-- This is the only non-native data type required in this example -->
 
-  <enumeration id="TickResponse">
+  <enumeration id="ActionResponse">
     <label id="RUNNING"/>
     <label id="SUCCESS"/>
     <label id="FAILURE"/>

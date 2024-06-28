@@ -7,11 +7,11 @@
 
   <state id="running">
     <onentry>
-      <send event="tickCall" target="BT"/>
+      <send event="tick_call" target="BT"/>
     </onentry>
-    <transition event="tickReturn" target="running" cond="_event.data.result == RUNNING"/>
-    <transition event="tickReturn" target="success" cond="_event.data.result == SUCCESS"/>
-    <transition event="tickReturn" target="failure" cond="_event.data.result == FAILURE"/>
+    <transition event="tick_return" target="running" cond="_event.data.result == RUNNING"/>
+    <transition event="tick_return" target="success" cond="_event.data.result == SUCCESS"/>
+    <transition event="tick_return" target="failure" cond="_event.data.result == FAILURE"/>
   </state>
 
   <state id="success"/>

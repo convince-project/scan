@@ -1,9 +1,9 @@
 <specification xmlns="..." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="...">
 
-  <model>
+  <types path="./types.xml" />
 
-    <types path="./types.xml" />
+  <model>
     
     <processList>
       <process id="TickGen" moc="fsm" path="./TickGen.scxml" />
