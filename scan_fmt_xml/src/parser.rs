@@ -62,7 +62,7 @@ pub enum ParserErrorType {
 
 #[derive(Error, Debug)]
 #[error("parser error at byte `{0}`")]
-pub struct ParserError(pub(crate) usize, #[source] pub(crate) ParserErrorType);
+pub struct ParserError(pub(crate) u64, #[source] pub(crate) ParserErrorType);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ConvinceTag {
@@ -72,6 +72,7 @@ enum ConvinceTag {
     ProcessList,
     DataTypeList,
     Enumeration(String),
+    Structure(String),
 }
 
 impl From<ConvinceTag> for &'static str {
@@ -83,6 +84,7 @@ impl From<ConvinceTag> for &'static str {
             ConvinceTag::ProcessList => TAG_PROCESS_LIST,
             ConvinceTag::DataTypeList => TAG_DATA_TYPE_LIST,
             ConvinceTag::Enumeration(_) => TAG_ENUMERATION,
+            ConvinceTag::Structure(_) => TAG_STRUCT,
         }
     }
 }
@@ -187,7 +189,11 @@ impl Parser {
                         {
                             spec.parse_process(tag, &mut reader)?;
                         }
-                        TAG_TYPES if stack.last().is_some_and(|tag| *tag == ConvinceTag::Model) => {
+                        TAG_TYPES
+                            if stack
+                                .last()
+                                .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
+                        {
                             spec.parse_types(tag, &mut reader)?;
                         }
                         // Unknown tag: skip till maching end tag

@@ -24,20 +24,37 @@ struct FsmBuilder {
 
 #[derive(Debug, Clone)]
 struct EventBuilder {
-    params: HashMap<String, Type>,
+    // Associates parameter's name with the id of its type.
+    params: HashMap<String, String>,
     senders: HashSet<PgId>,
     receivers: HashSet<PgId>,
     index: usize,
+}
+
+#[derive(Debug, Clone)]
+enum EcmaObj {
+    PrimitiveData(CsExpression, String),
+    // Associates property name with content, which can be another object.
+    Properties(HashMap<String, EcmaObj>),
 }
 
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
 #[derive(Debug)]
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder,
-    // Represent OMG types
-    scan_types: HashMap<String, Type>,
+    // Associates a type's id with both its OMG type and SCAN type.
+    // NOTE: This is necessary because, at the moment, it is not possible to derive one from the other.
+    // QUESTION: is there a better way?
+    types: HashMap<String, (OmgType, Type)>,
+    // Associates an enum's label with a **globally unique** index.
+    // The same label can belong to multiple enums,
+    // and given a label it is not possible to recover the originating enum.
     // WARN FIXME TODO: simplistic implementation of enums
     enums: HashMap<String, Integer>,
+    // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
+    // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
+    // QUESTION: Is there a better way?
+    structs: HashMap<(String, String), usize>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
     fsm_names: HashMap<PgId, String>,
@@ -63,18 +80,11 @@ impl ModelBuilder {
     /// (particularly type mismatches)
     /// or references to non-existing items.
     pub fn visit(parser: Parser) -> anyhow::Result<CsModel> {
-        // Add base types
-        // FIXME: Is there a better way? Const object?
-        let base_types: [(String, Type); 3] = [
-            (String::from("boolean"), Type::Boolean),
-            (String::from("int32"), Type::Integer),
-            (String::from("URI"), Type::Integer),
-        ];
-
         let mut model = ModelBuilder {
             cs: ChannelSystemBuilder::new(),
-            scan_types: HashMap::from_iter(base_types),
+            types: HashMap::new(),
             enums: HashMap::new(),
+            structs: HashMap::new(),
             fsm_names: HashMap::new(),
             fsm_builders: HashMap::new(),
             events: Vec::new(),
@@ -82,6 +92,7 @@ impl ModelBuilder {
             parameters: HashMap::new(),
         };
 
+        info!("Building types");
         model.build_types(&parser.types)?;
 
         model.prebuild_processes(&parser)?;
@@ -104,15 +115,39 @@ impl ModelBuilder {
             let scan_type = match omg_type {
                 OmgType::Boolean => Type::Boolean,
                 OmgType::Int32 => Type::Integer,
-                OmgType::Structure() => todo!(),
+                OmgType::Uri => Type::Integer,
+                OmgType::Structure(fields) => {
+                    let mut fields_type: Vec<Type> = Vec::new();
+                    for (index, (field_id, field_type)) in fields.iter().enumerate() {
+                        self.structs
+                            .insert((name.to_owned(), field_id.to_owned()), index);
+                        // NOTE: fields must have an already known type, to aviod recursion.
+                        let (_, field_type) = self.types.get(field_type).ok_or(anyhow!(
+                            "unknown type {} of field {} in struct {}",
+                            field_type,
+                            field_id,
+                            name
+                        ))?;
+                        // NOTE: fields have to be inserted in this order or they will not correspond to their index.
+                        fields_type.push(field_type.clone());
+                    }
+                    Type::Product(fields_type)
+                }
                 OmgType::Enumeration(labels) => {
-                    for (idx, label) in labels.iter().enumerate() {
-                        self.enums.insert(label.to_owned(), idx as Integer);
+                    // NOTE: enum labels are assigned a **globally unique** index,
+                    // and the same label can appear in different enums.
+                    // This makes it so that SUCCESS and FAILURE from ActionResponse are the same as those in ConditionResponse.
+                    for label in labels.iter() {
+                        if !self.enums.contains_key(label) {
+                            let idx = self.enums.len();
+                            self.enums.insert(label.to_owned(), idx as Integer);
+                        }
                     }
                     Type::Integer
                 }
             };
-            self.scan_types.insert(name.to_owned(), scan_type);
+            self.types
+                .insert(name.to_owned(), (omg_type.to_owned(), scan_type));
         }
         Ok(())
     }
@@ -194,16 +229,12 @@ impl ModelBuilder {
                 let builder = self.events.get_mut(event_index).expect("index must exist");
                 builder.senders.insert(pg_id);
                 for param in params {
-                    let var_type = self
-                        .scan_types
-                        .get(&param.omg_type)
-                        .ok_or(anyhow!("type not found"))?;
                     let prev_type = builder
                         .params
-                        .insert(param.name.to_owned(), var_type.to_owned());
+                        .insert(param.name.to_owned(), param.omg_type.to_owned());
                     // Type parameters should not change type
                     if let Some(prev_type) = prev_type {
-                        if prev_type != *var_type {
+                        if prev_type != param.omg_type {
                             return Err(anyhow!("type parameter mismatch"));
                         }
                     }
@@ -219,25 +250,71 @@ impl ModelBuilder {
         }
     }
 
-    fn prebuild_bt(&mut self, pg_id: PgId, _bt: &Bt) -> anyhow::Result<()> {
+    fn prebuild_bt(&mut self, pg_id: PgId, bt: &Bt) -> anyhow::Result<()> {
         let event_index = self.event_index(TICK_CALL);
         let builder = self.events.get_mut(event_index).expect("index must exist");
-        builder.senders.insert(pg_id);
-        builder.receivers.insert(pg_id);
-        let event_index = self.event_index(HALT_CALL);
-        let builder = self.events.get_mut(event_index).expect("index must exist");
-        builder.senders.insert(pg_id);
         builder.receivers.insert(pg_id);
         let event_index = self.event_index(TICK_RETURN);
         let builder = self.events.get_mut(event_index).expect("index must exist");
         builder.senders.insert(pg_id);
+        // WARN: This (and similar event/parameter names) depends on an arbitrary format convention,
+        // could break if format changes!
+        builder
+            .params
+            .insert(RESULT.to_owned(), ACTION_RESPONSE.to_owned());
+        let event_index = self.event_index(HALT_CALL);
+        let builder = self.events.get_mut(event_index).expect("index must exist");
         builder.receivers.insert(pg_id);
-        builder.params.insert(RESULT.to_owned(), Type::Integer);
         let event_index = self.event_index(HALT_RETURN);
         let builder = self.events.get_mut(event_index).expect("index must exist");
         builder.senders.insert(pg_id);
-        builder.receivers.insert(pg_id);
-        Ok(())
+
+        self.prebuild_node(pg_id, &bt.root)
+    }
+
+    fn prebuild_node(&mut self, pg_id: PgId, node: &BtNode) -> anyhow::Result<()> {
+        match node {
+            BtNode::RSeq(children)
+            | BtNode::RFbk(children)
+            | BtNode::MSeq(children)
+            | BtNode::MFbk(children) => {
+                for child in children {
+                    self.prebuild_node(pg_id, child)?;
+                }
+                Ok(())
+            }
+            BtNode::Invr(child) => self.prebuild_node(pg_id, child),
+            BtNode::LAct(action) => {
+                let event_index = self.event_index(&(action.to_owned() + "_" + TICK_CALL));
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.senders.insert(pg_id);
+                let event_index = self.event_index(&(action.to_owned() + "_" + TICK_RETURN));
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.receivers.insert(pg_id);
+                builder
+                    .params
+                    .insert(RESULT.to_owned(), ACTION_RESPONSE.to_owned());
+                let event_index = self.event_index(&(action.to_owned() + "_" + HALT_CALL));
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.senders.insert(pg_id);
+                let event_index = self.event_index(&(action.to_owned() + "_" + HALT_RETURN));
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.receivers.insert(pg_id);
+                Ok(())
+            }
+            BtNode::LCnd(condition) => {
+                let event_index = self.event_index(&(condition.to_owned() + "_" + TICK_CALL));
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.senders.insert(pg_id);
+                let event_index = self.event_index(&(condition.to_owned() + "_" + TICK_RETURN));
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.receivers.insert(pg_id);
+                builder
+                    .params
+                    .insert(RESULT.to_owned(), CONDITION_RESPONSE.to_owned());
+                Ok(())
+            }
+        }
     }
 
     fn build_bt(&mut self, bt: &Bt) -> anyhow::Result<()> {
@@ -645,20 +722,23 @@ impl ModelBuilder {
                     branch,
                 )?;
             }
-            BtNode::LAct(id) => {
-                trace!("building bt leaf {id}");
+            BtNode::LAct(action) => {
+                trace!("building bt leaf {action}");
                 let caller_name = self.fsm_names.get(&pg_id).unwrap();
                 let caller_builder = self.fsm_builders.get(caller_name).expect("it must exist");
                 let ext_queue = caller_builder.ext_queue;
-                let target = id;
+                let target = action;
                 let target_builder = self
                     .fsm_builders
                     .get(target)
-                    .ok_or_else(|| anyhow!("Action/condition {id} not found"))?;
+                    .ok_or(anyhow!("Action/condition {action} not found"))?;
                 let target_ext_queue = target_builder.ext_queue;
 
                 // TICK
-                let tick_call_idx = *self.event_indexes.get(TICK_CALL).unwrap();
+                let tick_call_idx = *self
+                    .event_indexes
+                    .get(&(action.to_owned() + "_" + TICK_CALL))
+                    .unwrap();
                 let send_event = self
                     .cs
                     .new_communication(
@@ -691,7 +771,10 @@ impl ModelBuilder {
                     .entry((
                         target_builder.pg_id,
                         pg_id,
-                        *self.event_indexes.get(TICK_RETURN).unwrap(),
+                        *self
+                            .event_indexes
+                            .get(&(action.to_owned() + "_" + TICK_RETURN))
+                            .unwrap(),
                         RESULT.to_owned(),
                     ))
                     .or_insert(self.cs.new_channel(Type::Integer, None));
@@ -756,9 +839,9 @@ impl ModelBuilder {
                     .expect("hope this works");
 
                 // HALT
-                let event = HALT_CALL;
+                let event = action.to_owned() + "_" + HALT_CALL;
                 // Create event, if it does not exist already.
-                let event_idx = self.event_index(event);
+                let event_idx = self.event_index(&event);
                 let send_event = self.cs.new_communication(
                     pg_id,
                     target_ext_queue,
@@ -783,20 +866,23 @@ impl ModelBuilder {
                     .add_transition(pg_id, halt_sent, get_halt_response, got_halt_response, None)
                     .expect("hand-made args");
             }
-            BtNode::LCnd(id) => {
-                trace!("building bt leaf {id}");
+            BtNode::LCnd(condition) => {
+                trace!("building bt leaf {condition}");
                 let caller_name = self.fsm_names.get(&pg_id).unwrap();
                 let caller_builder = self.fsm_builders.get(caller_name).expect("it must exist");
                 let ext_queue = caller_builder.ext_queue;
-                let target = id;
+                let target = condition;
                 let target_builder = self
                     .fsm_builders
                     .get(target)
-                    .ok_or_else(|| anyhow!("Action/condition {id} not found"))?;
+                    .ok_or_else(|| anyhow!("Action/condition {condition} not found"))?;
                 let target_ext_queue = target_builder.ext_queue;
 
                 // TICK
-                let tick_call_idx = *self.event_indexes.get(TICK_CALL).unwrap();
+                let tick_call_idx = *self
+                    .event_indexes
+                    .get(&(condition.to_owned() + "_" + TICK_CALL))
+                    .unwrap();
                 let send_event = self
                     .cs
                     .new_communication(
@@ -829,7 +915,10 @@ impl ModelBuilder {
                     .entry((
                         target_builder.pg_id,
                         pg_id,
-                        *self.event_indexes.get(TICK_RETURN).unwrap(),
+                        *self
+                            .event_indexes
+                            .get(&(condition.to_owned() + "_" + TICK_RETURN))
+                            .unwrap(),
                         RESULT.to_owned(),
                     ))
                     .or_insert(self.cs.new_channel(Type::Integer, None));
@@ -916,14 +1005,16 @@ impl ModelBuilder {
         let mut vars = HashMap::new();
         for (location, (type_name, expr)) in fsm.datamodel.iter() {
             let scan_type = self
-                .scan_types
-                .get(type_name)
-                .ok_or(anyhow!("unknown type"))?;
+                .types
+                .get(type_name.as_str())
+                .ok_or(anyhow!("unknown type"))?
+                .1
+                .to_owned();
             let var = self
                 .cs
-                .new_var(pg_id, scan_type.to_owned())
+                .new_var(pg_id, scan_type)
                 .expect("program graph exists!");
-            vars.insert(location.to_owned(), (var, scan_type.to_owned()));
+            vars.insert(location.to_owned(), (var, type_name.to_owned()));
             // Initialize variable with `expr`, if any, by adding it as effect of `initialize` action.
             if let Some(expr) = expr {
                 let expr = self.expression(expr, &fsm.interner, &vars, None, &HashMap::new())?;
@@ -1019,7 +1110,7 @@ impl ModelBuilder {
             .expect("hand-coded args");
 
         // Create variables and channels for the storage of the parameters sent by external events.
-        let mut param_vars: HashMap<(usize, String), (Var, Type)> = HashMap::new();
+        let mut param_vars: HashMap<(usize, String), (Var, String)> = HashMap::new();
         let mut param_actions: HashMap<(PgId, usize, String), Action> = HashMap::new();
         for event_builder in self
             .events
@@ -1028,7 +1119,13 @@ impl ModelBuilder {
             .filter(|eb| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
         {
             let event_index = event_builder.index;
-            for (param_name, param_type) in event_builder.params.iter() {
+            for (param_name, param_type_name) in event_builder.params.iter() {
+                let param_type = self
+                    .types
+                    .get(param_type_name)
+                    .ok_or(anyhow!("type {} not found", param_type_name))?
+                    .1
+                    .to_owned();
                 // Variable where to store parameter.
                 let param_var = self
                     .cs
@@ -1036,7 +1133,7 @@ impl ModelBuilder {
                     .expect("hand-made input");
                 let old = param_vars.insert(
                     (event_index, param_name.to_owned()),
-                    (param_var, param_type.to_owned()),
+                    (param_var, param_type_name.to_owned()),
                 );
                 assert!(old.is_none());
                 for &sender_id in event_builder.senders.iter() {
@@ -1225,7 +1322,7 @@ impl ModelBuilder {
                         .iter()
                         .filter(|((ev_ix, _), _)| *ev_ix == event_index)
                         .map(|((_, name), (var, tp))| (name.to_owned(), (*var, tp.to_owned())))
-                        .collect::<HashMap<String, (Var, Type)>>();
+                        .collect::<HashMap<String, (Var, String)>>();
                 } else {
                     exec_origin = None;
                     exec_params = HashMap::new();
@@ -1337,6 +1434,7 @@ impl ModelBuilder {
         Ok(())
     }
 
+    // WARN: vars and params have the same type so they could be easily swapped by mistake when calling the function.
     fn add_executable(
         &mut self,
         executable: &Executable,
@@ -1344,9 +1442,9 @@ impl ModelBuilder {
         int_queue: Channel,
         step: Action,
         loc: Location,
-        vars: &HashMap<String, (Var, Type)>,
+        vars: &HashMap<String, (Var, String)>,
         origin: Option<Var>,
-        params: &HashMap<String, (Var, Type)>,
+        params: &HashMap<String, (Var, String)>,
         interner: &boa_interner::Interner,
     ) -> Result<Location, anyhow::Error> {
         match executable {
@@ -1499,6 +1597,7 @@ impl ModelBuilder {
         }
     }
 
+    // WARN: vars and params have the same type so they could be easily swapped by mistake when calling the function.
     fn send_param(
         &mut self,
         pg_id: PgId,
@@ -1506,17 +1605,18 @@ impl ModelBuilder {
         param: &Param,
         event_idx: usize,
         param_loc: Location,
-        vars: &HashMap<String, (Var, Type)>,
+        vars: &HashMap<String, (Var, String)>,
         origin: Option<Var>,
-        params: &HashMap<String, (Var, Type)>,
+        params: &HashMap<String, (Var, String)>,
         interner: &boa_interner::Interner,
     ) -> Result<Location, anyhow::Error> {
         // Get param type.
         let scan_type = self
-            .scan_types
-            .get(&param.omg_type)
+            .types
+            .get(param.omg_type.as_str())
             .cloned()
-            .ok_or(anyhow!("undefined type"))?;
+            .ok_or(anyhow!("undefined type"))?
+            .1;
         // Build expression from ECMAScript expression.
         let expr = self.expression(&param.expr, interner, vars, origin, params)?;
         // Retreive or create channel for parameter passing.
@@ -1535,13 +1635,14 @@ impl ModelBuilder {
         Ok(next_loc)
     }
 
+    // WARN: vars and params have the same type so they could be easily swapped by mistake when calling the function.
     fn expression(
         &mut self,
         expr: &boa_ast::Expression,
         interner: &boa_interner::Interner,
-        vars: &HashMap<String, (Var, Type)>,
+        vars: &HashMap<String, (Var, String)>,
         origin: Option<Var>,
-        params: &HashMap<String, (Var, Type)>,
+        params: &HashMap<String, (Var, String)>,
     ) -> anyhow::Result<CsExpression> {
         let expr = match expr {
             boa_ast::Expression::This => todo!(),
@@ -1552,7 +1653,6 @@ impl ModelBuilder {
                     .utf8()
                     .ok_or(anyhow!("not utf8"))?;
                 match ident {
-                    "_event" => todo!(),
                     ident => self
                         .enums
                         .get(ident)
@@ -1586,36 +1686,13 @@ impl ModelBuilder {
             boa_ast::Expression::Class(_) => todo!(),
             boa_ast::Expression::TemplateLiteral(_) => todo!(),
             boa_ast::Expression::PropertyAccess(prop_acc) => {
-                use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
-                match prop_acc {
-                    PropertyAccess::Simple(simp_prop_acc) => match simp_prop_acc.field() {
-                        // FIXME WARN this makes overly simplified assumptions on field access and will not work with complex types
-                        PropertyAccessField::Const(sym) => {
-                            let ident: &str = interner
-                                .resolve(*sym)
-                                .ok_or(anyhow!("unknown identifier"))?
-                                .utf8()
-                                .ok_or(anyhow!("not utf8"))?;
-                            match ident {
-                                "origin" => {
-                                    let origin = origin.ok_or(anyhow!("origin not available"))?;
-                                    CsExpression::Var(origin)
-                                }
-                                var_ident => {
-                                    if let Some((param_var, _var_type)) = params.get(var_ident) {
-                                        CsExpression::Var(*param_var)
-                                    } else {
-                                        return Err(anyhow!(
-                                            "no parameter `{ident}` found among: {params:#?}"
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        PropertyAccessField::Expr(_) => todo!(),
-                    },
-                    PropertyAccess::Private(_) => todo!(),
-                    PropertyAccess::Super(_) => todo!(),
+                let expr = &boa_ast::Expression::PropertyAccess(prop_acc.to_owned());
+                let ecma_obj = self.expression_prop_access(expr, interner, vars, origin, params)?;
+                // WARN: If the EcmaObj is a primitive SCAN data, we return that.
+                // If it is a dictionary of properties, instead, we have no way to represent it properly as a SCAN type.
+                match ecma_obj {
+                    EcmaObj::PrimitiveData(expr, _) => expr,
+                    EcmaObj::Properties(_) => todo!(),
                 }
             }
             boa_ast::Expression::New(_) => todo!(),
@@ -1695,6 +1772,144 @@ impl ModelBuilder {
             _ => todo!(),
         };
         Ok(expr)
+    }
+
+    fn expression_prop_access(
+        &mut self,
+        expr: &boa_ast::Expression,
+        interner: &boa_interner::Interner,
+        vars: &HashMap<String, (Var, String)>,
+        origin: Option<Var>,
+        params: &HashMap<String, (Var, String)>,
+    ) -> anyhow::Result<EcmaObj> {
+        match expr {
+            boa_ast::Expression::This => todo!(),
+            boa_ast::Expression::Identifier(ident) => {
+                let ident: &str = interner
+                    .resolve(ident.sym())
+                    .ok_or(anyhow!("unknown identifier"))?
+                    .utf8()
+                    .ok_or(anyhow!("not utf8"))?;
+                match ident {
+                    "_event" => Ok(EcmaObj::Properties(HashMap::from([
+                        (
+                            String::from("origin"),
+                            EcmaObj::PrimitiveData(
+                                Expression::Var(origin.ok_or(anyhow!("missing origin of _event"))?),
+                                String::from("int32"),
+                            ),
+                        ),
+                        (
+                            String::from("data"),
+                            EcmaObj::Properties(HashMap::from_iter(params.iter().map(
+                                |(n, (v, t))| {
+                                    (
+                                        n.to_owned(),
+                                        EcmaObj::PrimitiveData(CsExpression::Var(*v), t.to_owned()),
+                                    )
+                                },
+                            ))),
+                        ),
+                    ]))),
+                    ident => {
+                        let (var, type_name) = vars
+                            .get(ident)
+                            .ok_or(anyhow!("location {} not found", ident))?
+                            .to_owned();
+                        Ok(EcmaObj::PrimitiveData(Expression::Var(var), type_name))
+                    }
+                }
+            }
+            boa_ast::Expression::Literal(_) => todo!(),
+            boa_ast::Expression::RegExpLiteral(_) => todo!(),
+            boa_ast::Expression::ArrayLiteral(_) => todo!(),
+            boa_ast::Expression::ObjectLiteral(_) => todo!(),
+            boa_ast::Expression::Spread(_) => todo!(),
+            boa_ast::Expression::Function(_) => todo!(),
+            boa_ast::Expression::ArrowFunction(_) => todo!(),
+            boa_ast::Expression::AsyncArrowFunction(_) => todo!(),
+            boa_ast::Expression::Generator(_) => todo!(),
+            boa_ast::Expression::AsyncFunction(_) => todo!(),
+            boa_ast::Expression::AsyncGenerator(_) => todo!(),
+            boa_ast::Expression::Class(_) => todo!(),
+            boa_ast::Expression::TemplateLiteral(_) => todo!(),
+            boa_ast::Expression::PropertyAccess(prop_acc) => {
+                use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
+                match prop_acc {
+                    PropertyAccess::Simple(simp_prop_acc) => {
+                        let prop_target = self.expression_prop_access(
+                            simp_prop_acc.target(),
+                            interner,
+                            vars,
+                            origin,
+                            params,
+                        )?;
+                        match simp_prop_acc.field() {
+                            PropertyAccessField::Const(sym) => {
+                                let ident: &str = interner
+                                    .resolve(*sym)
+                                    .ok_or(anyhow!("unknown identifier"))?
+                                    .utf8()
+                                    .ok_or(anyhow!("not utf8"))?;
+                                match prop_target {
+                                    EcmaObj::PrimitiveData(expr, type_name) => {
+                                        match &self
+                                            .types
+                                            .get(&type_name)
+                                            .ok_or(anyhow!("unknown type {}", type_name))?
+                                            .0
+                                        {
+                                            OmgType::Boolean => todo!(),
+                                            OmgType::Int32 => todo!(),
+                                            OmgType::Uri => todo!(),
+                                            OmgType::Structure(fields) => {
+                                                let index = *self
+                                                    .structs
+                                                    .get(&(type_name, ident.to_owned()))
+                                                    .ok_or(anyhow!("field {} not found", ident))?;
+                                                let field_type_name = fields
+                                                    .get(ident)
+                                                    .ok_or(anyhow!("field {} not found", ident))?;
+                                                Ok(EcmaObj::PrimitiveData(
+                                                    Expression::Component(index, Box::new(expr)),
+                                                    field_type_name.to_owned(),
+                                                ))
+                                            }
+                                            OmgType::Enumeration(_) => todo!(),
+                                        }
+                                    }
+                                    EcmaObj::Properties(fields) => fields
+                                        .get(ident)
+                                        .ok_or(anyhow!("property {} not found", ident))
+                                        .cloned(),
+                                }
+                            }
+                            PropertyAccessField::Expr(_) => todo!(),
+                        }
+                    }
+                    PropertyAccess::Private(_) => todo!(),
+                    PropertyAccess::Super(_) => todo!(),
+                }
+            }
+            boa_ast::Expression::New(_) => todo!(),
+            boa_ast::Expression::Call(_) => todo!(),
+            boa_ast::Expression::SuperCall(_) => todo!(),
+            boa_ast::Expression::ImportCall(_) => todo!(),
+            boa_ast::Expression::Optional(_) => todo!(),
+            boa_ast::Expression::TaggedTemplate(_) => todo!(),
+            boa_ast::Expression::NewTarget => todo!(),
+            boa_ast::Expression::ImportMeta => todo!(),
+            boa_ast::Expression::Assign(_) => todo!(),
+            boa_ast::Expression::Unary(_) => todo!(),
+            boa_ast::Expression::Update(_) => todo!(),
+            boa_ast::Expression::Binary(_) => todo!(),
+            boa_ast::Expression::BinaryInPrivate(_) => todo!(),
+            boa_ast::Expression::Conditional(_) => todo!(),
+            boa_ast::Expression::Await(_) => todo!(),
+            boa_ast::Expression::Yield(_) => todo!(),
+            boa_ast::Expression::Parenthesized(_) => todo!(),
+            _ => todo!(),
+        }
     }
 
     fn build(self) -> CsModel {
