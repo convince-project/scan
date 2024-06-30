@@ -346,15 +346,18 @@ impl ModelBuilder {
 
         let ext_event_var = self
             .cs
-            .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
+            .new_var(
+                pg_id,
+                CsExpression::Tuple(vec![CsExpression::from(0), CsExpression::from(0)]),
+            )
             .expect("{pg_id:?} exists");
         let receive_event = self
             .cs
-            .new_communication(pg_id, ext_queue, Message::Receive(ext_event_var))
+            .new_receive(pg_id, ext_queue, ext_event_var)
             .unwrap();
         let process_event = self.cs.new_action(pg_id).unwrap();
-        let ext_event_index = self.cs.new_var(pg_id, Type::Integer).unwrap();
-        let ext_origin_var = self.cs.new_var(pg_id, Type::Integer).unwrap();
+        let ext_event_index = self.cs.new_var(pg_id, CsExpression::from(0)).unwrap();
+        let ext_origin_var = self.cs.new_var(pg_id, CsExpression::from(0)).unwrap();
         self.cs
             .add_effect(
                 pg_id,
@@ -394,7 +397,7 @@ impl ModelBuilder {
                 loc_tick,
                 Some(CsExpression::Equal(Box::new((
                     CsExpression::Var(ext_event_index),
-                    CsExpression::Integer(tick_idx),
+                    CsExpression::from(tick_idx),
                 )))),
             )
             .expect("hope this works");
@@ -407,18 +410,21 @@ impl ModelBuilder {
                 loc_halt,
                 Some(CsExpression::Equal(Box::new((
                     CsExpression::Var(ext_event_index),
-                    CsExpression::Integer(halt_idx),
+                    CsExpression::from(halt_idx),
                 )))),
             )
             .expect("hope this works");
 
         // Send tick return value
-        let result = self.cs.new_var(pg_id, Type::Integer).expect("must work");
+        let result = self
+            .cs
+            .new_var(pg_id, CsExpression::from(0))
+            .expect("must work");
         let send_result_loc = self.cs.new_location(pg_id).unwrap();
         let success = self.cs.new_action(pg_id).unwrap();
         let success_val = *self.enums.get(&(String::from("SUCCESS"))).unwrap();
         self.cs
-            .add_effect(pg_id, success, result, Expression::Integer(success_val))
+            .add_effect(pg_id, success, result, Expression::from(success_val))
             .unwrap();
         self.cs
             .add_transition(pg_id, loc_success, success, send_result_loc, None)
@@ -426,7 +432,7 @@ impl ModelBuilder {
         let running = self.cs.new_action(pg_id).unwrap();
         let running_val = *self.enums.get(&(String::from("RUNNING"))).unwrap();
         self.cs
-            .add_effect(pg_id, running, result, Expression::Integer(running_val))
+            .add_effect(pg_id, running, result, Expression::from(running_val))
             .unwrap();
         self.cs
             .add_transition(pg_id, loc_running, running, send_result_loc, None)
@@ -434,7 +440,7 @@ impl ModelBuilder {
         let failure = self.cs.new_action(pg_id).unwrap();
         let failure_val = *self.enums.get(&(String::from("FAILURE"))).unwrap();
         self.cs
-            .add_effect(pg_id, failure, result, Expression::Integer(failure_val))
+            .add_effect(pg_id, failure, result, Expression::from(failure_val))
             .unwrap();
         self.cs
             .add_transition(pg_id, loc_failure, failure, send_result_loc, None)
@@ -453,11 +459,7 @@ impl ModelBuilder {
                 .or_insert_with(|| self.cs.new_channel(Type::Integer, None));
             let send_result = self
                 .cs
-                .new_communication(
-                    pg_id,
-                    *param_channel,
-                    Message::Send(Expression::Var(result)),
-                )
+                .new_send(pg_id, *param_channel, Expression::Var(result))
                 .unwrap();
             self.cs
                 .add_transition(
@@ -467,19 +469,19 @@ impl ModelBuilder {
                     send_event_loc,
                     Some(Expression::Equal(Box::new((
                         Expression::Var(ext_origin_var),
-                        Expression::Integer(usize::from(caller) as Integer),
+                        Expression::from(usize::from(caller) as Integer),
                     )))),
                 )
                 .unwrap();
             let send_event = self
                 .cs
-                .new_communication(
+                .new_send(
                     pg_id,
                     caller_ext_queue,
-                    Message::Send(Expression::Tuple(vec![
-                        Expression::Integer(tick_return_idx),
-                        Expression::Integer(usize::from(pg_id) as Integer),
-                    ])),
+                    Expression::Tuple(vec![
+                        Expression::from(tick_return_idx),
+                        Expression::from(usize::from(pg_id) as Integer),
+                    ]),
                 )
                 .unwrap();
             self.cs
@@ -495,13 +497,13 @@ impl ModelBuilder {
             let caller_ext_queue = caller_builder.ext_queue;
             let send_event = self
                 .cs
-                .new_communication(
+                .new_send(
                     pg_id,
                     caller_ext_queue,
-                    Message::Send(Expression::Tuple(vec![
-                        Expression::Integer(halt_return_idx),
-                        Expression::Integer(usize::from(pg_id) as Integer),
-                    ])),
+                    Expression::Tuple(vec![
+                        Expression::from(halt_return_idx),
+                        Expression::from(usize::from(pg_id) as Integer),
+                    ]),
                 )
                 .unwrap();
             self.cs
@@ -512,7 +514,7 @@ impl ModelBuilder {
                     loc_idle,
                     Some(Expression::Equal(Box::new((
                         Expression::Var(ext_origin_var),
-                        Expression::Integer(usize::from(caller) as Integer),
+                        Expression::from(usize::from(caller) as Integer),
                     )))),
                 )
                 .unwrap();
@@ -549,14 +551,14 @@ impl ModelBuilder {
                 let halt_after_failure = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
                 let halting_after_failure = self
                     .cs
-                    .new_var(pg_id, Type::Boolean)
+                    .new_var(pg_id, CsExpression::from(false))
                     .expect("{pg_id:?} exists");
                 self.cs
                     .add_effect(
                         pg_id,
                         halt_after_failure,
                         halting_after_failure,
-                        CsExpression::Boolean(true),
+                        CsExpression::from(true),
                     )
                     .expect("hand-picked arguments");
                 let failure_after_halting = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
@@ -565,7 +567,7 @@ impl ModelBuilder {
                         pg_id,
                         failure_after_halting,
                         halting_after_failure,
-                        CsExpression::Boolean(false),
+                        CsExpression::from(false),
                     )
                     .expect("hand-picked arguments");
 
@@ -634,14 +636,14 @@ impl ModelBuilder {
                 let halt_after_success = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
                 let halting_after_success = self
                     .cs
-                    .new_var(pg_id, Type::Boolean)
+                    .new_var(pg_id, CsExpression::from(false))
                     .expect("{pg_id:?} exists");
                 self.cs
                     .add_effect(
                         pg_id,
                         halt_after_success,
                         halting_after_success,
-                        CsExpression::Boolean(true),
+                        CsExpression::from(true),
                     )
                     .expect("hand-picked arguments");
                 let success_after_halting = self.cs.new_action(pg_id).expect("{pg_id:?} exists");
@@ -650,7 +652,7 @@ impl ModelBuilder {
                         pg_id,
                         success_after_halting,
                         halting_after_success,
-                        CsExpression::Boolean(false),
+                        CsExpression::from(false),
                     )
                     .expect("hand-picked arguments");
 
@@ -741,13 +743,13 @@ impl ModelBuilder {
                     .unwrap();
                 let send_event = self
                     .cs
-                    .new_communication(
+                    .new_send(
                         pg_id,
                         target_ext_queue,
-                        Message::Send(CsExpression::Tuple(vec![
-                            CsExpression::Integer(tick_call_idx as Integer),
-                            CsExpression::Integer(usize::from(pg_id) as Integer),
-                        ])),
+                        CsExpression::Tuple(vec![
+                            CsExpression::from(tick_call_idx as Integer),
+                            CsExpression::from(usize::from(pg_id) as Integer),
+                        ]),
                     )
                     .unwrap();
                 let tick_sent = self.cs.new_location(pg_id).unwrap();
@@ -756,11 +758,14 @@ impl ModelBuilder {
                     .unwrap();
                 let tick_response = self
                     .cs
-                    .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
+                    .new_var(
+                        pg_id,
+                        CsExpression::Tuple(vec![CsExpression::from(0), CsExpression::from(0)]),
+                    )
                     .expect("{pg_id:?} exists");
                 let get_tick_response = self
                     .cs
-                    .new_communication(pg_id, ext_queue, Message::Receive(tick_response))
+                    .new_receive(pg_id, ext_queue, tick_response)
                     .expect("hand-made args");
                 let got_tick_response = self.cs.new_location(pg_id).expect("{pg_id:?} exists");
                 self.cs
@@ -780,15 +785,11 @@ impl ModelBuilder {
                     .or_insert(self.cs.new_channel(Type::Integer, None));
                 let tick_response_param = self
                     .cs
-                    .new_var(pg_id, Type::Integer)
+                    .new_var(pg_id, CsExpression::from(0))
                     .expect("{pg_id:?} exists");
                 let get_tick_response_param = self
                     .cs
-                    .new_communication(
-                        pg_id,
-                        tick_response_param_chn,
-                        Message::Receive(tick_response_param),
-                    )
+                    .new_receive(pg_id, tick_response_param_chn, tick_response_param)
                     .expect("hand-made args");
                 let got_tick_response_param =
                     self.cs.new_location(pg_id).expect("{pg_id:?} exists");
@@ -809,7 +810,7 @@ impl ModelBuilder {
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::Integer(*self.enums.get("SUCCESS").unwrap()),
+                            CsExpression::from(*self.enums.get("SUCCESS").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -821,7 +822,7 @@ impl ModelBuilder {
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::Integer(*self.enums.get("FAILURE").unwrap()),
+                            CsExpression::from(*self.enums.get("FAILURE").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -833,7 +834,7 @@ impl ModelBuilder {
                         pt_running,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::Integer(*self.enums.get("RUNNING").unwrap()),
+                            CsExpression::from(*self.enums.get("RUNNING").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -841,25 +842,33 @@ impl ModelBuilder {
                 // HALT
                 let event = action.to_owned() + "_" + HALT_CALL;
                 // Create event, if it does not exist already.
+                // <<<<<<< HEAD
                 let event_idx = self.event_index(&event);
-                let send_event = self.cs.new_communication(
+                //                 let send_event = self.cs.new_communication(
+                // =======
+                // let event_idx = self.event_index(event);
+                let send_event = self.cs.new_send(
+                    // >>>>>>> 64084c4 (`scan_core` large refactoring and documentation improvements)
                     pg_id,
                     target_ext_queue,
-                    Message::Send(CsExpression::Tuple(vec![
-                        CsExpression::Integer(event_idx as Integer),
-                        CsExpression::Integer(usize::from(pg_id) as Integer),
-                    ])),
+                    CsExpression::Tuple(vec![
+                        CsExpression::from(event_idx as Integer),
+                        CsExpression::from(usize::from(pg_id) as Integer),
+                    ]),
                 )?;
                 let halt_sent = self.cs.new_location(pg_id)?;
                 self.cs
                     .add_transition(pg_id, pt_halt, send_event, halt_sent, None)?;
                 let halt_response = self
                     .cs
-                    .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
+                    .new_var(
+                        pg_id,
+                        CsExpression::Tuple(vec![CsExpression::from(0), CsExpression::from(0)]),
+                    )
                     .expect("{pg_id:?} exists");
                 let get_halt_response = self
                     .cs
-                    .new_communication(pg_id, ext_queue, Message::Receive(halt_response))
+                    .new_receive(pg_id, ext_queue, halt_response)
                     .expect("hand-made args");
                 let got_halt_response = pt_ack;
                 self.cs
@@ -885,13 +894,13 @@ impl ModelBuilder {
                     .unwrap();
                 let send_event = self
                     .cs
-                    .new_communication(
+                    .new_send(
                         pg_id,
                         target_ext_queue,
-                        Message::Send(CsExpression::Tuple(vec![
-                            CsExpression::Integer(tick_call_idx as Integer),
-                            CsExpression::Integer(usize::from(pg_id) as Integer),
-                        ])),
+                        CsExpression::Tuple(vec![
+                            CsExpression::from(tick_call_idx as Integer),
+                            CsExpression::from(usize::from(pg_id) as Integer),
+                        ]),
                     )
                     .unwrap();
                 let tick_sent = self.cs.new_location(pg_id).unwrap();
@@ -900,11 +909,14 @@ impl ModelBuilder {
                     .unwrap();
                 let tick_response = self
                     .cs
-                    .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
+                    .new_var(
+                        pg_id,
+                        CsExpression::Tuple(vec![CsExpression::from(0), CsExpression::from(0)]),
+                    )
                     .expect("{pg_id:?} exists");
                 let get_tick_response = self
                     .cs
-                    .new_communication(pg_id, ext_queue, Message::Receive(tick_response))
+                    .new_receive(pg_id, ext_queue, tick_response)
                     .expect("hand-made args");
                 let got_tick_response = self.cs.new_location(pg_id).expect("{pg_id:?} exists");
                 self.cs
@@ -924,15 +936,11 @@ impl ModelBuilder {
                     .or_insert(self.cs.new_channel(Type::Integer, None));
                 let tick_response_param = self
                     .cs
-                    .new_var(pg_id, Type::Integer)
+                    .new_var(pg_id, CsExpression::from(0))
                     .expect("{pg_id:?} exists");
                 let get_tick_response_param = self
                     .cs
-                    .new_communication(
-                        pg_id,
-                        tick_response_param_chn,
-                        Message::Receive(tick_response_param),
-                    )
+                    .new_receive(pg_id, tick_response_param_chn, tick_response_param)
                     .expect("hand-made args");
                 let got_tick_response_param =
                     self.cs.new_location(pg_id).expect("{pg_id:?} exists");
@@ -953,7 +961,7 @@ impl ModelBuilder {
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::Integer(*self.enums.get("SUCCESS").unwrap()),
+                            CsExpression::from(*self.enums.get("SUCCESS").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -965,7 +973,7 @@ impl ModelBuilder {
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::Integer(*self.enums.get("FAILURE").unwrap()),
+                            CsExpression::from(*self.enums.get("FAILURE").unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -1012,7 +1020,7 @@ impl ModelBuilder {
                 .to_owned();
             let var = self
                 .cs
-                .new_var(pg_id, scan_type)
+                .new_var(pg_id, CsExpression::Const(scan_type.default_value()))
                 .expect("program graph exists!");
             vars.insert(location.to_owned(), (var, type_name.to_owned()));
             // Initialize variable with `expr`, if any, by adding it as effect of `initialize` action.
@@ -1047,23 +1055,28 @@ impl ModelBuilder {
         // Var representing the current event and origin pair
         let current_event_and_origin_var = self
             .cs
-            .new_var(pg_id, Type::Product(vec![Type::Integer, Type::Integer]))
+            .new_var(
+                pg_id,
+                CsExpression::Const(
+                    Type::Product(vec![Type::Integer, Type::Integer]).default_value(),
+                ),
+            )
             .expect("program graph exists!");
         // Var representing the current event
         let current_event_var = self
             .cs
-            .new_var(pg_id, Type::Integer)
+            .new_var(pg_id, CsExpression::from(0))
             .expect("program graph exists!");
         // Variable that will store origin of last processed event.
         let origin_var = self
             .cs
-            .new_var(pg_id, Type::Integer)
+            .new_var(pg_id, CsExpression::from(0))
             .expect("program graph exists!");
         // Implement internal queue
         let int_queue = self.cs.new_channel(Type::Integer, None);
         let dequeue_int = self
             .cs
-            .new_communication(pg_id, int_queue, Message::Receive(current_event_var))
+            .new_receive(pg_id, int_queue, current_event_var)
             .expect("hand-coded args");
         // For events from the internal queue, origin is self
         let set_int_origin = self.cs.new_action(pg_id).expect("program graph exists!");
@@ -1072,17 +1085,13 @@ impl ModelBuilder {
                 pg_id,
                 set_int_origin,
                 origin_var,
-                CsExpression::Integer(usize::from(pg_id) as Integer),
+                CsExpression::from(usize::from(pg_id) as Integer),
             )
             .expect("hand-coded args");
         // Implement external queue
         let dequeue_ext = self
             .cs
-            .new_communication(
-                pg_id,
-                ext_queue,
-                Message::Receive(current_event_and_origin_var),
-            )
+            .new_receive(pg_id, ext_queue, current_event_and_origin_var)
             .expect("hand-coded args");
         // Process external event to assign event and origin values to respective vars
         let process_ext_event = self.cs.new_action(pg_id)?;
@@ -1129,7 +1138,7 @@ impl ModelBuilder {
                 // Variable where to store parameter.
                 let param_var = self
                     .cs
-                    .new_var(pg_id, param_type.to_owned())
+                    .new_var(pg_id, CsExpression::Const(param_type.default_value()))
                     .expect("hand-made input");
                 let old = param_vars.insert(
                     (event_index, param_name.to_owned()),
@@ -1145,7 +1154,7 @@ impl ModelBuilder {
                         .or_insert_with(|| self.cs.new_channel(param_type.to_owned(), None));
                     let read = self
                         .cs
-                        .new_communication(pg_id, *chn, Message::Receive(param_var))
+                        .new_receive(pg_id, *chn, param_var)
                         .expect("must work");
                     let old =
                         param_actions.insert((sender_id, event_index, param_name.to_owned()), read);
@@ -1213,7 +1222,7 @@ impl ModelBuilder {
             {
                 let empty_int_queue = self
                     .cs
-                    .new_communication(pg_id, int_queue, Message::ProbeEmptyQueue)
+                    .new_probe_empty_queue(pg_id, int_queue)
                     .expect("hand-coded args");
                 self.cs
                     .add_transition(pg_id, int_queue_loc, empty_int_queue, ext_queue_loc, None)
@@ -1261,11 +1270,11 @@ impl ModelBuilder {
                 for &sender_id in &event_builder.senders {
                     let mut is_event_sender = Some(CsExpression::And(vec![
                         CsExpression::Equal(Box::new((
-                            CsExpression::Integer(event_index as Integer),
+                            CsExpression::from(event_index as Integer),
                             CsExpression::Var(current_event_var),
                         ))),
                         CsExpression::Equal(Box::new((
-                            CsExpression::Integer(usize::from(sender_id) as Integer),
+                            CsExpression::from(usize::from(sender_id) as Integer),
                             CsExpression::Var(origin_var),
                         ))),
                     ]));
@@ -1356,7 +1365,7 @@ impl ModelBuilder {
                     // Check if the current event (internal or external) corresponds to the event activating the transition.
                     let event_match = CsExpression::Equal(Box::new((
                         CsExpression::Var(current_event_var),
-                        CsExpression::Integer(event_index as Integer),
+                        CsExpression::from(event_index as Integer),
                     )));
                     // TODO FIXME: optimize And/Or expressions
                     guard = cond
@@ -1411,7 +1420,7 @@ impl ModelBuilder {
                 // This happens in State Charts already, so we model it faithfully without optimizations.
                 let not_guard = guard
                     .map(|guard| CsExpression::Not(Box::new(guard)))
-                    .unwrap_or(CsExpression::Boolean(false));
+                    .unwrap_or(CsExpression::from(false));
                 self.cs
                     .add_transition(
                         pg_id,
@@ -1451,11 +1460,9 @@ impl ModelBuilder {
             Executable::Raise { event } => {
                 // Create event, if it does not exist already.
                 let event_idx = self.event_index(event);
-                let raise = self.cs.new_communication(
-                    pg_id,
-                    int_queue,
-                    Message::Send(CsExpression::Integer(event_idx as Integer)),
-                )?;
+                let raise =
+                    self.cs
+                        .new_send(pg_id, int_queue, CsExpression::from(event_idx as Integer))?;
                 let next_loc = self.cs.new_location(pg_id)?;
                 // queue the internal event
                 self.cs.add_transition(pg_id, loc, raise, next_loc, None)?;
@@ -1479,13 +1486,13 @@ impl ModelBuilder {
                         .expect("builder for {event} already exists");
                     let send_event = self
                         .cs
-                        .new_communication(
+                        .new_send(
                             pg_id,
                             target_ext_queue,
-                            Message::Send(CsExpression::Tuple(vec![
-                                CsExpression::Integer(event_idx as Integer),
-                                CsExpression::Integer(usize::from(pg_id) as Integer),
-                            ])),
+                            CsExpression::Tuple(vec![
+                                CsExpression::from(event_idx as Integer),
+                                CsExpression::from(usize::from(pg_id) as Integer),
+                            ]),
                         )
                         .expect("must work");
 
@@ -1520,13 +1527,13 @@ impl ModelBuilder {
                         let target_ext_queue = target_builder.ext_queue;
                         let send_event = self
                             .cs
-                            .new_communication(
+                            .new_send(
                                 pg_id,
                                 target_ext_queue,
-                                Message::Send(CsExpression::Tuple(vec![
-                                    CsExpression::Integer(event_idx as Integer),
-                                    CsExpression::Integer(usize::from(pg_id) as Integer),
-                                ])),
+                                CsExpression::Tuple(vec![
+                                    CsExpression::from(event_idx as Integer),
+                                    CsExpression::from(usize::from(pg_id) as Integer),
+                                ]),
                             )
                             .expect("params are hard-coded");
 
@@ -1539,7 +1546,7 @@ impl ModelBuilder {
                                 send_event,
                                 next_loc,
                                 Some(CsExpression::Equal(Box::new((
-                                    CsExpression::Integer(usize::from(target_id) as Integer),
+                                    CsExpression::from(usize::from(target_id) as Integer),
                                     targetexpr.to_owned(),
                                 )))),
                             )
@@ -1625,9 +1632,7 @@ impl ModelBuilder {
             .entry((pg_id, target_id, event_idx, param.name.to_owned()))
             .or_insert(self.cs.new_channel(scan_type, None));
         // Can return error if expr is badly typed
-        let pass_param = self
-            .cs
-            .new_communication(pg_id, param_chn, Message::Send(expr))?;
+        let pass_param = self.cs.new_send(pg_id, param_chn, expr)?;
         let next_loc = self.cs.new_location(pg_id).expect("PG exists");
         self.cs
             .add_transition(pg_id, param_loc, pass_param, next_loc, None)
@@ -1656,7 +1661,7 @@ impl ModelBuilder {
                     ident => self
                         .enums
                         .get(ident)
-                        .map(|i| CsExpression::Integer(*i))
+                        .map(|i| CsExpression::from(*i))
                         .or_else(|| vars.get(ident).map(|(var, _)| CsExpression::Var(*var)))
                         .ok_or(anyhow!("unknown identifier"))?,
                 }
@@ -1666,9 +1671,9 @@ impl ModelBuilder {
                 match lit {
                     Literal::String(_) => todo!(),
                     Literal::Num(_) => todo!(),
-                    Literal::Int(i) => CsExpression::Integer(*i),
+                    Literal::Int(i) => CsExpression::from(*i),
                     Literal::BigInt(_) => todo!(),
-                    Literal::Bool(b) => CsExpression::Boolean(*b),
+                    Literal::Bool(b) => CsExpression::from(*b),
                     Literal::Null => todo!(),
                     Literal::Undefined => todo!(),
                 }

@@ -1,4 +1,6 @@
-//! SCAN (StatistiCal ANalyzer) is a statistical model checker
+//! # SCAN (StatistiCal ANalyzer)
+//!
+//! SCAN is a statistical model checker
 //! designed to verify large concurrent systems
 //! for which standard verification techniques do not scale.
 //!

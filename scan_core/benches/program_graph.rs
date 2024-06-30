@@ -33,15 +33,18 @@ fn condition_pg() -> ProgramGraph {
         Some(Expression::Implies(Box::new((
             Expression::LessEq(Box::new((
                 Expression::Sum(vec![
-                    Expression::Integer(1),
-                    Expression::Integer(2),
-                    Expression::Integer(3),
-                    Expression::Integer(4),
-                    Expression::Integer(5),
+                    Expression::Const(Val::Integer(1)),
+                    Expression::Const(Val::Integer(2)),
+                    Expression::Const(Val::Integer(3)),
+                    Expression::Const(Val::Integer(4)),
+                    Expression::Const(Val::Integer(5)),
                 ]),
-                Expression::Integer(100),
+                Expression::Const(Val::Integer(100)),
             ))),
-            Expression::Greater(Box::new((Expression::Integer(5), Expression::Integer(6)))),
+            Expression::Greater(Box::new((
+                Expression::Const(Val::Integer(5)),
+                Expression::Const(Val::Integer(6)),
+            ))),
         )))),
     )
     .unwrap();
@@ -66,17 +69,20 @@ fn counter_pg() -> ProgramGraph {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.initial_location();
     let action = pg.new_action();
-    let var = pg.new_var(Type::Integer);
+    let var = pg.new_var(Expression::Const(Val::Integer(0))).unwrap();
     pg.add_effect(
         action,
         var,
-        Expression::Sum(vec![Expression::Var(var), Expression::Integer(1)]),
+        Expression::Sum(vec![
+            Expression::Var(var),
+            Expression::Const(Val::Integer(1)),
+        ]),
     )
     .unwrap();
     for counter in 0..10 {
         let guard = Expression::Equal(Box::new((
             Expression::Var(var),
-            Expression::Integer(counter),
+            Expression::Const(Val::Integer(counter)),
         )));
         pg.add_transition(initial, action, initial, Some(guard))
             .unwrap();
