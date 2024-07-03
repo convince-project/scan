@@ -1,5 +1,5 @@
 use super::vocabulary::*;
-use crate::parser::{ParserError, ParserErrorType};
+use crate::parser::ParserError;
 use anyhow::anyhow;
 use log::{error, info, trace, warn};
 use quick_xml::events::attributes::{AttrError, Attribute};
@@ -43,13 +43,11 @@ impl Bt {
                         }
                         TAG_BEHAVIOR_TREE => {
                             // return Self::parse_skill(reader);
-                            let id = Self::parse_bt(tag, reader)?;
-                            let root = BtNode::parse_skill(reader)?.pop().ok_or_else(|| {
-                                ParserError(
-                                    reader.buffer_position(),
-                                    ParserErrorType::MissingBtRootNode,
-                                )
-                            })?;
+                            let id = Self::parse_bt(tag)
+                                .map_err(|err| err.context(reader.error_position()))?;
+                            let root = BtNode::parse_skill(reader)?
+                                .pop()
+                                .ok_or(ParserError::MissingBtRootNode)?;
                             let bt = Bt { id, root };
                             bts.push(bt);
                         }
@@ -76,10 +74,7 @@ impl Bt {
                 Event::DocType(_) => continue,
                 // exits the loop when reaching end of file
                 Event::Eof => {
-                    return Err(anyhow!(ParserError(
-                        reader.buffer_position(),
-                        ParserErrorType::UnclosedTags,
-                    )));
+                    return Err(anyhow!(ParserError::UnclosedTags));
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
@@ -87,10 +82,7 @@ impl Bt {
         }
     }
 
-    fn parse_bt<R: BufRead>(
-        tag: events::BytesStart<'_>,
-        reader: &mut Reader<R>,
-    ) -> anyhow::Result<String> {
+    fn parse_bt(tag: events::BytesStart<'_>) -> anyhow::Result<String> {
         let mut id: Option<String> = None;
         for attr in tag
             .attributes()
@@ -102,17 +94,11 @@ impl Bt {
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_STATE}");
-                    return Err(anyhow::Error::new(ParserError(
-                        reader.buffer_position(),
-                        ParserErrorType::UnknownKey(key.to_owned()),
-                    )));
+                    return Err(anyhow!(ParserError::UnknownKey(key.to_owned())));
                 }
             }
         }
-        id.ok_or(anyhow!(ParserError(
-            reader.buffer_position(),
-            ParserErrorType::MissingAttr(ATTR_ID.to_string())
-        )))
+        id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))
     }
 }
 
@@ -158,10 +144,16 @@ impl BtNode {
                     // let tag_name = ConvinceTag::from(tag_name.as_str());
                     match tag_name {
                         TAG_ACTION => {
-                            bts.push(Self::parse_action(tag, reader)?);
+                            bts.push(
+                                Self::parse_action(tag)
+                                    .map_err(|err| err.context(reader.error_position()))?,
+                            );
                         }
                         TAG_CONDITION => {
-                            bts.push(Self::parse_condition(tag, reader)?);
+                            bts.push(
+                                Self::parse_condition(tag)
+                                    .map_err(|err| err.context(reader.error_position()))?,
+                            );
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
@@ -178,10 +170,7 @@ impl BtNode {
                 Event::DocType(_) => continue,
                 // exits the loop when reaching end of file
                 Event::Eof => {
-                    return Err(anyhow!(ParserError(
-                        reader.buffer_position(),
-                        ParserErrorType::UnclosedTags,
-                    )));
+                    return Err(anyhow!(ParserError::UnclosedTags,));
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
@@ -189,10 +178,7 @@ impl BtNode {
         }
     }
 
-    fn parse_action<R: BufRead>(
-        tag: events::BytesStart<'_>,
-        reader: &mut Reader<R>,
-    ) -> anyhow::Result<BtNode> {
+    fn parse_action(tag: events::BytesStart<'_>) -> anyhow::Result<BtNode> {
         let mut id: Option<String> = None;
         for attr in tag
             .attributes()
@@ -204,25 +190,16 @@ impl BtNode {
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_STATE}");
-                    return Err(anyhow::Error::new(ParserError(
-                        reader.buffer_position(),
-                        ParserErrorType::UnknownKey(key.to_owned()),
-                    )));
+                    return Err(anyhow::Error::new(ParserError::UnknownKey(key.to_owned())));
                 }
             }
         }
-        let id = id.ok_or(anyhow!(ParserError(
-            reader.buffer_position(),
-            ParserErrorType::MissingAttr(ATTR_ID.to_string())
-        )))?;
+        let id = id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))?;
         let action = BtNode::LAct(id);
         Ok(action)
     }
 
-    fn parse_condition<R: BufRead>(
-        tag: events::BytesStart<'_>,
-        reader: &mut Reader<R>,
-    ) -> anyhow::Result<BtNode> {
+    fn parse_condition(tag: events::BytesStart<'_>) -> anyhow::Result<BtNode> {
         let mut id: Option<String> = None;
         for attr in tag
             .attributes()
@@ -234,17 +211,11 @@ impl BtNode {
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_STATE}");
-                    return Err(anyhow::Error::new(ParserError(
-                        reader.buffer_position(),
-                        ParserErrorType::UnknownKey(key.to_owned()),
-                    )));
+                    return Err(anyhow::Error::new(ParserError::UnknownKey(key.to_owned())));
                 }
             }
         }
-        let id = id.ok_or(anyhow!(ParserError(
-            reader.buffer_position(),
-            ParserErrorType::MissingAttr(ATTR_ID.to_string())
-        )))?;
+        let id = id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))?;
         let condition = BtNode::LCnd(id);
         Ok(condition)
     }

@@ -83,4 +83,7 @@ pub const HALT_RETURN: &str = "halt_return";
 pub const ACTION_RESPONSE: &str = "ActionResponse";
 pub const CONDITION_RESPONSE: &str = "ConditionResponse";
 pub const RESULT: &str = "result";
+pub const SUCCESS: &str = "SUCCESS";
+pub const RUNNING: &str = "RUNNING";
+pub const FAILURE: &str = "FAILURE";
 // pub const TICK_GENERATOR: &str = "tickGenerator";

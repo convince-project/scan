@@ -183,14 +183,14 @@ impl ModelBuilder {
         for (id, declaration) in parser.process_list.iter() {
             let pg_id = self.fsm_builder(id).pg_id;
             match &declaration.moc {
-                MoC::Fsm(fsm) => self.prebuild_fsms(pg_id, fsm)?,
+                MoC::Fsm(fsm) => self.prebuild_fsms(pg_id, &fsm.scxml)?,
                 MoC::Bt(bt) => self.prebuild_bt(pg_id, bt)?,
             }
         }
         Ok(())
     }
 
-    fn prebuild_fsms(&mut self, pg_id: PgId, fmt: &Fsm) -> anyhow::Result<()> {
+    fn prebuild_fsms(&mut self, pg_id: PgId, fmt: &Scxml) -> anyhow::Result<()> {
         for (_, state) in fmt.states.iter() {
             for exec in state.on_entry.iter() {
                 self.prebuild_exec(pg_id, exec)?;
@@ -220,11 +220,11 @@ impl ModelBuilder {
                 expr: _,
             } => Ok(()),
             Executable::Raise { event: _ } => Ok(()),
-            Executable::Send {
+            Executable::Send(Send {
                 event,
                 target: _,
                 params,
-            } => {
+            }) => {
                 let event_index = self.event_index(event);
                 let builder = self.events.get_mut(event_index).expect("index must exist");
                 builder.senders.insert(pg_id);
@@ -241,7 +241,7 @@ impl ModelBuilder {
                 }
                 Ok(())
             }
-            Executable::If { cond: _, execs } => {
+            Executable::If(If { cond: _, execs }) => {
                 for executable in execs {
                     self.prebuild_exec(pg_id, executable)?;
                 }
@@ -384,7 +384,7 @@ impl ModelBuilder {
             .unwrap();
 
         // TICK
-        // Create event, if it does not exist already.
+        // Create event.
         let tick_idx = *self.event_indexes.get(TICK_CALL).unwrap() as Integer;
         let tick_return_idx = *self.event_indexes.get(TICK_RETURN).unwrap() as Integer;
         let halt_idx = *self.event_indexes.get(HALT_CALL).unwrap() as Integer;
@@ -810,7 +810,7 @@ impl ModelBuilder {
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::from(*self.enums.get("SUCCESS").unwrap()),
+                            CsExpression::from(*self.enums.get(SUCCESS).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -822,7 +822,7 @@ impl ModelBuilder {
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::from(*self.enums.get("FAILURE").unwrap()),
+                            CsExpression::from(*self.enums.get(FAILURE).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -834,7 +834,7 @@ impl ModelBuilder {
                         pt_running,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::from(*self.enums.get("RUNNING").unwrap()),
+                            CsExpression::from(*self.enums.get(RUNNING).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -879,12 +879,11 @@ impl ModelBuilder {
                 trace!("building bt leaf {condition}");
                 let caller_name = self.fsm_names.get(&pg_id).unwrap();
                 let caller_builder = self.fsm_builders.get(caller_name).expect("it must exist");
-                let ext_queue = caller_builder.ext_queue;
-                let target = condition;
+                let caller_ext_queue = caller_builder.ext_queue;
                 let target_builder = self
                     .fsm_builders
-                    .get(target)
-                    .ok_or_else(|| anyhow!("Action/condition {condition} not found"))?;
+                    .get(condition)
+                    .ok_or_else(|| anyhow!("Condition {condition} not found"))?;
                 let target_ext_queue = target_builder.ext_queue;
 
                 // TICK
@@ -916,7 +915,7 @@ impl ModelBuilder {
                     .expect("{pg_id:?} exists");
                 let get_tick_response = self
                     .cs
-                    .new_receive(pg_id, ext_queue, tick_response)
+                    .new_receive(pg_id, caller_ext_queue, tick_response)
                     .expect("hand-made args");
                 let got_tick_response = self.cs.new_location(pg_id).expect("{pg_id:?} exists");
                 self.cs
@@ -961,7 +960,7 @@ impl ModelBuilder {
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::from(*self.enums.get("SUCCESS").unwrap()),
+                            CsExpression::from(*self.enums.get(SUCCESS).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -973,7 +972,7 @@ impl ModelBuilder {
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
-                            CsExpression::from(*self.enums.get("FAILURE").unwrap()),
+                            CsExpression::from(*self.enums.get(FAILURE).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
@@ -991,12 +990,13 @@ impl ModelBuilder {
     }
 
     fn build_fsm(&mut self, fsm: &Fsm) -> anyhow::Result<()> {
-        trace!("build fsm {}", fsm.id);
+        let scxml = &fsm.scxml;
+        trace!("build fsm {}", scxml.id);
         // Initialize fsm.
         let pg_builder = self
             .fsm_builders
-            .get(&fsm.id)
-            .unwrap_or_else(|| panic!("builder for {} must already exist", fsm.id));
+            .get(&scxml.id)
+            .unwrap_or_else(|| panic!("builder for {} must already exist", scxml.id));
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
         // Generic action that progresses the execution of the FSM.
@@ -1011,10 +1011,10 @@ impl ModelBuilder {
         // Initialize variables from datamodel
         // NOTE vars cannot be initialized using previously defined vars because datamodel is an HashMap
         let mut vars = HashMap::new();
-        for (location, (type_name, expr)) in fsm.datamodel.iter() {
+        for data in scxml.datamodel.iter() {
             let scan_type = self
                 .types
-                .get(type_name.as_str())
+                .get(data.omg_type.as_str())
                 .ok_or(anyhow!("unknown type"))?
                 .1
                 .to_owned();
@@ -1022,9 +1022,9 @@ impl ModelBuilder {
                 .cs
                 .new_var(pg_id, CsExpression::Const(scan_type.default_value()))
                 .expect("program graph exists!");
-            vars.insert(location.to_owned(), (var, type_name.to_owned()));
+            vars.insert(data.id.to_owned(), (var, data.omg_type.to_owned()));
             // Initialize variable with `expr`, if any, by adding it as effect of `initialize` action.
-            if let Some(expr) = expr {
+            if let Some(ref expr) = data.expression {
                 let expr = self.expression(expr, &fsm.interner, &vars, None, &HashMap::new())?;
                 // Initialization has at least an effect, so we need to perform it.
                 // Create action if there was none.
@@ -1051,7 +1051,7 @@ impl ModelBuilder {
         // Map fsm's state ids to corresponding CS's locations.
         let mut states = HashMap::new();
         // Conventionally, the entry-point for a state is a location associated to the id of the state.
-        states.insert(fsm.initial.to_owned(), initial_state);
+        states.insert(scxml.initial.to_owned(), initial_state);
         // Var representing the current event and origin pair
         let current_event_and_origin_var = self
             .cs
@@ -1167,7 +1167,7 @@ impl ModelBuilder {
         let param_actions = param_actions;
 
         // Consider each of the fsm's states
-        for (state_id, state) in fsm.states.iter() {
+        for (state_id, state) in scxml.states.iter() {
             trace!("build state {}", state_id);
             // Each state is modeled by multiple locations connected by transitions
             // A starting location is used as a point-of-entry to the execution of the state.
@@ -1468,11 +1468,11 @@ impl ModelBuilder {
                 self.cs.add_transition(pg_id, loc, raise, next_loc, None)?;
                 Ok(next_loc)
             }
-            Executable::Send {
+            Executable::Send(Send {
                 event,
                 target,
                 params: send_params,
-            } => match target {
+            }) => match target {
                 Target::Id(target) => {
                     let target_builder = self
                         .fsm_builders
@@ -1580,7 +1580,7 @@ impl ModelBuilder {
                 self.cs.add_transition(pg_id, loc, assign, next_loc, None)?;
                 Ok(next_loc)
             }
-            Executable::If { cond, execs } => {
+            Executable::If(If { cond, execs }) => {
                 let mut next_loc = self.cs.new_location(pg_id).unwrap();
                 let cond = self.expression(cond, interner, vars, origin, params)?;
                 self.cs
