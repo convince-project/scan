@@ -3,6 +3,7 @@
 mod bt;
 mod fsm;
 mod omg_types;
+mod property;
 mod vocabulary;
 
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ use thiserror::Error;
 pub use self::bt::*;
 pub use self::fsm::*;
 pub use self::omg_types::*;
+pub use self::property::*;
 pub use self::vocabulary::*;
 use scan_core::channel_system::*;
 
@@ -99,7 +101,7 @@ pub struct Parser {
     root_folder: PathBuf,
     pub(crate) process_list: HashMap<String, Process>,
     pub(crate) types: OmgTypes,
-    // properties: PathBuf,
+    pub(crate) properties: Properties,
 }
 
 impl Parser {
@@ -113,6 +115,7 @@ impl Parser {
             root_folder,
             process_list: HashMap::new(),
             types: OmgTypes::new(),
+            properties: Properties::new(),
         };
         let mut buf = Vec::new();
         let mut stack = Vec::new();
@@ -138,13 +141,6 @@ impl Parser {
                             if stack.last().is_some_and(|tag| *tag == ConvinceTag::Model) =>
                         {
                             stack.push(ConvinceTag::ProcessList);
-                        }
-                        TAG_PROPERTIES
-                            if stack
-                                .last()
-                                .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
-                        {
-                            stack.push(ConvinceTag::Properties);
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
@@ -185,6 +181,14 @@ impl Parser {
                                 .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
                         {
                             spec.parse_types(tag)
+                                .map_err(|err| err.context(reader.error_position()))?;
+                        }
+                        TAG_PROPERTIES
+                            if stack
+                                .last()
+                                .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
+                        {
+                            spec.parse_properties(tag)
                                 .map_err(|err| err.context(reader.error_position()))?;
                         }
                         // Unknown tag: skip till maching end tag
@@ -299,6 +303,31 @@ impl Parser {
         info!("creating reader from file {0}", root_path.display());
         let mut reader = Reader::from_file(root_path)?;
         self.types.parse(&mut reader)?;
+        Ok(())
+    }
+
+    fn parse_properties(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<()> {
+        let mut path: Option<String> = None;
+        for attr in tag
+            .attributes()
+            .collect::<Result<Vec<Attribute>, AttrError>>()?
+        {
+            match str::from_utf8(attr.key.as_ref())? {
+                ATTR_PATH => {
+                    path = Some(String::from_utf8(attr.value.into_owned())?);
+                }
+                key => {
+                    error!("found unknown attribute {key}");
+                    return Err(anyhow!(ParserError::UnknownKey(key.to_owned()),));
+                }
+            }
+        }
+        let path = path.ok_or(anyhow!(ParserError::MissingAttr(ATTR_PATH.to_string())))?;
+        let mut root_path = self.root_folder.clone();
+        root_path.extend(&PathBuf::from(path));
+        info!("creating reader from file {0}", root_path.display());
+        let mut reader = Reader::from_file(root_path)?;
+        self.properties = Properties::parse(&mut reader)?;
         Ok(())
     }
 }

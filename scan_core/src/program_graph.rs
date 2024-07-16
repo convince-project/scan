@@ -71,7 +71,7 @@ pub use builder::*;
 
 // TODO: use fast hasher (?)
 use super::grammar::*;
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 
 /// An indexing object for locations in a PG.
@@ -143,7 +143,7 @@ pub enum PgError {
     NotReceive(Action),
 }
 
-struct FnExpression(Box<dyn Fn(&[Val]) -> Val>);
+struct FnExpression(Box<dyn Fn(&[Val]) -> Val + Send + Sync>);
 
 impl std::fmt::Debug for FnExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -180,9 +180,9 @@ enum FnEffect {
 pub struct ProgramGraph {
     current_location: Location,
     vars: Vec<Val>,
-    effects: Rc<Vec<FnEffect>>,
+    effects: Arc<Vec<FnEffect>>,
     // QUESTION: is there a better/more efficient representation?
-    transitions: Rc<Vec<HashMap<(Action, Location), Option<FnExpression>>>>,
+    transitions: Arc<Vec<HashMap<(Action, Location), Option<FnExpression>>>>,
 }
 
 impl ProgramGraph {

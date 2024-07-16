@@ -5,3 +5,4 @@ mod parser;
 
 pub use builder::ModelBuilder;
 pub use parser::Parser;
+pub use scan_core;

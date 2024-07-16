@@ -96,17 +96,19 @@ fn bt_rfbk_failure() -> anyhow::Result<()> {
 
 fn test(file: PathBuf) -> anyhow::Result<()> {
     let parser = Parser::parse(file)?;
-    let mut model = ModelBuilder::visit(parser)?;
+    let mut model = ModelBuilder::visit(parser)?
+        .model
+        .channel_system()
+        .to_owned();
     let mut steps = 0;
-    assert!(model.cs.possible_transitions().count() > 0);
+    assert!(model.possible_transitions().count() > 0);
     while let Some((pg_id, act, loc)) = model
-        .cs
         .possible_transitions()
         .take(1)
         .collect::<Vec<_>>()
         .pop()
     {
-        model.cs.transition(pg_id, act, loc)?;
+        model.transition(pg_id, act, loc)?;
         steps += 1;
         if steps >= MAXSTEP {
             return Err(anyhow!("step limit reached"));

@@ -11,9 +11,11 @@ use std::collections::{HashMap, HashSet};
 // -[ ] WARN FIXME System is fragile if name/id/path do not coincide
 
 #[derive(Debug)]
-pub struct CsModel {
-    pub cs: ChannelSystem,
+pub struct ScxmlModel {
+    pub model: CsModel,
+    pub properties: Vec<Mtl<usize>>,
     pub fsm_names: HashMap<PgId, String>,
+    // TODO: ...other stuff needed to backtrack scxml's ids
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +73,9 @@ pub struct ModelBuilder {
     // - paramName
     // that is needed
     parameters: HashMap<(PgId, PgId, usize, String), Channel>,
+    // Properties
+    predicates: HashMap<String, Expression<MdVar>>,
+    ports: HashMap<String, Expression<MdVar>>,
 }
 
 impl ModelBuilder {
@@ -79,7 +84,7 @@ impl ModelBuilder {
     /// Can fail if the model specification contains semantic errors
     /// (particularly type mismatches)
     /// or references to non-existing items.
-    pub fn visit(parser: Parser) -> anyhow::Result<CsModel> {
+    pub fn visit(parser: Parser) -> anyhow::Result<ScxmlModel> {
         let mut model = ModelBuilder {
             cs: ChannelSystemBuilder::new(),
             types: HashMap::new(),
@@ -90,6 +95,8 @@ impl ModelBuilder {
             events: Vec::new(),
             event_indexes: HashMap::new(),
             parameters: HashMap::new(),
+            predicates: HashMap::new(),
+            ports: HashMap::new(),
         };
 
         info!("Building types");
@@ -104,6 +111,8 @@ impl ModelBuilder {
                 MoC::Bt(bt) => model.build_bt(bt)?,
             }
         }
+
+        model.build_predicates(&parser)?;
 
         let model = model.build();
 
@@ -1917,9 +1926,120 @@ impl ModelBuilder {
         }
     }
 
-    fn build(self) -> CsModel {
-        CsModel {
-            cs: self.cs.build(),
+    fn build_predicates(&mut self, parser: &Parser) -> anyhow::Result<()> {
+        for (port_id, port) in parser.properties.ports.iter() {
+            let origin_builder = self
+                .fsm_builders
+                .get(&port.origin)
+                .ok_or(anyhow!("missing origin fsm {}", port.origin))?;
+            let origin = origin_builder.pg_id;
+            let target_builder = self
+                .fsm_builders
+                .get(&port.target)
+                .ok_or(anyhow!("missing target fsm {}", port.target))?;
+            let target = target_builder.pg_id;
+            let event_id = *self
+                .event_indexes
+                .get(&port.event)
+                .ok_or(anyhow!("missing event {}", port.event))?;
+            if let Some(param) = &port.param {
+                let channel = *self
+                    .parameters
+                    .get(&(origin, target, event_id, param.to_owned()))
+                    .ok_or(anyhow!("param {param} not found"))?;
+                let var = (target, channel, Message::Receive);
+                self.ports.insert(port_id.to_owned(), Expression::Var(var));
+            } else {
+                let channel = target_builder.ext_queue;
+                let var = (target, channel, Message::Receive);
+                let expr = Expression::And(vec![
+                    Expression::Equal(Box::new((
+                        Expression::from(event_id as Integer),
+                        Expression::Component(0, Box::new(Expression::Var(var))),
+                    ))),
+                    Expression::Equal(Box::new((
+                        Expression::from(Into::<usize>::into(origin) as Integer),
+                        Expression::Component(1, Box::new(Expression::Var(var))),
+                    ))),
+                ]);
+                self.ports.insert(port_id.to_owned(), expr);
+            }
+        }
+        for (predicate_id, predicate) in parser.properties.predicates.iter() {
+            let predicate = self.build_predicate(predicate)?;
+            self.predicates.insert(predicate_id.to_owned(), predicate);
+        }
+        Ok(())
+    }
+
+    fn build_predicate(&self, predicate: &Expression<String>) -> anyhow::Result<Expression<MdVar>> {
+        match predicate {
+            Expression::Const(val) => Ok(Expression::Const(val.to_owned())),
+            Expression::Var(port) => self
+                .ports
+                .get(port)
+                .cloned()
+                // .map(Expression::Var)
+                .ok_or(anyhow!("missing port {port}")),
+            Expression::Tuple(_) => todo!(),
+            Expression::Component(_, _) => todo!(),
+            Expression::And(exprs) => exprs
+                .into_iter()
+                .map(|expr| self.build_predicate(expr))
+                .collect::<Result<_, _>>()
+                .map(Expression::And),
+            Expression::Or(exprs) => exprs
+                .into_iter()
+                .map(|expr| self.build_predicate(expr))
+                .collect::<Result<_, _>>()
+                .map(Expression::Or),
+            Expression::Implies(exprs) => Ok(Expression::Implies(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
+            Expression::Not(expr) => self
+                .build_predicate(expr)
+                .map(|expr| Expression::Not(Box::new(expr))),
+            Expression::Opposite(expr) => self
+                .build_predicate(expr)
+                .map(|expr| Expression::Opposite(Box::new(expr))),
+            Expression::Sum(exprs) => exprs
+                .into_iter()
+                .map(|expr| self.build_predicate(expr))
+                .collect::<Result<_, _>>()
+                .map(Expression::Sum),
+            Expression::Mult(exprs) => exprs
+                .into_iter()
+                .map(|expr| self.build_predicate(expr))
+                .collect::<Result<_, _>>()
+                .map(Expression::Mult),
+            Expression::Equal(exprs) => Ok(Expression::Equal(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
+            Expression::Greater(exprs) => Ok(Expression::Greater(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
+            Expression::GreaterEq(exprs) => Ok(Expression::GreaterEq(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
+            Expression::Less(exprs) => Ok(Expression::Less(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
+            Expression::LessEq(exprs) => Ok(Expression::LessEq(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
+        }
+    }
+
+    fn build(self) -> ScxmlModel {
+        ScxmlModel {
+            model: CsModel::new(self.cs.build(), self.predicates.into_values().collect()),
+            properties: Vec::new(),
             fsm_names: self.fsm_names,
         }
     }

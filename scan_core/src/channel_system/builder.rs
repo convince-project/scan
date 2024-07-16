@@ -5,8 +5,8 @@ use super::{
 use crate::grammar::Type;
 use crate::Expression;
 use log::info;
-use std::collections::VecDeque;
-use std::{collections::HashMap, rc::Rc};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 /// An expression using CS's [`Var`] as variables.
 pub type CsExpression = Expression<Var>;
@@ -421,9 +421,9 @@ impl ChannelSystemBuilder {
 
         ChannelSystem {
             program_graphs,
-            communications: Rc::new(self.communications),
+            communications: Arc::new(self.communications),
             message_queue: vec![VecDeque::default(); self.channels.len()],
-            channels: Rc::new(self.channels),
+            channels: Arc::new(self.channels),
         }
     }
 }

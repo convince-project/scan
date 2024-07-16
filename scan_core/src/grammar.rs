@@ -5,6 +5,8 @@
 //! The language features base types and product types,
 //! Boolean logic and basic arithmetic expressions.
 
+use std::{collections::HashMap, hash::Hash};
+
 /// The types supported by the language internally used by PGs and CSs.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Type {
@@ -62,7 +64,7 @@ impl Val {
 #[derive(Debug, Clone)]
 pub enum Expression<V>
 where
-    V: Clone + Copy + PartialEq + Eq,
+    V: Clone,
 {
     // -------------------
     // General expressions
@@ -112,7 +114,7 @@ where
 
 impl<V> From<bool> for Expression<V>
 where
-    V: Clone + Copy + PartialEq + Eq,
+    V: Clone + Copy,
 {
     fn from(value: bool) -> Self {
         Expression::Const(Val::Boolean(value))
@@ -121,9 +123,244 @@ where
 
 impl<V> From<Integer> for Expression<V>
 where
-    V: Clone + Copy + PartialEq + Eq,
+    V: Clone + Copy,
 {
     fn from(value: Integer) -> Self {
         Expression::Const(Val::Integer(value))
+    }
+}
+
+pub(crate) struct FnExpression<C>(Box<dyn Fn(&C) -> Option<Val> + Send + Sync>);
+
+impl<C> std::fmt::Debug for FnExpression<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Expression")
+    }
+}
+
+impl<C> FnExpression<C> {
+    #[inline(always)]
+    pub fn eval(&self, vars: &C) -> Option<Val> {
+        self.0(vars)
+    }
+}
+
+impl<K> TryFrom<Expression<K>> for FnExpression<HashMap<K, Val>>
+where
+    K: Copy + Clone + Eq + Hash + Send + Sync + 'static,
+{
+    type Error = ();
+
+    fn try_from(value: Expression<K>) -> Result<Self, Self::Error> {
+        Ok(FnExpression(match value {
+            Expression::Const(val) => Box::new(move |_| Some(val.to_owned())),
+            Expression::Var(var) => Box::new(move |vars| vars.get(&var).cloned()),
+            Expression::Tuple(exprs) => {
+                let exprs: Vec<FnExpression<_>> = exprs
+                    .into_iter()
+                    .map(FnExpression::try_from)
+                    .collect::<Result<_, _>>()?;
+                Box::new(move |vars| {
+                    Some(Val::Tuple(
+                        exprs
+                            .iter()
+                            .map(|expr| expr.eval(vars))
+                            .collect::<Option<Vec<_>>>()?,
+                    ))
+                })
+            }
+            Expression::Component(index, expr) => {
+                let expr = Self::try_from(*expr)?;
+                Box::new(move |vars| {
+                    if let Val::Tuple(vals) = expr.eval(vars)? {
+                        vals.get(index).cloned()
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::And(exprs) => {
+                let exprs: Vec<FnExpression<_>> = exprs
+                    .into_iter()
+                    .map(Self::try_from)
+                    .collect::<Result<_, _>>()?;
+                Box::new(move |vars| {
+                    for expr in exprs.iter() {
+                        if let Val::Boolean(b) = expr.eval(vars)? {
+                            if b {
+                                continue;
+                            } else {
+                                return Some(Val::Boolean(false));
+                            }
+                        } else {
+                            return None;
+                        }
+                    }
+                    Some(Val::Boolean(true))
+                })
+            }
+            Expression::Or(exprs) => {
+                let exprs: Vec<FnExpression<_>> = exprs
+                    .into_iter()
+                    .map(Self::try_from)
+                    .collect::<Result<_, _>>()?;
+                Box::new(move |vars| {
+                    for expr in exprs.iter() {
+                        if let Val::Boolean(b) = expr.eval(vars)? {
+                            if b {
+                                return Some(Val::Boolean(true));
+                            } else {
+                                continue;
+                            }
+                        } else {
+                            return None;
+                        }
+                    }
+                    Some(Val::Boolean(false))
+                })
+            }
+            Expression::Implies(exprs) => {
+                let (lhs, rhs) = *exprs;
+                let lhs = FnExpression::try_from(lhs)?;
+                let rhs = FnExpression::try_from(rhs)?;
+                Box::new(move |vars| {
+                    if let (Val::Boolean(lhs), Val::Boolean(rhs)) =
+                        (lhs.eval(vars)?, rhs.eval(vars)?)
+                    {
+                        Some(Val::Boolean(rhs || !lhs))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::Not(expr) => {
+                let expr = FnExpression::try_from(*expr)?;
+                Box::new(move |vars| {
+                    if let Val::Boolean(b) = expr.eval(vars)? {
+                        Some(Val::Boolean(!b))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::Opposite(expr) => {
+                let expr = FnExpression::try_from(*expr)?;
+                Box::new(move |vars| {
+                    if let Val::Integer(i) = expr.eval(vars)? {
+                        Some(Val::Integer(-i))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::Sum(exprs) => {
+                let exprs: Vec<FnExpression<_>> = exprs
+                    .into_iter()
+                    .map(Self::try_from)
+                    .collect::<Result<_, _>>()?;
+                Box::new(move |vars| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            if let Val::Integer(i) = expr.eval(vars)? {
+                                Some(i)
+                            } else {
+                                None
+                            }
+                        })
+                        .sum::<Option<Integer>>()
+                        .map(Val::Integer)
+                })
+            }
+            Expression::Mult(exprs) => {
+                let exprs: Vec<FnExpression<_>> = exprs
+                    .into_iter()
+                    .map(Self::try_from)
+                    .collect::<Result<_, _>>()?;
+                Box::new(move |vars| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            if let Val::Integer(i) = expr.eval(vars)? {
+                                Some(i)
+                            } else {
+                                None
+                            }
+                        })
+                        .product::<Option<Integer>>()
+                        .map(Val::Integer)
+                })
+            }
+            Expression::Equal(exprs) => {
+                let (lhs, rhs) = *exprs;
+                let lhs = FnExpression::try_from(lhs)?;
+                let rhs = FnExpression::try_from(rhs)?;
+                Box::new(move |vars| {
+                    if let (Val::Integer(lhs), Val::Integer(rhs)) =
+                        (lhs.eval(vars)?, rhs.eval(vars)?)
+                    {
+                        Some(Val::Boolean(lhs == rhs))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::Greater(exprs) => {
+                let (lhs, rhs) = *exprs;
+                let lhs = FnExpression::try_from(lhs)?;
+                let rhs = FnExpression::try_from(rhs)?;
+                Box::new(move |vars| {
+                    if let (Val::Integer(lhs), Val::Integer(rhs)) =
+                        (lhs.eval(vars)?, rhs.eval(vars)?)
+                    {
+                        Some(Val::Boolean(lhs > rhs))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::GreaterEq(exprs) => {
+                let (lhs, rhs) = *exprs;
+                let lhs = FnExpression::try_from(lhs)?;
+                let rhs = FnExpression::try_from(rhs)?;
+                Box::new(move |vars| {
+                    if let (Val::Integer(lhs), Val::Integer(rhs)) =
+                        (lhs.eval(vars)?, rhs.eval(vars)?)
+                    {
+                        Some(Val::Boolean(lhs >= rhs))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::Less(exprs) => {
+                let (lhs, rhs) = *exprs;
+                let lhs = FnExpression::try_from(lhs)?;
+                let rhs = FnExpression::try_from(rhs)?;
+                Box::new(move |vars| {
+                    if let (Val::Integer(lhs), Val::Integer(rhs)) =
+                        (lhs.eval(vars)?, rhs.eval(vars)?)
+                    {
+                        Some(Val::Boolean(lhs < rhs))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expression::LessEq(exprs) => {
+                let (lhs, rhs) = *exprs;
+                let lhs = FnExpression::try_from(lhs)?;
+                let rhs = FnExpression::try_from(rhs)?;
+                Box::new(move |vars| {
+                    if let (Val::Integer(lhs), Val::Integer(rhs)) =
+                        (lhs.eval(vars)?, rhs.eval(vars)?)
+                    {
+                        Some(Val::Boolean(lhs <= rhs))
+                    } else {
+                        None
+                    }
+                })
+            }
+        }))
     }
 }

@@ -100,15 +100,16 @@ use thiserror::Error;
 
 use crate::grammar::*;
 use crate::program_graph::{Action as PgAction, Location as PgLocation, Var as PgVar, *};
+use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::{collections::HashMap, rc::Rc};
+use std::sync::Arc;
 
 /// An indexing object for PGs in a CS.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct PgId(usize);
+pub struct PgId(pub usize);
 
 impl From<PgId> for usize {
     fn from(val: PgId) -> Self {
@@ -121,7 +122,7 @@ impl From<PgId> for usize {
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Channel(usize);
+pub struct Channel(pub usize);
 
 /// An indexing object for locations in a CS.
 ///
@@ -145,8 +146,8 @@ pub struct Action(PgId, PgAction);
 pub struct Var(PgId, PgVar);
 
 /// A message to be sent through a CS's channel.
-#[derive(Debug, Clone, Copy)]
-enum Message {
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum Message {
     /// Sending the computed value of an expression to a channel.
     Send,
     /// Retrieving a value out of a channel and associating it to a variable.
@@ -246,8 +247,8 @@ pub enum EventType {
 #[derive(Debug, Clone)]
 pub struct ChannelSystem {
     program_graphs: Vec<ProgramGraph>,
-    channels: Rc<Vec<(Type, Option<usize>)>>,
-    communications: Rc<HashMap<Action, (Channel, Message)>>,
+    channels: Arc<Vec<(Type, Option<usize>)>>,
+    communications: Arc<HashMap<Action, (Channel, Message)>>,
     message_queue: Vec<VecDeque<Val>>,
 }
 
@@ -277,6 +278,26 @@ impl ChannelSystem {
                     }
                 })
             })
+    }
+
+    pub(crate) fn resolve_deterministic_transitions(&mut self) {
+        for (pg_id, pg) in self.program_graphs.iter_mut().enumerate() {
+            let pg_id = PgId(pg_id);
+            loop {
+                // `take(2)` because we need no more to establish the transition is non-deterministic
+                let trans: Vec<_> = pg.possible_transitions().take(2).collect();
+                if trans.len() == 1 {
+                    let (action, post) = trans[0];
+                    if self.communications.contains_key(&Action(pg_id, action)) {
+                        break;
+                    } else {
+                        pg.transition(action, post).expect("transition is possible");
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     fn check_communication(&self, pg_id: PgId, action: Action) -> Result<(), CsError> {

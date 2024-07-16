@@ -1,7 +1,7 @@
-use super::*;
-use crate::grammar::*;
+use super::{Action, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph, Var};
+use crate::grammar::{Type, Val};
 use log::info;
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone)]
 enum Effect {
@@ -546,8 +546,8 @@ impl ProgramGraphBuilder {
         ProgramGraph {
             current_location: Self::INITIAL_LOCATION,
             vars: self.vars,
-            effects: Rc::new(self.effects.into_iter().map(FnEffect::from).collect()),
-            transitions: Rc::new(
+            effects: Arc::new(self.effects.into_iter().map(FnEffect::from).collect()),
+            transitions: Arc::new(
                 self.transitions
                     .into_iter()
                     .map(|effects| {
