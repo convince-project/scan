@@ -15,28 +15,28 @@ use crate::parser::{ParserError, ATTR_ID, ATTR_REFID, ATTR_TYPE, TAG_CONST, TAG_
 
 use super::{ATTR_EVENT, ATTR_EXPR, ATTR_PARAM};
 
-const TAG_PORTS: &'static str = "ports";
-const TAG_PORT: &'static str = "port";
-const TAG_PROPERTIES: &'static str = "properties";
-const TAG_PREDICATES: &'static str = "predicates";
-const TAG_PREDICATE: &'static str = "predicate";
-const TAG_GUARANTEES: &'static str = "guarantees";
-const TAG_GUARANTEE: &'static str = "guarantee";
-const TAG_ORIGIN: &'static str = "origin";
-const TAG_TARGET: &'static str = "target";
-const TAG_MESSAGE: &'static str = "message";
-const TAG_EQUAL: &'static str = "equal";
-const TAG_LESS: &'static str = "less";
-const TAG_LEQ: &'static str = "leq";
-const TAG_GREATER: &'static str = "greater";
-const TAG_GEQ: &'static str = "geq";
-const TAG_AND: &'static str = "and";
-const TAG_OR: &'static str = "or";
-const TAG_NOT: &'static str = "not";
-const TAG_IMPLIES: &'static str = "implies";
-const TAG_SUM: &'static str = "sum";
-const TAG_MULT: &'static str = "mult";
-const TAG_OPPOSITE: &'static str = "opposite";
+const TAG_PORTS: &str = "ports";
+const TAG_PORT: &str = "port";
+const TAG_PROPERTIES: &str = "properties";
+const TAG_PREDICATES: &str = "predicates";
+const TAG_PREDICATE: &str = "predicate";
+const TAG_GUARANTEES: &str = "guarantees";
+const TAG_GUARANTEE: &str = "guarantee";
+const TAG_ORIGIN: &str = "origin";
+const TAG_TARGET: &str = "target";
+const TAG_MESSAGE: &str = "message";
+const TAG_EQUAL: &str = "equal";
+const TAG_LESS: &str = "less";
+const TAG_LEQ: &str = "leq";
+const TAG_GREATER: &str = "greater";
+const TAG_GEQ: &str = "geq";
+const TAG_AND: &str = "and";
+const TAG_OR: &str = "or";
+const TAG_NOT: &str = "not";
+const TAG_IMPLIES: &str = "implies";
+const TAG_SUM: &str = "sum";
+const TAG_MULT: &str = "mult";
+const TAG_OPPOSITE: &str = "opposite";
 
 #[derive(Debug, Clone)]
 enum PropertyTag {
@@ -627,8 +627,8 @@ impl Properties {
         let val = val.ok_or(anyhow!("missing expression"))?;
 
         match r#type.ok_or(anyhow!("missing type"))?.as_str() {
-            "int32" => Ok(val.parse::<i32>().map(|c| Val::Integer(c))?),
-            "boolean" => Ok(val.parse::<bool>().map(|b| Val::Boolean(b))?),
+            "int32" => Ok(val.parse::<i32>().map(Val::Integer)?),
+            "boolean" => Ok(val.parse::<bool>().map(Val::Boolean)?),
             unknown => Err(anyhow!("unwnown type {unknown}")),
         }
     }

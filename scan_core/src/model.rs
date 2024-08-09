@@ -1,52 +1,116 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::channel_system::{Channel, ChannelSystem, Event, EventType, Message, PgId};
+use crate::channel_system::{Channel, ChannelSystem, Event, EventType};
 use crate::transition_system::TransitionSystem;
 use crate::{Expression, FnExpression, Val};
 
-pub type MdVar = (PgId, Channel, Message);
+// pub type MdVar = (PgId, Channel, Message);
+pub type Port = Channel;
 
-type FnMdExpression = FnExpression<HashMap<MdVar, Val>>;
+type FnMdExpression = FnExpression<HashMap<Port, Val>>;
 
-#[derive(Debug, Clone)]
-pub struct CsModel {
-    current_state: ChannelSystem,
-    vals: HashMap<MdVar, Val>,
-    propositions: Arc<Vec<FnMdExpression>>,
+#[derive(Debug)]
+pub struct CsModelBuilder {
+    cs: ChannelSystem,
+    vals: HashMap<Channel, Val>,
+    predicates: Vec<FnMdExpression>,
 }
 
-impl CsModel {
-    pub fn new(current_state: ChannelSystem, propositions: Vec<Expression<MdVar>>) -> Self {
+impl CsModelBuilder {
+    pub fn new(initial_state: ChannelSystem) -> Self {
+        // TODO: Check predicates are Boolean expressions and that conversion does not fail
         Self {
-            current_state,
+            cs: initial_state,
             vals: HashMap::new(),
-            propositions: Arc::new(
-                propositions
-                    .into_iter()
-                    .map(|prop| FnMdExpression::try_from(prop))
-                    .collect::<Result<_, _>>()
-                    .unwrap(),
-            ),
+            predicates: Vec::new(),
         }
     }
 
+    pub fn add_port(&mut self, channel: Channel, val: Val) -> Result<(), ()> {
+        if self.vals.contains_key(&channel) {
+            Err(())
+        } else {
+            self.vals.insert(channel, val);
+            Ok(())
+        }
+    }
+
+    pub fn add_predicate(&mut self, predicate: Expression<Port>) -> Result<(), ()> {
+        let predicate = FnMdExpression::try_from(predicate)?;
+        if predicate.eval(&self.vals).is_some() {
+            self.predicates.push(predicate);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn build(self) -> CsModel {
+        CsModel {
+            cs: self.cs,
+            vals: self.vals,
+            predicates: Arc::new(self.predicates),
+        }
+    }
+}
+
+/// Transition system model based on a [`ChannelSystem`].
+///
+/// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
+/// (i.e., of the [`Message`]s sent to and from [`Channel`]s)
+/// and determining a set of predicates.
+#[derive(Debug, Clone)]
+pub struct CsModel {
+    cs: ChannelSystem,
+    vals: HashMap<Channel, Val>,
+    predicates: Arc<Vec<FnMdExpression>>,
+}
+
+impl CsModel {
+    // /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
+    // ///
+    // /// Predicates have to be passed all at once,
+    // /// as it is not possible to add any further ones after the [`CsModel`] has been initialized.
+    // pub fn new(
+    //     current_state: ChannelSystem,
+    //     predicates: Vec<Expression<Port>>,
+    //     initial: HashMap<Port, Val>,
+    // ) -> Self {
+    //     // TODO: Check predicates are Boolean expressions and that conversion does not fail
+    //     Self {
+    //         cs: current_state,
+    //         vals: initial,
+    //         predicates: Arc::new(
+    //             predicates
+    //                 .into_iter()
+    //                 .map(FnMdExpression::try_from)
+    //                 .collect::<Result<_, _>>()
+    //                 .unwrap(),
+    //         ),
+    //     }
+    // }
+
+    /// Gets the underlying [`ChannelSystem`].
     pub fn channel_system(&self) -> &ChannelSystem {
-        &self.current_state
+        &self.cs
     }
 }
 
 impl TransitionSystem for CsModel {
     type Action = Event;
 
-    fn labels(&self) -> Vec<Option<bool>> {
-        self.propositions
+    fn labels(&self) -> Vec<bool> {
+        self.predicates
             .iter()
             .map(|prop| {
                 if let Some(Val::Boolean(b)) = prop.eval(&self.vals) {
-                    Some(b)
+                    // Some(b)
+                    b
                 } else {
-                    None
+                    // None
+                    // FIXME
+                    panic!("I don't know how to handle this");
                 }
             })
             .collect()
@@ -56,38 +120,40 @@ impl TransitionSystem for CsModel {
         // IntoIterator::into_iter(self.clone().list_transitions())
         // Perform all transitions that are deterministic and do not interact with channels.
         // The order in which these are performed does not matter.
-        self.current_state.resolve_deterministic_transitions();
-        self.current_state
+        self.cs.resolve_deterministic_transitions();
+        self.cs
             .possible_transitions()
-            .map(|(pg_id, action, post)| {
+            .flat_map(|(pg_id, action, post)| {
                 let mut model = self.clone();
                 let event = model
-                    .current_state
+                    .cs
                     .transition(pg_id, action, post)
                     .expect("transition is possible");
                 if let Some(event) = event {
-                    match event.event_type {
-                        EventType::Send(ref val) => {
-                            model.vals.insert(
-                                (event.pg_id, event.channel, Message::Send),
-                                val.to_owned(),
-                            );
-                        }
-                        EventType::Receive(ref val) => {
-                            model.vals.insert(
-                                (event.pg_id, event.channel, Message::Receive),
-                                val.to_owned(),
-                            );
-                        }
-                        // No meaningful value can be associated to these events.
-                        EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => {}
-                    };
+                    if let EventType::Receive(ref val) = event.event_type {
+                        model.vals.insert(event.channel, val.to_owned());
+                    }
+                    // match event.event_type {
+                    //     EventType::Send(ref val) => {
+                    //         model.vals.insert(
+                    //             (event.pg_id, event.channel, Message::Send),
+                    //             val.to_owned(),
+                    //         );
+                    //     }
+                    //     EventType::Receive(ref val) => {
+                    //         model.vals.insert(
+                    //             (event.pg_id, event.channel, Message::Receive),
+                    //             val.to_owned(),
+                    //         );
+                    //     }
+                    //     // No meaningful value can be associated to these events.
+                    //     EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => {}
+                    // };
                     vec![(event, model)]
                 } else {
                     model.transitions()
                 }
             })
-            .flatten()
             .collect::<Vec<_>>()
     }
 }

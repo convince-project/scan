@@ -143,7 +143,9 @@ pub enum PgError {
     NotReceive(Action),
 }
 
-struct FnExpression(Box<dyn Fn(&[Val]) -> Val + Send + Sync>);
+type FnExpr = Box<dyn Fn(&[Val]) -> Val + Send + Sync>;
+
+struct FnExpression(FnExpr);
 
 impl std::fmt::Debug for FnExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

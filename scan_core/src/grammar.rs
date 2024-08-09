@@ -149,6 +149,7 @@ impl<K> TryFrom<Expression<K>> for FnExpression<HashMap<K, Val>>
 where
     K: Copy + Clone + Eq + Hash + Send + Sync + 'static,
 {
+    // TODO FIXME: Use more significative error type
     type Error = ();
 
     fn try_from(value: Expression<K>) -> Result<Self, Self::Error> {

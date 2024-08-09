@@ -1,14 +1,27 @@
 use crate::Mtl;
 use rayon::prelude::*;
 
-pub trait TransitionSystem: Clone + Send + Sync {
-    type Action: Clone + Send + Sync;
+/// Trait implementing a Transition System (TS), as defined in [^1].
+/// As such, it is possible to verify it against MTL specifications.
+///
+/// [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
+pub trait TransitionSystem: Clone + Send {
+    /// The type of the actions that trigger transitions between states in the TS.
+    type Action: Send;
 
-    fn labels(&self) -> Vec<Option<bool>>;
+    /// The label function of the TS valuates the propositions of its set of propositions for the current state.
+    // TODO FIXME: bitset instead of Vec<bool>?
+    fn labels(&self) -> Vec<bool>;
 
+    /// The transition relation relates [`Self::Action`]s and post-states that constitutes possible transitions from the current state.
     fn transitions(self) -> Vec<(Self::Action, Self)>;
 
-    fn check(self, properties: &[Mtl<usize>]) -> Option<Vec<(Self::Action, Vec<Option<bool>>)>> {
+    /// Verifies the TS against the provided [`Mtl`] specifications,
+    /// and, when it finds a counterexample, it returns iys execution trace.
+    ///
+    /// It uses a depth-first, exhaustive search algorithm.
+    /// Search is parallelized.
+    fn check(self, properties: &[Mtl<usize>]) -> Option<Vec<(Self::Action, Vec<bool>)>> {
         self.transitions()
             .into_par_iter()
             .find_map_first(|(action, ts)| {
@@ -18,7 +31,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
                     assert!(trace_len <= trace.len());
                     trace.truncate(trace_len);
                     let labels = ts.labels();
-                    let all_labels_true = labels.iter().all(|b| b.unwrap_or(true));
+                    let all_labels_true = labels.iter().all(|b| *b);
                     trace.push((action, labels));
                     // TODO here properties should be checked
                     // For now we just make a simple truth check

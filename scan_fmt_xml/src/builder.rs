@@ -1,6 +1,10 @@
 //! Model builder for SCAN's XML specification format.
 
-use crate::parser::*;
+use crate::parser::{
+    Bt, BtNode, Executable, Fsm, If, MoC, OmgType, OmgTypes, Param, Parser, Scxml, Send, Target,
+    ACTION_RESPONSE, CONDITION_RESPONSE, FAILURE, HALT_CALL, HALT_RETURN, RESULT, RUNNING, SUCCESS,
+    TICK_CALL, TICK_RETURN,
+};
 use anyhow::anyhow;
 use log::{info, trace};
 use scan_core::{channel_system::*, *};
@@ -74,8 +78,8 @@ pub struct ModelBuilder {
     // that is needed
     parameters: HashMap<(PgId, PgId, usize, String), Channel>,
     // Properties
-    predicates: HashMap<String, Expression<MdVar>>,
-    ports: HashMap<String, Expression<MdVar>>,
+    predicates: HashMap<String, Expression<Port>>,
+    ports: HashMap<String, (Port, Type)>,
 }
 
 impl ModelBuilder {
@@ -1947,22 +1951,28 @@ impl ModelBuilder {
                     .parameters
                     .get(&(origin, target, event_id, param.to_owned()))
                     .ok_or(anyhow!("param {param} not found"))?;
-                let var = (target, channel, Message::Receive);
-                self.ports.insert(port_id.to_owned(), Expression::Var(var));
+                // let var = (target, channel, Message::Receive);
+                // self.ports.insert(port_id.to_owned(), Expression::Var(var));
+                let port_type = self
+                    .types
+                    .get(&port.r#type)
+                    .ok_or(anyhow!("type {} not found", port.r#type))?;
+                self.ports
+                    .insert(port_id.to_owned(), (channel, port_type.1.clone()));
             } else {
                 let channel = target_builder.ext_queue;
-                let var = (target, channel, Message::Receive);
+                // let var = (target, channel, Message::Receive);
                 let expr = Expression::And(vec![
                     Expression::Equal(Box::new((
                         Expression::from(event_id as Integer),
-                        Expression::Component(0, Box::new(Expression::Var(var))),
+                        Expression::Component(0, Box::new(Expression::Var(channel))),
                     ))),
                     Expression::Equal(Box::new((
                         Expression::from(Into::<usize>::into(origin) as Integer),
-                        Expression::Component(1, Box::new(Expression::Var(var))),
+                        Expression::Component(1, Box::new(Expression::Var(channel))),
                     ))),
                 ]);
-                self.ports.insert(port_id.to_owned(), expr);
+                self.predicates.insert(port_id.to_owned(), expr);
             }
         }
         for (predicate_id, predicate) in parser.properties.predicates.iter() {
@@ -1972,24 +1982,25 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_predicate(&self, predicate: &Expression<String>) -> anyhow::Result<Expression<MdVar>> {
+    fn build_predicate(&self, predicate: &Expression<String>) -> anyhow::Result<Expression<Port>> {
         match predicate {
             Expression::Const(val) => Ok(Expression::Const(val.to_owned())),
             Expression::Var(port) => self
                 .ports
                 .get(port)
                 .cloned()
-                // .map(Expression::Var)
+                .map(|(port, _)| Expression::Var(port))
+                .or_else(|| self.predicates.get(port).map(|pred| pred.to_owned()))
                 .ok_or(anyhow!("missing port {port}")),
             Expression::Tuple(_) => todo!(),
             Expression::Component(_, _) => todo!(),
             Expression::And(exprs) => exprs
-                .into_iter()
+                .iter()
                 .map(|expr| self.build_predicate(expr))
                 .collect::<Result<_, _>>()
                 .map(Expression::And),
             Expression::Or(exprs) => exprs
-                .into_iter()
+                .iter()
                 .map(|expr| self.build_predicate(expr))
                 .collect::<Result<_, _>>()
                 .map(Expression::Or),
@@ -2004,12 +2015,12 @@ impl ModelBuilder {
                 .build_predicate(expr)
                 .map(|expr| Expression::Opposite(Box::new(expr))),
             Expression::Sum(exprs) => exprs
-                .into_iter()
+                .iter()
                 .map(|expr| self.build_predicate(expr))
                 .collect::<Result<_, _>>()
                 .map(Expression::Sum),
             Expression::Mult(exprs) => exprs
-                .into_iter()
+                .iter()
                 .map(|expr| self.build_predicate(expr))
                 .collect::<Result<_, _>>()
                 .map(Expression::Mult),
@@ -2037,8 +2048,15 @@ impl ModelBuilder {
     }
 
     fn build(self) -> ScxmlModel {
+        let mut model = CsModelBuilder::new(self.cs.build());
+        for (port_name, (port, port_type)) in self.ports {
+            model.add_port(port, port_type.default_value());
+        }
+        for (pred_name, pred_expr) in self.predicates {
+            model.add_predicate(pred_expr);
+        }
         ScxmlModel {
-            model: CsModel::new(self.cs.build(), self.predicates.into_values().collect()),
+            model: model.build(),
             properties: Vec::new(),
             fsm_names: self.fsm_names,
         }
