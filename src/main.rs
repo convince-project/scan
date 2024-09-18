@@ -40,7 +40,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Verifying model");
             let parser = Parser::parse(cli.model.to_owned())?;
             let scxml_model = ModelBuilder::visit(parser)?;
-            let result = scxml_model.model.check(&scxml_model.properties);
+            let props = Properties {
+                guarantees: scxml_model.guarantees,
+                assumes: scxml_model.assumes,
+            };
+            let result = scxml_model.model.check_statistics(props);
             if let Some(trace) = result {
                 println!("COUNTER-EXAMPLE:\n{trace:?}");
             } else {
@@ -49,14 +53,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Commands::Parse => {
             println!("Parsing model");
-            let model = Parser::parse(cli.model.to_owned())?;
-            println!("{model:#?}");
+            let parser = Parser::parse(cli.model.to_owned())?;
+            println!("{parser:#?}");
             println!("Model successfully parsed");
         }
         Commands::Build => {
             println!("Building model");
-            let model = Parser::parse(cli.model.to_owned())?;
-            let model = ModelBuilder::visit(model)?;
+            let parser = Parser::parse(cli.model.to_owned())?;
+            let model = ModelBuilder::visit(parser)?;
             println!("{model:#?}");
             println!("Model successfully built");
         }

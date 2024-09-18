@@ -10,6 +10,15 @@ pub type Port = Channel;
 
 type FnMdExpression = FnExpression<HashMap<Port, Val>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PredicateId(usize);
+
+impl From<PredicateId> for usize {
+    fn from(val: PredicateId) -> Self {
+        val.0
+    }
+}
+
 #[derive(Debug)]
 pub struct CsModelBuilder {
     cs: ChannelSystem,
@@ -28,19 +37,19 @@ impl CsModelBuilder {
     }
 
     pub fn add_port(&mut self, channel: Channel, val: Val) -> Result<(), ()> {
-        if self.vals.contains_key(&channel) {
-            Err(())
-        } else {
-            self.vals.insert(channel, val);
+        if let std::collections::hash_map::Entry::Vacant(e) = self.vals.entry(channel) {
+            e.insert(val);
             Ok(())
+        } else {
+            Err(())
         }
     }
 
-    pub fn add_predicate(&mut self, predicate: Expression<Port>) -> Result<(), ()> {
+    pub fn add_predicate(&mut self, predicate: Expression<Port>) -> Result<usize, ()> {
         let predicate = FnMdExpression::try_from(predicate)?;
         if predicate.eval(&self.vals).is_some() {
             self.predicates.push(predicate);
-            Ok(())
+            Ok(self.predicates.len() - 1)
         } else {
             Err(())
         }

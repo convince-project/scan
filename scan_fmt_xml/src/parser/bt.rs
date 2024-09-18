@@ -11,9 +11,9 @@ use std::str;
 pub enum BtNode {
     RSeq(Vec<BtNode>),
     RFbk(Vec<BtNode>),
-    MSeq(Vec<BtNode>),
-    MFbk(Vec<BtNode>),
-    Invr(Box<BtNode>),
+    // MSeq(Vec<BtNode>),
+    // MFbk(Vec<BtNode>),
+    // Invr(Box<BtNode>),
     LAct(String),
     LCnd(String),
 }

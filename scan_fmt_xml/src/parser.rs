@@ -63,7 +63,6 @@ pub enum ParserError {
 enum ConvinceTag {
     Specification,
     Model,
-    Properties,
     ProcessList,
     DataTypeList,
     Enumeration(String),
@@ -75,7 +74,6 @@ impl From<ConvinceTag> for &'static str {
         match value {
             ConvinceTag::Specification => TAG_SPECIFICATION,
             ConvinceTag::Model => TAG_MODEL,
-            ConvinceTag::Properties => TAG_PROPERTIES,
             ConvinceTag::ProcessList => TAG_PROCESS_LIST,
             ConvinceTag::DataTypeList => TAG_DATA_TYPE_LIST,
             ConvinceTag::Enumeration(_) => TAG_ENUMERATION,

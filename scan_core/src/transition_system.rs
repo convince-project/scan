@@ -1,5 +1,13 @@
 use crate::Mtl;
-use rayon::prelude::*;
+use rand::prelude::*;
+// use rayon::prelude::*;
+
+pub struct Properties {
+    pub guarantees: Vec<Mtl<usize>>,
+    pub assumes: Vec<Mtl<usize>>,
+}
+
+// trait Oracle: Clone + Sync + Send + FnMut(&[bool]) -> bool {}
 
 /// Trait implementing a Transition System (TS), as defined in [^1].
 /// As such, it is possible to verify it against MTL specifications.
@@ -7,7 +15,7 @@ use rayon::prelude::*;
 /// [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
 pub trait TransitionSystem: Clone + Send {
     /// The type of the actions that trigger transitions between states in the TS.
-    type Action: Send;
+    type Action: Clone + Send;
 
     /// The label function of the TS valuates the propositions of its set of propositions for the current state.
     // TODO FIXME: bitset instead of Vec<bool>?
@@ -21,37 +29,74 @@ pub trait TransitionSystem: Clone + Send {
     ///
     /// It uses a depth-first, exhaustive search algorithm.
     /// Search is parallelized.
-    fn check(self, properties: &[Mtl<usize>]) -> Option<Vec<(Self::Action, Vec<bool>)>> {
-        self.transitions()
-            .into_par_iter()
-            .find_map_first(|(action, ts)| {
-                let mut queue = Vec::from([(0, action, ts)]);
-                let mut trace = Vec::new();
-                while let Some((trace_len, action, ts)) = queue.pop() {
-                    assert!(trace_len <= trace.len());
-                    trace.truncate(trace_len);
-                    let labels = ts.labels();
-                    let all_labels_true = labels.iter().all(|b| *b);
-                    trace.push((action, labels));
-                    // TODO here properties should be checked
-                    // For now we just make a simple truth check
-                    if all_labels_true {
-                        // pop from back and push in front (FIFO queue): width-first-search
-                        // WARN: requires memorizing all traces and uses too much memory.
+    // fn check_exhaustive(self, props: Properties) -> Option<Vec<(Self::Action, Vec<bool>)>> {
+    //     // let oracle_guarantees: Vec<Box<dyn Oracle>> =
+    //     //     props.guarantees.into_iter().map(|_| todo!()).collect();
+    //     // let oracle_assumes: Vec<Box<dyn Oracle>> =
+    //     //     props.assumes.into_iter().map(|_| todo!()).collect();
+    //     self.transitions()
+    //         .into_par_iter()
+    //         .find_map_first(move |(action, ts)| {
+    //             let mut queue = Vec::from([(0, action, ts)]);
+    //             let mut trace = Vec::new();
+    //             while let Some((trace_len, action, ts)) = queue.pop() {
+    //                 assert!(trace_len <= trace.len());
+    //                 trace.truncate(trace_len);
+    //                 let labels = ts.labels();
+    //                 if !props.assumes.iter_mut().all(|p| p(&labels)) {
+    //                     // If some assume is not satisfied,
+    //                     // disregard state and move on.
+    //                     continue;
+    //                 } else if props.guarantees.iter_mut().all(|p| p(&labels)) {
+    //                     // If all guarantees are satisfied,
+    //                     // expand branching search for a counterexample along this trace.
+    //                     trace.push((action, labels));
 
-                        // pop from back and push back (stack): depth-first-search
-                        // Generate all possible transitions and resulting state.
-                        queue.extend(
-                            ts.transitions()
-                                .into_iter()
-                                .map(|(a, ts)| (trace_len + 1, a, ts)),
-                        );
-                    } else {
-                        // If condition is violated, we have found a counter-example!
-                        return Some(trace);
-                    }
-                }
-                None
-            })
+    //                     // pop from back and push back (stack): depth-first-search
+    //                     // Generate all possible transitions and resulting state.
+    //                     queue.extend(
+    //                         ts.transitions()
+    //                             .into_iter()
+    //                             .map(|(a, ts)| (trace_len + 1, a, ts)),
+    //                     );
+
+    //                     // pop from back and push in front (FIFO queue): width-first-search
+    //                     // WARN: requires memorizing all traces and uses too much memory.
+    //                 } else {
+    //                     // If guarantee is violated, we have found a counter-example!
+    //                     trace.push((action, labels));
+    //                     return Some(trace);
+    //                 }
+    //             }
+    //             None
+    //         })
+    // }
+
+    fn check_statistics(self, props: Properties) -> Option<Vec<(Self::Action, Vec<bool>)>> {
+        let mut rng = rand::thread_rng();
+        loop {
+            let mut ts = self.clone();
+            let mut trace = Vec::new();
+            let mut actions = Vec::new();
+            while let Some((action, new_ts)) = ts.transitions().choose(&mut rng) {
+                let labels = new_ts.labels();
+                trace.push(labels);
+                actions.push(action.to_owned());
+                ts = new_ts.to_owned();
+            }
+            if !props.assumes.iter().all(|p| p.eval(trace.as_slice())) {
+                // If some assume is not satisfied,
+                // disregard state and move on.
+                continue;
+            } else if props.guarantees.iter().all(|p| p.eval(trace.as_slice())) {
+                // If all guarantees are satisfied,
+                continue;
+            } else {
+                // If guarantee is violated, we have found a counter-example!
+                let annotated_trace: Vec<(Self::Action, Vec<bool>)> =
+                    actions.into_iter().zip(trace).collect();
+                return Some(annotated_trace);
+            }
+        }
     }
 }

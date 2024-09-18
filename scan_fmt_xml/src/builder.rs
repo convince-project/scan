@@ -17,7 +17,8 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug)]
 pub struct ScxmlModel {
     pub model: CsModel,
-    pub properties: Vec<Mtl<usize>>,
+    pub guarantees: Vec<Mtl<usize>>,
+    pub assumes: Vec<Mtl<usize>>,
     pub fsm_names: HashMap<PgId, String>,
     // TODO: ...other stuff needed to backtrack scxml's ids
 }
@@ -78,6 +79,8 @@ pub struct ModelBuilder {
     // that is needed
     parameters: HashMap<(PgId, PgId, usize, String), Channel>,
     // Properties
+    guarantees: HashMap<String, Mtl<String>>,
+    assumes: HashMap<String, Mtl<String>>,
     predicates: HashMap<String, Expression<Port>>,
     ports: HashMap<String, (Port, Type)>,
 }
@@ -99,6 +102,8 @@ impl ModelBuilder {
             events: Vec::new(),
             event_indexes: HashMap::new(),
             parameters: HashMap::new(),
+            guarantees: HashMap::new(),
+            assumes: HashMap::new(),
             predicates: HashMap::new(),
             ports: HashMap::new(),
         };
@@ -287,16 +292,15 @@ impl ModelBuilder {
 
     fn prebuild_node(&mut self, pg_id: PgId, node: &BtNode) -> anyhow::Result<()> {
         match node {
-            BtNode::RSeq(children)
-            | BtNode::RFbk(children)
-            | BtNode::MSeq(children)
-            | BtNode::MFbk(children) => {
+            // | BtNode::MSeq(children)
+            // | BtNode::MFbk(children) => {
+            BtNode::RSeq(children) | BtNode::RFbk(children) => {
                 for child in children {
                     self.prebuild_node(pg_id, child)?;
                 }
                 Ok(())
             }
-            BtNode::Invr(child) => self.prebuild_node(pg_id, child),
+            // BtNode::Invr(child) => self.prebuild_node(pg_id, child),
             BtNode::LAct(action) => {
                 let event_index = self.event_index(&(action.to_owned() + "_" + TICK_CALL));
                 let builder = self.events.get_mut(event_index).expect("index must exist");
@@ -543,6 +547,7 @@ impl ModelBuilder {
     /// - pt_failure: the parent node receives a tick return with state failure
     /// - pt_halt: the parent node sends an halt signal
     /// - pt_ack: the parent node receives an ack signal
+    ///
     /// Moreover, we consider the following nodes:
     /// - pt_*: parent node
     /// - loc_*: current node (loc=location)
@@ -728,15 +733,15 @@ impl ModelBuilder {
                     )
                     .expect("hand-made args");
             }
-            BtNode::MSeq(_branches) => todo!(),
-            BtNode::MFbk(_branches) => todo!(),
-            BtNode::Invr(branch) => {
-                // Swap success and failure.
-                self.build_bt_node(
-                    pg_id, pt_tick, pt_failure, pt_running, pt_success, pt_halt, pt_ack, step,
-                    branch,
-                )?;
-            }
+            // BtNode::MSeq(_branches) => todo!(),
+            // BtNode::MFbk(_branches) => todo!(),
+            // BtNode::Invr(branch) => {
+            //     // Swap success and failure.
+            //     self.build_bt_node(
+            //         pg_id, pt_tick, pt_failure, pt_running, pt_success, pt_halt, pt_ack, step,
+            //         branch,
+            //     )?;
+            // }
             BtNode::LAct(action) => {
                 trace!("building bt leaf {action}");
                 let caller_name = self.fsm_names.get(&pg_id).unwrap();
@@ -1961,6 +1966,10 @@ impl ModelBuilder {
                     .insert(port_id.to_owned(), (channel, port_type.1.clone()));
             } else {
                 let channel = target_builder.ext_queue;
+                self.ports.insert(
+                    format!("{target:?}"),
+                    (channel, Type::Product(vec![Type::Integer, Type::Integer])),
+                );
                 // let var = (target, channel, Message::Receive);
                 let expr = Expression::And(vec![
                     Expression::Equal(Box::new((
@@ -1978,6 +1987,14 @@ impl ModelBuilder {
         for (predicate_id, predicate) in parser.properties.predicates.iter() {
             let predicate = self.build_predicate(predicate)?;
             self.predicates.insert(predicate_id.to_owned(), predicate);
+        }
+        for (property_id, property) in parser.properties.guarantees.iter() {
+            self.guarantees
+                .insert(property_id.to_owned(), property.to_owned());
+        }
+        for (property_id, property) in parser.properties.assumes.iter() {
+            self.assumes
+                .insert(property_id.to_owned(), property.to_owned());
         }
         Ok(())
     }
@@ -2049,16 +2066,69 @@ impl ModelBuilder {
 
     fn build(self) -> ScxmlModel {
         let mut model = CsModelBuilder::new(self.cs.build());
-        for (port_name, (port, port_type)) in self.ports {
-            model.add_port(port, port_type.default_value());
+        let mut pred_names: HashMap<String, usize> = HashMap::new();
+        for (_port_name, (port, port_type)) in self.ports {
+            // TODO FIXME handle error.
+            model.add_port(port, port_type.default_value()).unwrap();
         }
         for (pred_name, pred_expr) in self.predicates {
-            model.add_predicate(pred_expr);
+            // TODO FIXME handle error.
+            let id = model.add_predicate(pred_expr).unwrap();
+            pred_names.insert(pred_name, id);
         }
         ScxmlModel {
             model: model.build(),
-            properties: Vec::new(),
+            guarantees: self
+                .guarantees
+                .into_values()
+                .map(|prop| map_predicates_in_property(prop, &pred_names))
+                .collect(),
+            assumes: self
+                .assumes
+                .into_values()
+                .map(|prop| map_predicates_in_property(prop, &pred_names))
+                .collect(),
             fsm_names: self.fsm_names,
         }
+    }
+}
+
+fn map_predicates_in_property(
+    property: Mtl<String>,
+    predicates: &HashMap<String, usize>,
+) -> Mtl<usize> {
+    match property {
+        Mtl::True => Mtl::True,
+        // FIXME TODO handle error
+        Mtl::Atom(pred) => Mtl::Atom(*predicates.get(&pred).unwrap()),
+        Mtl::And(formulae) => Mtl::And(
+            formulae
+                .into_iter()
+                .map(|f| map_predicates_in_property(f, predicates))
+                .collect(),
+        ),
+        // Mtl::Or(formulae) => Mtl::Or(
+        //     formulae
+        //         .into_iter()
+        //         .map(|f| map_predicates_in_property(f, predicates))
+        //         .collect(),
+        // ),
+        Mtl::Not(formula) => Mtl::Not(Box::new(map_predicates_in_property(*formula, predicates))),
+        // Mtl::Implies(_) => todo!(),
+        Mtl::Next(_) => todo!(),
+        Mtl::Until(formulae, range) => {
+            let (lhs, rhs) = *formulae;
+            Mtl::Until(
+                Box::new((
+                    map_predicates_in_property(lhs, predicates),
+                    map_predicates_in_property(rhs, predicates),
+                )),
+                range,
+            )
+        } // Mtl::WeakUntil(_, _) => todo!(),
+          // Mtl::Release(_, _) => todo!(),
+          // Mtl::WeakRelease(_, _) => todo!(),
+          // Mtl::Eventually(_, _) => todo!(),
+          // Mtl::Always(_, _) => todo!(),
     }
 }
