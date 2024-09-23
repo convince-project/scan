@@ -1,6 +1,6 @@
 use crate::Mtl;
 use rand::prelude::*;
-// use rayon::prelude::*;
+use rayon::prelude::*;
 
 pub struct Properties {
     pub guarantees: Vec<Mtl<usize>>,
@@ -13,7 +13,7 @@ pub struct Properties {
 /// As such, it is possible to verify it against MTL specifications.
 ///
 /// [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
-pub trait TransitionSystem: Clone + Send {
+pub trait TransitionSystem: Clone + Send + Sync {
     /// The type of the actions that trigger transitions between states in the TS.
     type Action: Clone + Send;
 
@@ -72,31 +72,30 @@ pub trait TransitionSystem: Clone + Send {
     //         })
     // }
 
-    fn check_statistics(self, props: Properties) -> Option<Vec<(Self::Action, Vec<bool>)>> {
-        let mut rng = rand::thread_rng();
-        loop {
+    fn check_statistics(&self, props: Properties) -> Option<Vec<(Self::Action, Vec<bool>)>> {
+        (0..).par_bridge().find_map_any(|_| {
+            let mut rng = rand::thread_rng();
             let mut ts = self.clone();
-            let mut trace = Vec::new();
+            let mut trace = vec![ts.labels()];
             let mut actions = Vec::new();
             while let Some((action, new_ts)) = ts.transitions().choose(&mut rng) {
-                let labels = new_ts.labels();
-                trace.push(labels);
+                trace.push(new_ts.labels());
                 actions.push(action.to_owned());
                 ts = new_ts.to_owned();
             }
             if !props.assumes.iter().all(|p| p.eval(trace.as_slice())) {
                 // If some assume is not satisfied,
                 // disregard state and move on.
-                continue;
+                None
             } else if props.guarantees.iter().all(|p| p.eval(trace.as_slice())) {
                 // If all guarantees are satisfied,
-                continue;
+                None
             } else {
                 // If guarantee is violated, we have found a counter-example!
                 let annotated_trace: Vec<(Self::Action, Vec<bool>)> =
                     actions.into_iter().zip(trace).collect();
-                return Some(annotated_trace);
+                Some(annotated_trace)
             }
-        }
+        })
     }
 }

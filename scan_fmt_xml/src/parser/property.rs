@@ -1,6 +1,7 @@
 use super::{ATTR_EVENT, ATTR_EXPR, ATTR_PARAM};
 use crate::parser::{ParserError, ATTR_ID, ATTR_REFID, ATTR_TYPE, TAG_CONST, TAG_VAR};
 use anyhow::{anyhow, Context};
+use boa_ast::StatementListItem;
 use log::{error, info, trace, warn};
 use quick_xml::{
     events::{
@@ -42,7 +43,7 @@ const TAG_TRUE: &str = "true";
 #[derive(Debug, Clone)]
 enum PropertyTag {
     Ports,
-    Port(String, Port),
+    Port(String, ParserPort),
     Properties,
     Predicates,
     Predicate(String, Option<Expression<String>>),
@@ -106,15 +107,15 @@ impl PropertyTag {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Port {
+pub(crate) struct ParserPort {
     pub(crate) r#type: String,
     pub(crate) origin: String,
     pub(crate) target: String,
     pub(crate) event: String,
-    pub(crate) param: Option<String>,
+    pub(crate) param: Option<(String, boa_ast::Expression)>,
 }
 
-impl Port {
+impl ParserPort {
     fn parse(tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<(String, Self)> {
         let mut port_id: Option<String> = None;
         let mut r#type: Option<String> = None;
@@ -141,7 +142,7 @@ impl Port {
 
         Ok((
             port_id,
-            Port {
+            ParserPort {
                 r#type,
                 origin: String::new(),
                 target: String::new(),
@@ -154,6 +155,7 @@ impl Port {
     fn parse_event(&mut self, tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<()> {
         let mut event: Option<String> = None;
         let mut param: Option<String> = None;
+        let mut expr: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
@@ -165,6 +167,9 @@ impl Port {
                 ATTR_PARAM => {
                     param = Some(String::from_utf8(attr.value.into_owned())?);
                 }
+                ATTR_EXPR => {
+                    expr = Some(String::from_utf8(attr.value.into_owned())?);
+                }
                 key => {
                     error!("found unknown attribute {key}");
                     return Err(anyhow::Error::new(ParserError::UnknownKey(key.to_owned())));
@@ -175,7 +180,23 @@ impl Port {
         let event = event.ok_or(anyhow!(ParserError::MissingAttr(ATTR_EVENT.to_string())))?;
 
         self.event = event;
-        self.param = param;
+
+        if let Some(expression) = expr {
+            if let StatementListItem::Statement(boa_ast::Statement::Expression(expression)) =
+                boa_parser::Parser::new(boa_parser::Source::from_bytes(&expression))
+                    .parse_script(&mut boa_interner::Interner::new())
+                    .expect("hope this works")
+                    .statements()
+                    .first()
+                    .expect("hopefully there is a statement")
+                    .to_owned()
+            {
+                self.param = Some((param.unwrap(), expression));
+            } else {
+                todo!()
+            }
+        }
+
         Ok(())
     }
 
@@ -259,7 +280,7 @@ impl From<&PropertyTag> for &'static str {
 
 #[derive(Debug, Clone)]
 pub struct Properties {
-    pub(crate) ports: HashMap<String, Port>,
+    pub(crate) ports: HashMap<String, ParserPort>,
     pub(crate) predicates: HashMap<String, Expression<String>>,
     pub(crate) guarantees: HashMap<String, Mtl<String>>,
     pub(crate) assumes: HashMap<String, Mtl<String>>,
@@ -307,7 +328,7 @@ impl Properties {
                                 .last()
                                 .is_some_and(|tag| matches!(*tag, PropertyTag::Ports)) =>
                         {
-                            let (id, port) = Port::parse(tag)?;
+                            let (id, port) = ParserPort::parse(tag)?;
                             stack.push(PropertyTag::Port(id, port));
                         }
                         TAG_PREDICATES

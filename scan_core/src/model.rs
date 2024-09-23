@@ -3,42 +3,44 @@ use std::sync::Arc;
 
 use crate::channel_system::{Channel, ChannelSystem, Event, EventType};
 use crate::transition_system::TransitionSystem;
-use crate::{Expression, FnExpression, Val};
+use crate::{Expression, FnExpression, Integer, Val};
 
-// pub type MdVar = (PgId, Channel, Message);
-pub type Port = Channel;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Port {
+    Message(Channel),
+    LastMessage,
+}
 
 type FnMdExpression = FnExpression<HashMap<Port, Val>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PredicateId(usize);
-
-impl From<PredicateId> for usize {
-    fn from(val: PredicateId) -> Self {
-        val.0
-    }
-}
+// Constant corresponding to no event index.
+const NO_EVENT: Integer = -1;
 
 #[derive(Debug)]
 pub struct CsModelBuilder {
     cs: ChannelSystem,
-    vals: HashMap<Channel, Val>,
+    vals: HashMap<Port, Val>,
     predicates: Vec<FnMdExpression>,
 }
 
 impl CsModelBuilder {
     pub fn new(initial_state: ChannelSystem) -> Self {
+        let mut vals = HashMap::new();
+        // As default value for LastMessage, take the constant NO_EVENT.
+        let _ = vals.insert(Port::LastMessage, Val::Integer(NO_EVENT));
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         Self {
             cs: initial_state,
-            vals: HashMap::new(),
+            vals,
             predicates: Vec::new(),
         }
     }
 
-    pub fn add_port(&mut self, channel: Channel, val: Val) -> Result<(), ()> {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.vals.entry(channel) {
-            e.insert(val);
+    pub fn add_port(&mut self, channel: Channel, default: Val) -> Result<(), ()> {
+        if let std::collections::hash_map::Entry::Vacant(e) =
+            self.vals.entry(Port::Message(channel))
+        {
+            e.insert(default);
             Ok(())
         } else {
             Err(())
@@ -55,6 +57,10 @@ impl CsModelBuilder {
         }
     }
 
+    /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
+    ///
+    /// Predicates have to be passed all at once,
+    /// as it is not possible to add any further ones after the [`CsModel`] has been initialized.
     pub fn build(self) -> CsModel {
         CsModel {
             cs: self.cs,
@@ -72,34 +78,11 @@ impl CsModelBuilder {
 #[derive(Debug, Clone)]
 pub struct CsModel {
     cs: ChannelSystem,
-    vals: HashMap<Channel, Val>,
+    vals: HashMap<Port, Val>,
     predicates: Arc<Vec<FnMdExpression>>,
 }
 
 impl CsModel {
-    // /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
-    // ///
-    // /// Predicates have to be passed all at once,
-    // /// as it is not possible to add any further ones after the [`CsModel`] has been initialized.
-    // pub fn new(
-    //     current_state: ChannelSystem,
-    //     predicates: Vec<Expression<Port>>,
-    //     initial: HashMap<Port, Val>,
-    // ) -> Self {
-    //     // TODO: Check predicates are Boolean expressions and that conversion does not fail
-    //     Self {
-    //         cs: current_state,
-    //         vals: initial,
-    //         predicates: Arc::new(
-    //             predicates
-    //                 .into_iter()
-    //                 .map(FnMdExpression::try_from)
-    //                 .collect::<Result<_, _>>()
-    //                 .unwrap(),
-    //         ),
-    //     }
-    // }
-
     /// Gets the underlying [`ChannelSystem`].
     pub fn channel_system(&self) -> &ChannelSystem {
         &self.cs
@@ -139,8 +122,15 @@ impl TransitionSystem for CsModel {
                     .transition(pg_id, action, post)
                     .expect("transition is possible");
                 if let Some(event) = event {
-                    if let EventType::Receive(ref val) = event.event_type {
-                        model.vals.insert(event.channel, val.to_owned());
+                    if let EventType::Send(ref val) = event.event_type {
+                        model
+                            .vals
+                            .insert(Port::Message(event.channel), val.to_owned());
+                        model
+                            .vals
+                            .insert(Port::LastMessage, Val::Integer(event.channel.0 as Integer));
+                    } else {
+                        let _ = model.vals.insert(Port::LastMessage, Val::Integer(NO_EVENT));
                     }
                     // match event.event_type {
                     //     EventType::Send(ref val) => {
@@ -160,6 +150,7 @@ impl TransitionSystem for CsModel {
                     // };
                     vec![(event, model)]
                 } else {
+                    let _ = model.vals.insert(Port::LastMessage, Val::Integer(NO_EVENT));
                     model.transitions()
                 }
             })

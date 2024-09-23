@@ -82,7 +82,7 @@ pub struct ModelBuilder {
     guarantees: HashMap<String, Mtl<String>>,
     assumes: HashMap<String, Mtl<String>>,
     predicates: HashMap<String, Expression<Port>>,
-    ports: HashMap<String, (Port, Type)>,
+    ports: HashMap<String, (Port, Val)>,
 }
 
 impl ModelBuilder {
@@ -1797,6 +1797,97 @@ impl ModelBuilder {
         Ok(expr)
     }
 
+    fn value(
+        &self,
+        expr: &boa_ast::Expression,
+        interner: &boa_interner::Interner,
+    ) -> anyhow::Result<Val> {
+        let expr = match expr {
+            boa_ast::Expression::This => todo!(),
+            boa_ast::Expression::Identifier(ident) => {
+                let ident: &str = interner
+                    .resolve(ident.sym())
+                    .ok_or(anyhow!("unknown identifier"))?
+                    .utf8()
+                    .ok_or(anyhow!("not utf8"))?;
+                match ident {
+                    ident => self
+                        .enums
+                        .get(ident)
+                        .map(|i| Val::Integer(*i))
+                        .ok_or(anyhow!("unknown identifier"))?,
+                }
+            }
+            boa_ast::Expression::Literal(lit) => {
+                use boa_ast::expression::literal::Literal;
+                match lit {
+                    Literal::String(_) => todo!(),
+                    Literal::Num(_) => todo!(),
+                    Literal::Int(i) => Val::Integer(*i),
+                    Literal::BigInt(_) => todo!(),
+                    Literal::Bool(b) => Val::Boolean(*b),
+                    Literal::Null => todo!(),
+                    Literal::Undefined => todo!(),
+                }
+            }
+            boa_ast::Expression::PropertyAccess(_prop_acc) => {
+                todo!()
+            }
+            boa_ast::Expression::Unary(unary) => {
+                use boa_ast::expression::operator::unary::UnaryOp;
+                match unary.op() {
+                    UnaryOp::Minus => todo!(),
+                    UnaryOp::Plus => todo!(),
+                    UnaryOp::Not => self.value(unary.target(), interner).map(|val| {
+                        if let Val::Boolean(b) = val {
+                            Val::Boolean(!b)
+                        } else {
+                            todo!()
+                        }
+                    })?,
+                    UnaryOp::Tilde => todo!(),
+                    UnaryOp::TypeOf => todo!(),
+                    UnaryOp::Delete => todo!(),
+                    UnaryOp::Void => todo!(),
+                }
+            }
+            boa_ast::Expression::Binary(bin) => {
+                use boa_ast::expression::operator::binary::{ArithmeticOp, BinaryOp};
+                match bin.op() {
+                    BinaryOp::Arithmetic(ar_bin) => {
+                        let lhs = self.value(bin.lhs(), interner)?;
+                        let rhs = self.value(bin.rhs(), interner)?;
+                        let lhs = if let Val::Integer(i) = lhs {
+                            i
+                        } else {
+                            todo!()
+                        };
+                        let rhs = if let Val::Integer(i) = rhs {
+                            i
+                        } else {
+                            todo!()
+                        };
+                        match ar_bin {
+                            ArithmeticOp::Add => Val::Integer(lhs + rhs),
+                            ArithmeticOp::Sub => Val::Integer(lhs - rhs),
+                            ArithmeticOp::Div => todo!(),
+                            ArithmeticOp::Mul => todo!(),
+                            ArithmeticOp::Exp => todo!(),
+                            ArithmeticOp::Mod => todo!(),
+                        }
+                    }
+                    BinaryOp::Relational(_rel_bin) => {
+                        todo!()
+                    }
+                    BinaryOp::Logical(_) => todo!(),
+                    _ => unimplemented!(),
+                }
+            }
+            _ => unimplemented!(),
+        };
+        Ok(expr)
+    }
+
     fn expression_prop_access(
         &mut self,
         expr: &boa_ast::Expression,
@@ -1951,36 +2042,42 @@ impl ModelBuilder {
                 .event_indexes
                 .get(&port.event)
                 .ok_or(anyhow!("missing event {}", port.event))?;
-            if let Some(param) = &port.param {
+            if let Some((param, init)) = &port.param {
+                let init = self.value(init, &boa_interner::Interner::new())?;
                 let channel = *self
                     .parameters
                     .get(&(origin, target, event_id, param.to_owned()))
                     .ok_or(anyhow!("param {param} not found"))?;
-                // let var = (target, channel, Message::Receive);
-                // self.ports.insert(port_id.to_owned(), Expression::Var(var));
-                let port_type = self
-                    .types
-                    .get(&port.r#type)
-                    .ok_or(anyhow!("type {} not found", port.r#type))?;
+                // let port_type = self
+                //     .types
+                //     .get(&port.r#type)
+                //     .ok_or(anyhow!("type {} not found", port.r#type))?;
                 self.ports
-                    .insert(port_id.to_owned(), (channel, port_type.1.clone()));
+                    .insert(port_id.to_owned(), (Port::Message(channel), init));
             } else {
                 let channel = target_builder.ext_queue;
                 self.ports.insert(
                     format!("{target:?}"),
-                    (channel, Type::Product(vec![Type::Integer, Type::Integer])),
+                    (
+                        Port::Message(channel),
+                        Val::Tuple(vec![Val::Integer(-1), Val::Integer(-1)]),
+                    ),
                 );
-                // let var = (target, channel, Message::Receive);
                 let expr = Expression::And(vec![
                     Expression::Equal(Box::new((
+                        Expression::from(channel.0 as Integer),
+                        Expression::Var(Port::LastMessage),
+                    ))),
+                    Expression::Equal(Box::new((
                         Expression::from(event_id as Integer),
-                        Expression::Component(0, Box::new(Expression::Var(channel))),
+                        Expression::Component(0, Box::new(Expression::Var(Port::Message(channel)))),
                     ))),
                     Expression::Equal(Box::new((
                         Expression::from(Into::<usize>::into(origin) as Integer),
-                        Expression::Component(1, Box::new(Expression::Var(channel))),
+                        Expression::Component(1, Box::new(Expression::Var(Port::Message(channel)))),
                     ))),
                 ]);
+                // A port for an event becomes a predicate.
                 self.predicates.insert(port_id.to_owned(), expr);
             }
         }
@@ -2067,9 +2164,11 @@ impl ModelBuilder {
     fn build(self) -> ScxmlModel {
         let mut model = CsModelBuilder::new(self.cs.build());
         let mut pred_names: HashMap<String, usize> = HashMap::new();
-        for (_port_name, (port, port_type)) in self.ports {
+        for (_port_name, (port, init)) in self.ports {
             // TODO FIXME handle error.
-            model.add_port(port, port_type.default_value()).unwrap();
+            if let Port::Message(channel) = port {
+                model.add_port(channel, init).unwrap();
+            }
         }
         for (pred_name, pred_expr) in self.predicates {
             // TODO FIXME handle error.

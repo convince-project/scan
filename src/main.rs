@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
             let result = scxml_model.model.check_statistics(props);
             if let Some(trace) = result {
-                println!("COUNTER-EXAMPLE:\n{trace:?}");
+                println!("COUNTER-EXAMPLE:\n{trace:#?}");
             } else {
                 println!("No counter-example found");
             }
