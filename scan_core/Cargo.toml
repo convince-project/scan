@@ -3,6 +3,10 @@ name = "scan_core"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "scan_core"     # The name of the target.
+crate-type = ["lib"]   # The crate types to generate.
+
 [dependencies]
 thiserror = "1.0.56"
 log = { workspace = true }

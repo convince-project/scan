@@ -3,6 +3,10 @@ name = "scan_fmt_xml"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "scan_fmt_xml"  # The name of the target.
+crate-type = ["lib"]   # The crate types to generate.
+
 [dependencies]
 scan_core = { path="../scan_core" }
 anyhow = "1.0.79"
