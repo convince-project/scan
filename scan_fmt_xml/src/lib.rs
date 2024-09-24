@@ -3,6 +3,6 @@
 mod builder;
 mod parser;
 
-pub use builder::ModelBuilder;
+pub use builder::{ModelBuilder, ScxmlModel};
 pub use parser::Parser;
 pub use scan_core;

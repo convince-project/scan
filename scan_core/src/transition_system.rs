@@ -76,7 +76,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
         (0..).par_bridge().find_map_any(|_| {
             let mut rng = rand::thread_rng();
             let mut ts = self.clone();
-            let mut trace = vec![ts.labels()];
+            let mut trace = Vec::new();
             let mut actions = Vec::new();
             while let Some((action, new_ts)) = ts.transitions().choose(&mut rng) {
                 trace.push(new_ts.labels());

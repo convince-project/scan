@@ -20,6 +20,11 @@ pub struct ScxmlModel {
     pub guarantees: Vec<Mtl<usize>>,
     pub assumes: Vec<Mtl<usize>>,
     pub fsm_names: HashMap<PgId, String>,
+    pub fsm_indexes: HashMap<usize, String>,
+    pub parameters: HashMap<Channel, (PgId, PgId, String)>,
+    pub int_queues: HashSet<Channel>,
+    pub ext_queues: HashMap<Channel, PgId>,
+    pub events: HashMap<usize, String>,
     // TODO: ...other stuff needed to backtrack scxml's ids
 }
 
@@ -83,6 +88,8 @@ pub struct ModelBuilder {
     assumes: HashMap<String, Mtl<String>>,
     predicates: HashMap<String, Expression<Port>>,
     ports: HashMap<String, (Port, Val)>,
+    // extra data
+    int_queues: HashSet<Channel>,
 }
 
 impl ModelBuilder {
@@ -106,6 +113,7 @@ impl ModelBuilder {
             assumes: HashMap::new(),
             predicates: HashMap::new(),
             ports: HashMap::new(),
+            int_queues: HashSet::new(),
         };
 
         info!("Building types");
@@ -1092,6 +1100,8 @@ impl ModelBuilder {
             .expect("program graph exists!");
         // Implement internal queue
         let int_queue = self.cs.new_channel(Type::Integer, None);
+        // This we only need for backtracking.
+        let _ = self.int_queues.insert(int_queue);
         let dequeue_int = self
             .cs
             .new_receive(pg_id, int_queue, current_event_var)
@@ -2188,6 +2198,27 @@ impl ModelBuilder {
                 .map(|prop| map_predicates_in_property(prop, &pred_names))
                 .collect(),
             fsm_names: self.fsm_names,
+            parameters: self
+                .parameters
+                .into_iter()
+                .map(|((src, trg, _, name), chn)| (chn, (src, trg, name)))
+                .collect(),
+            ext_queues: self
+                .fsm_builders
+                .values()
+                .map(|b| (b.ext_queue, b.pg_id))
+                .collect(),
+            int_queues: self.int_queues,
+            events: self
+                .event_indexes
+                .into_iter()
+                .map(|(name, idx)| (idx, name))
+                .collect(),
+            fsm_indexes: self
+                .fsm_builders
+                .into_iter()
+                .map(|(name, b)| (usize::from(b.pg_id), name))
+                .collect(),
         }
     }
 }
