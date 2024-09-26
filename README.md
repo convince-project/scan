@@ -44,11 +44,11 @@ Currently, the only way to use SCAN is to build it from sources.
 
 To install and use SCAN on your system,
 the easiest way is to use the `cargo install` command.
-Follow the instructions from the [Build prerequisites](https://github.com/convince-project/scan/edit/main/README.md#build-prerequisites) section to install the required build dependencies.
-Then, clone this repo and use:
+Follow the instructions from the [Build prerequisites](#build-prerequisites) section to install the required build dependencies.
+Then install Scan directly from this repository with:
 
 ```
-cargo install --path <SCAN_REPO_PATH>
+cargo install --git https://github.com/convince-project/scan
 ```
 
 Cargo will build and install SCAN on your system.
@@ -100,6 +100,12 @@ or by running the executable file directly, with
 
 ```
 target/debug/scan [ARGS]
+```
+
+Install your local version of Scan on your system for more ease of use, with:
+
+```
+cargo install --path <SCAN_REPO_PATH>
 ```
 
 To build SCAN's documentation API (with suggested flags) and have it open in a browser tab, run:
