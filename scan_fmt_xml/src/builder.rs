@@ -141,6 +141,7 @@ impl ModelBuilder {
             let scan_type = match omg_type {
                 OmgType::Boolean => Type::Boolean,
                 OmgType::Int32 => Type::Integer,
+                OmgType::F64 => Type::Float,
                 OmgType::Uri => Type::Integer,
                 OmgType::Structure(fields) => {
                     let mut fields_type: Vec<Type> = Vec::new();
@@ -1685,14 +1686,11 @@ impl ModelBuilder {
                     .ok_or(anyhow!("unknown identifier"))?
                     .utf8()
                     .ok_or(anyhow!("not utf8"))?;
-                match ident {
-                    ident => self
-                        .enums
-                        .get(ident)
-                        .map(|i| CsExpression::from(*i))
-                        .or_else(|| vars.get(ident).map(|(var, _)| CsExpression::Var(*var)))
-                        .ok_or(anyhow!("unknown identifier"))?,
-                }
+                self.enums
+                    .get(ident)
+                    .map(|i| CsExpression::from(*i))
+                    .or_else(|| vars.get(ident).map(|(var, _)| CsExpression::Var(*var)))
+                    .ok_or(anyhow!("unknown identifier"))?
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
@@ -1778,7 +1776,6 @@ impl ModelBuilder {
                     }
                     BinaryOp::Bitwise(_) => todo!(),
                     BinaryOp::Relational(rel_bin) => {
-                        // WARN FIXME TODO: this assumes relations are between integers
                         let lhs = self.expression(bin.lhs(), interner, vars, origin, params)?;
                         let rhs = self.expression(bin.rhs(), interner, vars, origin, params)?;
                         match rel_bin {
@@ -1827,13 +1824,10 @@ impl ModelBuilder {
                     .ok_or(anyhow!("unknown identifier"))?
                     .utf8()
                     .ok_or(anyhow!("not utf8"))?;
-                match ident {
-                    ident => self
-                        .enums
-                        .get(ident)
-                        .map(|i| Val::Integer(*i))
-                        .ok_or(anyhow!("unknown identifier"))?,
-                }
+                self.enums
+                    .get(ident)
+                    .map(|i| Val::Integer(*i))
+                    .ok_or(anyhow!("unknown identifier"))?
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
@@ -1951,19 +1945,6 @@ impl ModelBuilder {
                     }
                 }
             }
-            boa_ast::Expression::Literal(_) => todo!(),
-            boa_ast::Expression::RegExpLiteral(_) => todo!(),
-            boa_ast::Expression::ArrayLiteral(_) => todo!(),
-            boa_ast::Expression::ObjectLiteral(_) => todo!(),
-            boa_ast::Expression::Spread(_) => todo!(),
-            boa_ast::Expression::Function(_) => todo!(),
-            boa_ast::Expression::ArrowFunction(_) => todo!(),
-            boa_ast::Expression::AsyncArrowFunction(_) => todo!(),
-            boa_ast::Expression::Generator(_) => todo!(),
-            boa_ast::Expression::AsyncFunction(_) => todo!(),
-            boa_ast::Expression::AsyncGenerator(_) => todo!(),
-            boa_ast::Expression::Class(_) => todo!(),
-            boa_ast::Expression::TemplateLiteral(_) => todo!(),
             boa_ast::Expression::PropertyAccess(prop_acc) => {
                 use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
                 match prop_acc {
@@ -1992,6 +1973,7 @@ impl ModelBuilder {
                                         {
                                             OmgType::Boolean => todo!(),
                                             OmgType::Int32 => todo!(),
+                                            OmgType::F64 => todo!(),
                                             OmgType::Uri => todo!(),
                                             OmgType::Structure(fields) => {
                                                 let index = *self
@@ -2022,23 +2004,6 @@ impl ModelBuilder {
                     PropertyAccess::Super(_) => todo!(),
                 }
             }
-            boa_ast::Expression::New(_) => todo!(),
-            boa_ast::Expression::Call(_) => todo!(),
-            boa_ast::Expression::SuperCall(_) => todo!(),
-            boa_ast::Expression::ImportCall(_) => todo!(),
-            boa_ast::Expression::Optional(_) => todo!(),
-            boa_ast::Expression::TaggedTemplate(_) => todo!(),
-            boa_ast::Expression::NewTarget => todo!(),
-            boa_ast::Expression::ImportMeta => todo!(),
-            boa_ast::Expression::Assign(_) => todo!(),
-            boa_ast::Expression::Unary(_) => todo!(),
-            boa_ast::Expression::Update(_) => todo!(),
-            boa_ast::Expression::Binary(_) => todo!(),
-            boa_ast::Expression::BinaryInPrivate(_) => todo!(),
-            boa_ast::Expression::Conditional(_) => todo!(),
-            boa_ast::Expression::Await(_) => todo!(),
-            boa_ast::Expression::Yield(_) => todo!(),
-            boa_ast::Expression::Parenthesized(_) => todo!(),
             _ => todo!(),
         }
     }
@@ -2065,10 +2030,6 @@ impl ModelBuilder {
                     .parameters
                     .get(&(origin, target, event_id, param.to_owned()))
                     .ok_or(anyhow!("param {param} not found"))?;
-                // let port_type = self
-                //     .types
-                //     .get(&port.r#type)
-                //     .ok_or(anyhow!("type {} not found", port.r#type))?;
                 self.ports
                     .insert(port_id.to_owned(), (Port::Message(channel), init));
             } else {
@@ -2272,10 +2233,6 @@ fn map_predicates_in_property(
                 )),
                 range,
             )
-        } // Mtl::WeakUntil(_, _) => todo!(),
-          // Mtl::Release(_, _) => todo!(),
-          // Mtl::WeakRelease(_, _) => todo!(),
-          // Mtl::Eventually(_, _) => todo!(),
-          // Mtl::Always(_, _) => todo!(),
+        }
     }
 }

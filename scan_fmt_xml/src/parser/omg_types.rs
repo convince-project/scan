@@ -19,6 +19,7 @@ use crate::parser::{ATTR_ID, TAG_DATA_TYPE_LIST, TAG_ENUMERATION, TAG_LABEL, TAG
 pub enum OmgType {
     Boolean,
     Int32,
+    F64,
     Uri,
     Structure(HashMap<String, String>),
     Enumeration(Vec<String>),
@@ -33,8 +34,7 @@ impl OmgTypes {
     pub const BASE_TYPES: [(&'static str, OmgType); 4] = [
         ("boolean", OmgType::Boolean),
         ("int32", OmgType::Int32),
-        // WARN FIXME TODO: Implement float types.
-        ("float32", OmgType::Int32),
+        ("float64", OmgType::F64),
         ("URI", OmgType::Uri),
     ];
 
