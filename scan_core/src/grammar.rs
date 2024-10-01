@@ -72,6 +72,12 @@ impl Val {
     }
 }
 
+impl From<Float> for Val {
+    fn from(value: Float) -> Self {
+        Val::Float(OrderedFloat(value))
+    }
+}
+
 /// Expressions for the language internally used by PGs and CSs.
 ///
 /// [`Expression<V>`] encodes the language in which `V` is the type of variables.

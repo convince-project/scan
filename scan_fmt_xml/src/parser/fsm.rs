@@ -68,10 +68,10 @@ impl Data {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_EXPR => {
-                    expr = Some(String::from_utf8(attr.value.into_owned())?);
+                    expr = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_DATA}");
@@ -138,7 +138,7 @@ impl State {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_STATE}");
@@ -193,13 +193,13 @@ impl Transition {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_EVENT => {
-                    event = Some(String::from_utf8(attr.value.into_owned())?);
+                    event = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_TARGET => {
-                    target = Some(String::from_utf8(attr.value.into_owned())?);
+                    target = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_COND => {
-                    cond = Some(String::from_utf8(attr.value.into_owned())?);
+                    cond = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
@@ -271,7 +271,7 @@ impl Executable {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_EVENT => {
-                    event = Some(String::from_utf8(attr.value.into_owned())?);
+                    event = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
@@ -295,10 +295,10 @@ impl Executable {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_LOCATION => {
-                    location = Some(String::from_utf8(attr.value.into_owned())?);
+                    location = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_EXPR => {
-                    expr = Some(String::from_utf8(attr.value.into_owned())?);
+                    expr = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
@@ -363,13 +363,13 @@ impl Send {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_EVENT => {
-                    event = Some(String::from_utf8(attr.value.into_owned())?);
+                    event = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_TARGET => {
-                    target = Some(String::from_utf8(attr.value.into_owned())?);
+                    target = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_TARGETEXPR => {
-                    targetexpr = Some(String::from_utf8(attr.value.into_owned())?);
+                    targetexpr = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
@@ -425,7 +425,7 @@ impl If {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_COND => {
-                    cond = Some(String::from_utf8(attr.value.into_owned())?);
+                    cond = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
@@ -476,13 +476,13 @@ impl Param {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_NAME => {
-                    name = Some(String::from_utf8(attr.value.into_owned())?);
+                    name = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_LOCATION => {
-                    location = Some(String::from_utf8(attr.value.into_owned())?);
+                    location = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_EXPR => {
-                    expr = Some(String::from_utf8(attr.value.into_owned())?);
+                    expr = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
@@ -534,10 +534,10 @@ impl Scxml {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_NAME => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_INITIAL => {
-                    initial = Some(String::from_utf8(attr.value.into_owned())?);
+                    initial = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     warn!("found unknown attribute {key} in {TAG_STATE}, ignoring");

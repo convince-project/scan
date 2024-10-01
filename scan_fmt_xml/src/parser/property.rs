@@ -10,7 +10,7 @@ use quick_xml::{
     },
     Reader,
 };
-use scan_core::{Expression, Mtl, Val};
+use scan_core::{Expression, Float, Mtl, Val};
 use std::{collections::HashMap, io::BufRead, str};
 
 const TAG_PORTS: &str = "ports";
@@ -125,10 +125,10 @@ impl ParserPort {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_ID => {
-                    port_id = Some(String::from_utf8(attr.value.into_owned())?);
+                    port_id = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_TYPE => {
-                    r#type = Some(String::from_utf8(attr.value.into_owned())?);
+                    r#type = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -162,13 +162,13 @@ impl ParserPort {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_EVENT => {
-                    event = Some(String::from_utf8(attr.value.into_owned())?);
+                    event = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_PARAM => {
-                    param = Some(String::from_utf8(attr.value.into_owned())?);
+                    param = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_EXPR => {
-                    expr = Some(String::from_utf8(attr.value.into_owned())?);
+                    expr = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -208,7 +208,7 @@ impl ParserPort {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_REFID => {
-                    origin = Some(String::from_utf8(attr.value.into_owned())?);
+                    origin = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -231,7 +231,7 @@ impl ParserPort {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_REFID => {
-                    target = Some(String::from_utf8(attr.value.into_owned())?);
+                    target = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -716,7 +716,7 @@ impl Properties {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -736,7 +736,7 @@ impl Properties {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_REFID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -757,10 +757,10 @@ impl Properties {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_TYPE => {
-                    r#type = Some(String::from_utf8(attr.value.into_owned())?);
+                    r#type = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_EXPR => {
-                    val = Some(String::from_utf8(attr.value.into_owned())?);
+                    val = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -773,6 +773,7 @@ impl Properties {
 
         match r#type.ok_or(anyhow!("missing type"))?.as_str() {
             "int32" => Ok(val.parse::<i32>().map(Val::Integer)?),
+            "float64" => Ok(val.parse::<Float>().map(Val::from)?),
             "boolean" => Ok(val.parse::<bool>().map(Val::Boolean)?),
             unknown => Err(anyhow!("unwnown type {unknown}")),
         }
