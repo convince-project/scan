@@ -16,196 +16,14 @@ impl From<Effect> for FnEffect {
             Effect::Effects(effects) => FnEffect::Effects(
                 effects
                     .into_iter()
-                    .map(|(var, expr)| -> (Var, FnExpression) { (var, expr.into()) })
+                    .map(|(var, expr)| -> (Var, FnExpression<Vec<Val>>) {
+                        (var, expr.try_into().unwrap())
+                    })
                     .collect(),
             ),
-            Effect::Send(msg) => FnEffect::Send(msg.into()),
+            Effect::Send(msg) => FnEffect::Send(msg.try_into().unwrap()),
             Effect::Receive(var) => FnEffect::Receive(var),
         }
-    }
-}
-
-// WARN: Can produce FnExpression's that will panic when computed if passed a badly-typed expresstion.
-// NOTE: There is no way to ensure a correct conversion a-priori because we don't know the type of variables here.
-// TODO: This should probably become a method in ProgramGraphBuilder that does proper checks.
-impl From<PgExpression> for FnExpression {
-    fn from(value: PgExpression) -> Self {
-        FnExpression(match value {
-            PgExpression::Const(val) => Box::new(move |_| val.to_owned()),
-            PgExpression::Var(var) => Box::new(move |vars: &[Val]| vars[var.0].to_owned()),
-            PgExpression::Tuple(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Tuple(exprs.iter().map(|expr| expr.eval(vars)).collect::<Vec<_>>())
-                })
-            }
-            PgExpression::Component(index, expr) => {
-                let expr = Into::<FnExpression>::into(*expr).0;
-                Box::new(move |vars: &[Val]| {
-                    if let Val::Tuple(vals) = expr(vars) {
-                        vals[index].to_owned()
-                    } else {
-                        panic!();
-                    }
-                })
-            }
-            PgExpression::And(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Boolean(exprs.iter().all(|expr| {
-                        if let Val::Boolean(b) = expr.eval(vars) {
-                            b
-                        } else {
-                            panic!()
-                        }
-                    }))
-                })
-            }
-            PgExpression::Or(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Boolean(exprs.iter().any(|expr| {
-                        if let Val::Boolean(b) = expr.eval(vars) {
-                            b
-                        } else {
-                            panic!()
-                        }
-                    }))
-                })
-            }
-            PgExpression::Implies(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Boolean(lhs), Val::Boolean(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(rhs || !lhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Not(expr) => {
-                let expr = FnExpression::from(*expr);
-                Box::new(move |vars: &[Val]| {
-                    if let Val::Boolean(b) = expr.eval(vars) {
-                        Val::Boolean(!b)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Opposite(expr) => {
-                let expr = FnExpression::from(*expr);
-                Box::new(move |vars: &[Val]| {
-                    if let Val::Integer(i) = expr.eval(vars) {
-                        Val::Integer(-i)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Sum(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Integer(
-                        exprs
-                            .iter()
-                            .map(|expr| {
-                                if let Val::Integer(i) = expr.eval(vars) {
-                                    i
-                                } else {
-                                    panic!()
-                                }
-                            })
-                            .sum(),
-                    )
-                })
-            }
-            PgExpression::Mult(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Integer(
-                        exprs
-                            .iter()
-                            .map(|expr| {
-                                if let Val::Integer(i) = expr.eval(vars) {
-                                    i
-                                } else {
-                                    panic!()
-                                }
-                            })
-                            .product(),
-                    )
-                })
-            }
-            PgExpression::Equal(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs == rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Greater(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs > rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::GreaterEq(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs >= rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Less(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs < rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::LessEq(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs <= rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-        })
     }
 }
 
@@ -278,7 +96,10 @@ impl ProgramGraphBuilder {
         let idx = self.vars.len();
         // We check the type to make sure the expression is well-formed
         let _ = self.r#type(&init)?;
-        let val = FnExpression::from(init).eval(&self.vars);
+        let val = FnExpression::try_from(init)
+            .unwrap()
+            .eval(&self.vars)
+            .unwrap();
         self.vars.push(val);
         Ok(Var(idx))
     }
@@ -521,6 +342,35 @@ impl ProgramGraphBuilder {
                     Err(PgError::TypeMismatch)
                 }
             }
+            PgExpression::Append(exprs) => {
+                let list_type = self.r#type(&exprs.0)?;
+                let element_type = self.r#type(&exprs.1)?;
+                if let Type::List(ref elements_type) = list_type {
+                    if &element_type == elements_type.as_ref() {
+                        Ok(list_type)
+                    } else {
+                        Err(PgError::TypeMismatch)
+                    }
+                } else {
+                    Err(PgError::TypeMismatch)
+                }
+            }
+            PgExpression::Truncate(list) => {
+                let list_type = self.r#type(list.as_ref())?;
+                if let Type::List(_) = list_type {
+                    Ok(list_type)
+                } else {
+                    Err(PgError::TypeMismatch)
+                }
+            }
+            PgExpression::Len(list) => {
+                let list_type = self.r#type(list.as_ref())?;
+                if let Type::List(_) = list_type {
+                    Ok(Type::Integer)
+                } else {
+                    Err(PgError::TypeMismatch)
+                }
+            }
         }
     }
 
@@ -553,7 +403,7 @@ impl ProgramGraphBuilder {
                     .map(|effects| {
                         effects
                             .into_iter()
-                            .map(|(p, expr)| (p, expr.map(FnExpression::from)))
+                            .map(|(p, expr)| (p, expr.map(|e| FnExpression::try_from(e).unwrap())))
                             .collect()
                     })
                     .collect(),

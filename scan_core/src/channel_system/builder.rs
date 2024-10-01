@@ -83,6 +83,14 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
                 (pg_id, comps.0).try_into()?,
                 (pg_id, comps.1).try_into()?,
             )))),
+            Expression::Append(comps) => Ok(Expression::Append(Box::new((
+                (pg_id, comps.0).try_into()?,
+                (pg_id, comps.1).try_into()?,
+            )))),
+            Expression::Truncate(comp) => {
+                Ok(Expression::Truncate(Box::new((pg_id, *comp).try_into()?)))
+            }
+            Expression::Len(comp) => Ok(Expression::Len(Box::new((pg_id, *comp).try_into()?))),
         }
     }
 }

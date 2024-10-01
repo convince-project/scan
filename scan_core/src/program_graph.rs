@@ -95,6 +95,12 @@ pub struct Action(usize);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Var(usize);
 
+impl ValsContainer<Var> for Vec<Val> {
+    fn value(&self, var: Var) -> Option<Val> {
+        self.get(var.0).cloned()
+    }
+}
+
 /// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
 
@@ -143,28 +149,28 @@ pub enum PgError {
     NotReceive(Action),
 }
 
-type FnExpr = Box<dyn Fn(&[Val]) -> Val + Send + Sync>;
+// type FnExpr = Box<dyn Fn(&[Val]) -> Val + Send + Sync>;
 
-struct FnExpression(FnExpr);
+// struct FnExpression(FnExpr);
 
-impl std::fmt::Debug for FnExpression {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Expression")
-    }
-}
+// impl std::fmt::Debug for FnExpression {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "Expression")
+//     }
+// }
 
-impl FnExpression {
-    fn eval(&self, vals: &[Val]) -> Val {
-        self.0(vals)
-    }
-}
+// impl FnExpression {
+//     fn eval(&self, vals: &[Val]) -> Val {
+//         self.0(vals)
+//     }
+// }
 
 #[derive(Debug)]
 enum FnEffect {
     // TODO: use SmallVec optimization
     // NOTE: SmallVec here would not appear in public API
-    Effects(Vec<(Var, FnExpression)>),
-    Send(FnExpression),
+    Effects(Vec<(Var, FnExpression<Vec<Val>>)>),
+    Send(FnExpression<Vec<Val>>),
     Receive(Var),
 }
 
@@ -184,7 +190,7 @@ pub struct ProgramGraph {
     vars: Vec<Val>,
     effects: Arc<Vec<FnEffect>>,
     // QUESTION: is there a better/more efficient representation?
-    transitions: Arc<Vec<HashMap<(Action, Location), Option<FnExpression>>>>,
+    transitions: Arc<Vec<HashMap<(Action, Location), Option<FnExpression<Vec<Val>>>>>>,
 }
 
 impl ProgramGraph {
@@ -219,7 +225,7 @@ impl ProgramGraph {
             .iter()
             .filter_map(|((action, post), guard)| {
                 if let Some(guard) = guard {
-                    if let Val::Boolean(pass) = guard.eval(&self.vars) {
+                    if let Some(Val::Boolean(pass)) = guard.eval(&self.vars) {
                         if pass {
                             Some((*action, *post))
                         } else {
@@ -239,7 +245,7 @@ impl ProgramGraph {
             .get(&(action, post_state))
             .ok_or(PgError::MissingTransition)?;
         if guard.as_ref().map_or(true, |guard| {
-            if let Val::Boolean(pass) = guard.eval(&self.vars) {
+            if let Val::Boolean(pass) = guard.eval(&self.vars).expect("evaluation must succeed") {
                 pass
             } else {
                 panic!("guard is not a boolean");
@@ -258,7 +264,7 @@ impl ProgramGraph {
         self.satisfies_guard(action, post_state)?;
         if let FnEffect::Effects(effects) = &self.effects[action.0] {
             for (var, effect) in effects {
-                self.vars[var.0] = effect.eval(&self.vars);
+                self.vars[var.0] = effect.eval(&self.vars).expect("evaluation must succeed");
             }
             self.current_location = post_state;
             Ok(())
@@ -270,7 +276,7 @@ impl ProgramGraph {
     pub(crate) fn send(&mut self, action: Action, post_state: Location) -> Result<Val, PgError> {
         self.satisfies_guard(action, post_state)?;
         if let FnEffect::Send(effect) = &self.effects[action.0] {
-            let val = effect.eval(&self.vars);
+            let val = effect.eval(&self.vars).expect("evaluation must succeed");
             self.current_location = post_state;
             Ok(val)
         } else {

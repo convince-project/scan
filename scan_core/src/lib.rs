@@ -3,7 +3,7 @@
 //!
 //! [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
 
-#![warn(missing_docs)]
+// #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod channel_system;

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::channel_system::{Channel, ChannelSystem, Event, EventType};
 use crate::transition_system::TransitionSystem;
-use crate::{Expression, FnExpression, Integer, Val};
+use crate::{Expression, FnExpression, Integer, Val, ValsContainer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Port {
@@ -12,6 +12,12 @@ pub enum Port {
 }
 
 type FnMdExpression = FnExpression<HashMap<Port, Val>>;
+
+impl ValsContainer<Port> for HashMap<Port, Val> {
+    fn value(&self, var: Port) -> Option<Val> {
+        self.get(&var).cloned()
+    }
+}
 
 // Constant corresponding to no event index.
 const NO_EVENT: Integer = -1;

@@ -12,6 +12,7 @@ thiserror = "1.0.56"
 log = { workspace = true }
 rand = "0.8.*"
 rayon = "1.10.0"
+ordered-float = "4.2.2"
 
 [dev-dependencies]
 criterion = "0.5.1"
