@@ -18,11 +18,12 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug)]
 pub struct ScxmlModel {
     pub model: CsModel,
+    pub predicates: Vec<String>,
     pub guarantees: Vec<Mtl<usize>>,
     pub assumes: Vec<Mtl<usize>>,
     pub fsm_names: HashMap<PgId, String>,
     pub fsm_indexes: HashMap<usize, String>,
-    pub parameters: HashMap<Channel, (PgId, PgId, String)>,
+    pub parameters: HashMap<Channel, (PgId, PgId, usize, String)>,
     pub int_queues: HashSet<Channel>,
     pub ext_queues: HashMap<Channel, PgId>,
     pub events: HashMap<usize, String>,
@@ -368,7 +369,6 @@ impl ModelBuilder {
         let loc_failure = self.cs.new_location(pg_id).unwrap();
         let loc_halt = self.cs.new_location(pg_id).unwrap();
         let loc_ack = self.cs.new_location(pg_id).unwrap();
-        let step = self.cs.new_action(pg_id).unwrap();
         self.build_bt_node(
             pg_id,
             loc_tick,
@@ -377,7 +377,6 @@ impl ModelBuilder {
             loc_failure,
             loc_halt,
             loc_ack,
-            step,
             &bt.root,
         )?;
 
@@ -427,10 +426,9 @@ impl ModelBuilder {
         let halt_idx = *self.event_indexes.get(HALT_CALL).unwrap() as Integer;
         let halt_return_idx = *self.event_indexes.get(HALT_RETURN).unwrap() as Integer;
         self.cs
-            .add_transition(
+            .add_autonomous_transition(
                 pg_id,
                 event_processed,
-                step,
                 loc_tick,
                 Some(CsExpression::Equal(Box::new((
                     CsExpression::Var(ext_event_index),
@@ -440,10 +438,9 @@ impl ModelBuilder {
             .expect("hope this works");
         // HALT
         self.cs
-            .add_transition(
+            .add_autonomous_transition(
                 pg_id,
                 event_processed,
-                step,
                 loc_halt,
                 Some(CsExpression::Equal(Box::new((
                     CsExpression::Var(ext_event_index),
@@ -581,7 +578,6 @@ impl ModelBuilder {
         pt_failure: Location,
         pt_halt: Location,
         pt_ack: Location,
-        step: Action,
         node: &BtNode,
     ) -> anyhow::Result<()> {
         match node {
@@ -632,7 +628,6 @@ impl ModelBuilder {
                         loc_failure,
                         loc_halt,
                         loc_ack,
-                        step,
                         branch,
                     )?;
                     prev_success = loc_success;
@@ -641,18 +636,17 @@ impl ModelBuilder {
                 }
                 // If all children are successful, return success to father node.
                 self.cs
-                    .add_transition(pg_id, prev_success, step, pt_success, None)
+                    .add_autonomous_transition(pg_id, prev_success, pt_success, None)
                     .unwrap();
                 // If last child fails, return failure to father node.
                 self.cs
-                    .add_transition(pg_id, prev_failure, step, pt_failure, None)
+                    .add_autonomous_transition(pg_id, prev_failure, pt_failure, None)
                     .unwrap();
                 // If all children acknowledge halting, return ack to father node.
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         prev_ack,
-                        step,
                         pt_ack,
                         Some(CsExpression::Not(Box::new(CsExpression::Var(
                             halting_after_failure,
@@ -717,7 +711,6 @@ impl ModelBuilder {
                         loc_failure,
                         loc_halt,
                         loc_ack,
-                        step,
                         branch,
                     )?;
                     prev_success = loc_success;
@@ -725,17 +718,16 @@ impl ModelBuilder {
                     prev_ack = loc_ack;
                 }
                 self.cs
-                    .add_transition(pg_id, prev_success, step, pt_success, None)
+                    .add_autonomous_transition(pg_id, prev_success, pt_success, None)
                     .unwrap();
                 self.cs
-                    .add_transition(pg_id, prev_failure, step, pt_failure, None)
+                    .add_autonomous_transition(pg_id, prev_failure, pt_failure, None)
                     .unwrap();
                 // If all children acknowledge halting, return ack to father node.
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         prev_ack,
-                        step,
                         pt_ack,
                         Some(CsExpression::Not(Box::new(CsExpression::Var(
                             halting_after_success,
@@ -841,10 +833,9 @@ impl ModelBuilder {
                     )
                     .expect("hand-made args");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
@@ -853,10 +844,9 @@ impl ModelBuilder {
                     )
                     .expect("hope this works");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
@@ -865,10 +855,9 @@ impl ModelBuilder {
                     )
                     .expect("hope this works");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_running,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
@@ -991,10 +980,9 @@ impl ModelBuilder {
                     )
                     .expect("hand-made args");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
@@ -1003,10 +991,9 @@ impl ModelBuilder {
                     )
                     .expect("hope this works");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
                             CsExpression::Var(tick_response_param),
@@ -1019,7 +1006,7 @@ impl ModelBuilder {
                 let halt_sent = pt_halt;
                 let got_halt_response = pt_ack;
                 self.cs
-                    .add_transition(pg_id, halt_sent, step, got_halt_response, None)
+                    .add_autonomous_transition(pg_id, halt_sent, got_halt_response, None)
                     .expect("hand-made args");
             }
         }
@@ -2166,6 +2153,7 @@ impl ModelBuilder {
     fn build(self) -> ScxmlModel {
         let mut model = CsModelBuilder::new(self.cs.build());
         let mut pred_names: HashMap<String, usize> = HashMap::new();
+        let mut predicates = Vec::new();
         for (_port_name, (port, init)) in self.ports {
             // TODO FIXME handle error.
             if let Port::Message(channel) = port {
@@ -2175,7 +2163,9 @@ impl ModelBuilder {
         for (pred_name, pred_expr) in self.predicates {
             // TODO FIXME handle error.
             let id = model.add_predicate(pred_expr).unwrap();
-            pred_names.insert(pred_name, id);
+            pred_names.insert(pred_name.to_owned(), id);
+            assert_eq!(id, predicates.len());
+            predicates.push(pred_name);
         }
         ScxmlModel {
             model: model.build(),
@@ -2193,7 +2183,7 @@ impl ModelBuilder {
             parameters: self
                 .parameters
                 .into_iter()
-                .map(|((src, trg, _, name), chn)| (chn, (src, trg, name)))
+                .map(|((src, trg, event, name), chn)| (chn, (src, trg, event, name)))
                 .collect(),
             ext_queues: self
                 .fsm_builders
@@ -2211,6 +2201,7 @@ impl ModelBuilder {
                 .into_iter()
                 .map(|(name, b)| (usize::from(b.pg_id), name))
                 .collect(),
+            predicates,
         }
     }
 }
