@@ -691,12 +691,15 @@ impl Properties {
                         }
                     }
                 }
+                // Ignore text between tags
                 Event::Text(_) => continue,
-                Event::Comment(_) => {}
-                Event::CData(_) => todo!(),
-                Event::Decl(_) => todo!(), // parser.parse_xml_declaration(tag)?,
-                Event::PI(_) => todo!(),
-                Event::DocType(_) => todo!(),
+                // Ignore comments
+                Event::Comment(_) => continue,
+                Event::CData(_) => return Err(anyhow!("CData not supported")),
+                // Ignore XML declaration
+                Event::Decl(_) => continue,
+                Event::PI(_) => return Err(anyhow!("Processing Instructions not supported")),
+                Event::DocType(_) => return Err(anyhow!("DocType not supported")),
                 // exits the loop when reaching end of file
                 Event::Eof => {
                     // info!("parsing completed");
