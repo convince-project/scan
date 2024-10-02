@@ -102,15 +102,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn print_state(scxml_model: &ScxmlModel, state: Vec<bool>) {
-    println!("state: {state:?}");
+    let mut first = true;
+    for (pred, val) in scxml_model.predicates.iter().zip(&state) {
+        if first {
+            print!("[{pred}: {val:5}");
+            first = false;
+        } else {
+            print!(" | {pred}: {val:5}");
+        }
+    }
+    println!("]");
 }
 
 fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event) {
     print!("{}", scxml_model.fsm_names.get(&event.pg_id).unwrap());
-    if let Some((src, trg, param)) = scxml_model.parameters.get(&event.channel) {
+    if let Some((src, trg, event_idx, param)) = scxml_model.parameters.get(&event.channel) {
+        let event_name = scxml_model.events.get(event_idx).unwrap();
         match event.event_type {
             channel_system::EventType::Send(val) => println!(
-                " sends param {param}={val:?} to {}",
+                " sends param {param}={val:?} of event {event_name} to {}",
                 scxml_model.fsm_names.get(trg).unwrap()
             ),
             channel_system::EventType::Receive(val) => println!(
