@@ -334,7 +334,15 @@ impl Executable {
                 execs.push(self);
             }
             ScxmlTag::If(r#if) => {
-                r#if.execs.push(self);
+                if r#if.else_flag {
+                    r#if.r#else.push(self);
+                } else {
+                    r#if.r#elif
+                        .last_mut()
+                        .expect("vector cannot be empty")
+                        .1
+                        .push(self);
+                }
             }
             _ => return Err(anyhow!("send must be inside an executable tag")),
         }
@@ -392,7 +400,7 @@ impl Send {
             {
                 Target::Expr(targetexpr)
             } else {
-                return Err(anyhow!(ParserError::EcmaScriptParsing,));
+                return Err(anyhow!(ParserError::EcmaScriptParsing));
             }
         } else {
             return Err(anyhow!(ParserError::MissingAttr(
@@ -409,15 +417,19 @@ impl Send {
 
 #[derive(Debug, Clone)]
 pub struct If {
-    pub(crate) cond: boa_ast::Expression,
-    pub(crate) execs: Vec<Executable>,
+    // pub(crate) cond: boa_ast::Expression,
+    // pub(crate) r#then: Vec<Executable>,
+    pub(crate) r#elif: Vec<(boa_ast::Expression, Vec<Executable>)>,
+    pub(crate) r#else: Vec<Executable>,
+    else_flag: bool,
 }
 
 impl If {
     fn parse(
+        &mut self,
         tag: events::BytesStart<'_>,
         interner: &mut boa_interner::Interner,
-    ) -> anyhow::Result<If> {
+    ) -> anyhow::Result<()> {
         let mut cond: Option<String> = None;
         for attr in tag
             .attributes()
@@ -443,10 +455,8 @@ impl If {
                 .expect("hopefully there is a statement")
                 .to_owned()
         {
-            Ok(If {
-                cond,
-                execs: Vec::new(),
-            })
+            self.elif.push((cond, Vec::new()));
+            Ok(())
         } else {
             Err(anyhow!(ParserError::EcmaScriptParsing))
         }
@@ -613,7 +623,12 @@ impl Fsm {
                             stack.push(ScxmlTag::Send(send));
                         }
                         TAG_IF if stack.iter().rev().any(|tag| tag.is_executable()) => {
-                            let r#if = If::parse(tag, &mut interner)
+                            let mut r#if = If {
+                                elif: Vec::new(),
+                                r#else: Vec::new(),
+                                else_flag: false,
+                            };
+                            r#if.parse(tag, &mut interner)
                                 .map_err(|err| err.context(reader.error_position()))?;
                             stack.push(ScxmlTag::If(r#if));
                         }
@@ -810,6 +825,34 @@ impl Fsm {
                                 unreachable!("param must be inside a send tag");
                             }
                         }
+                        TAG_ELSE
+                            if stack
+                                .last()
+                                .is_some_and(|tag| matches!(tag, ScxmlTag::If(_))) =>
+                        {
+                            if let Some(ScxmlTag::If(r#if)) = stack.last_mut() {
+                                if r#if.else_flag {
+                                    return Err(anyhow!("multiple `else` inside `if` tag")
+                                        .context(reader.error_position()));
+                                } else {
+                                    r#if.else_flag = true;
+                                }
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        TAG_ELIF
+                            if stack
+                                .last()
+                                .is_some_and(|tag| matches!(tag, ScxmlTag::If(_))) =>
+                        {
+                            if let Some(ScxmlTag::If(r#if)) = stack.last_mut() {
+                                r#if.parse(tag, &mut interner)
+                                    .map_err(|err| err.context(reader.error_position()))?;
+                            } else {
+                                unreachable!()
+                            }
+                        }
                         // Unknown tag: skip till maching end tag
                         _ => {
                             warn!("unknown or unexpected tag {tag_name:?}, skipping");
@@ -828,15 +871,22 @@ impl Fsm {
                     )?;
                     type_annotation = Self::parse_comment(comment)?;
                 }
-                Event::CData(_) => return Err(anyhow!("CData not supported")),
+                Event::CData(_) => {
+                    return Err(anyhow!("CData not supported").context(reader.error_position()))
+                }
                 // Ignore XML declaration
                 Event::Decl(_) => continue,
-                Event::PI(_) => return Err(anyhow!("Processing Instructions not supported")),
-                Event::DocType(_) => return Err(anyhow!("DocType not supported")),
+                Event::PI(_) => {
+                    return Err(anyhow!("Processing Instructions not supported")
+                        .context(reader.error_position()))
+                }
+                Event::DocType(_) => {
+                    return Err(anyhow!("DocType not supported").context(reader.error_position()))
+                }
                 // exits the loop when reaching end of file
                 Event::Eof => {
-                    // info!("parsing completed");
-                    return Err(anyhow!(ParserError::UnclosedTags));
+                    error!("parsing completed with unclosed tags");
+                    return Err(anyhow!(ParserError::UnclosedTags).context(reader.error_position()));
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low

@@ -77,6 +77,11 @@ fn conditional() -> anyhow::Result<()> {
 }
 
 #[test]
+fn elif() -> anyhow::Result<()> {
+    test(PathBuf::from_str("./tests/assets/test_elif/model.xml")?)
+}
+
+#[test]
 fn bt_success() -> anyhow::Result<()> {
     test(PathBuf::from_str(
         "./tests/assets/test_bt_success/model.xml",

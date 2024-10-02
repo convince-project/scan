@@ -6,6 +6,7 @@ use crate::parser::{
     TICK_CALL, TICK_RETURN,
 };
 use anyhow::anyhow;
+use boa_interner::ToInternedString;
 use log::{info, trace};
 use scan_core::{channel_system::*, *};
 use std::collections::{HashMap, HashSet};
@@ -268,8 +269,18 @@ impl ModelBuilder {
                 }
                 Ok(())
             }
-            Executable::If(If { cond: _, execs }) => {
-                for executable in execs {
+            Executable::If(If {
+                r#elif: elifs,
+                r#else,
+                ..
+            }) => {
+                // preprocess all executables
+                for (_, executables) in elifs {
+                    for executable in executables {
+                        self.prebuild_exec(pg_id, executable)?;
+                    }
+                }
+                for executable in r#else {
                     self.prebuild_exec(pg_id, executable)?;
                 }
                 Ok(())
@@ -1609,26 +1620,50 @@ impl ModelBuilder {
                 self.cs.add_transition(pg_id, loc, assign, next_loc, None)?;
                 Ok(next_loc)
             }
-            Executable::If(If { cond, execs }) => {
-                let mut next_loc = self.cs.new_location(pg_id).unwrap();
-                let cond = self.expression(cond, interner, vars, origin, params)?;
-                self.cs
-                    .add_transition(pg_id, loc, step, next_loc, Some(cond.to_owned()))?;
-                for exec in execs {
-                    next_loc = self.add_executable(
-                        exec, pg_id, int_queue, step, next_loc, vars, origin, params, interner,
+            Executable::If(If { r#elif, r#else, .. }) => {
+                // We go to this location after the if/elif/else block
+                let end_loc = self.cs.new_location(pg_id).unwrap();
+                let mut curr_loc = loc;
+                for (cond, execs) in r#elif {
+                    let mut next_loc = self.cs.new_location(pg_id).unwrap();
+                    let cond = self.expression(cond, interner, vars, origin, params)?;
+                    self.cs.add_transition(
+                        pg_id,
+                        curr_loc,
+                        step,
+                        next_loc,
+                        Some(cond.to_owned()),
+                    )?;
+                    for exec in execs {
+                        next_loc = self.add_executable(
+                            exec, pg_id, int_queue, step, next_loc, vars, origin, params, interner,
+                        )?;
+                    }
+                    // end of `if` branch, go to end_loc
+                    self.cs
+                        .add_transition(pg_id, next_loc, step, end_loc, None)?;
+                    // `elif/else` branch
+                    let old_loc = curr_loc;
+                    curr_loc = self.cs.new_location(pg_id).unwrap();
+                    self.cs
+                        .add_transition(
+                            pg_id,
+                            old_loc,
+                            step,
+                            curr_loc,
+                            Some(Expression::Not(Box::new(cond))),
+                        )
+                        .unwrap();
+                }
+                // Add executables for `else` (if any)
+                for exec in r#else {
+                    curr_loc = self.add_executable(
+                        exec, pg_id, int_queue, step, curr_loc, vars, origin, params, interner,
                     )?;
                 }
                 self.cs
-                    .add_transition(
-                        pg_id,
-                        loc,
-                        step,
-                        next_loc,
-                        Some(Expression::Not(Box::new(cond))),
-                    )
-                    .unwrap();
-                Ok(next_loc)
+                    .add_transition(pg_id, curr_loc, step, end_loc, None)?;
+                Ok(end_loc)
             }
         }
     }
@@ -1681,16 +1716,12 @@ impl ModelBuilder {
         let expr = match expr {
             boa_ast::Expression::This => todo!(),
             boa_ast::Expression::Identifier(ident) => {
-                let ident: &str = interner
-                    .resolve(ident.sym())
-                    .ok_or(anyhow!("unknown identifier"))?
-                    .utf8()
-                    .ok_or(anyhow!("not utf8"))?;
+                let ident = ident.to_interned_string(interner);
                 self.enums
-                    .get(ident)
+                    .get(&ident)
                     .map(|i| CsExpression::from(*i))
-                    .or_else(|| vars.get(ident).map(|(var, _)| CsExpression::Var(*var)))
-                    .ok_or(anyhow!("unknown identifier"))?
+                    .or_else(|| vars.get(&ident).map(|(var, _)| CsExpression::Var(*var)))
+                    .ok_or(anyhow!("unknown identifier: {ident}"))?
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
@@ -1758,46 +1789,42 @@ impl ModelBuilder {
             }
             boa_ast::Expression::Update(_) => todo!(),
             boa_ast::Expression::Binary(bin) => {
-                use boa_ast::expression::operator::binary::{ArithmeticOp, BinaryOp, RelationalOp};
+                use boa_ast::expression::operator::binary::{
+                    ArithmeticOp, BinaryOp, LogicalOp, RelationalOp,
+                };
+                let lhs = self.expression(bin.lhs(), interner, vars, origin, params)?;
+                let rhs = self.expression(bin.rhs(), interner, vars, origin, params)?;
                 match bin.op() {
-                    BinaryOp::Arithmetic(ar_bin) => {
-                        let lhs = self.expression(bin.lhs(), interner, vars, origin, params)?;
-                        let rhs = self.expression(bin.rhs(), interner, vars, origin, params)?;
-                        match ar_bin {
-                            ArithmeticOp::Add => CsExpression::Sum(vec![lhs, rhs]),
-                            ArithmeticOp::Sub => {
-                                CsExpression::Sum(vec![lhs, CsExpression::Opposite(Box::new(rhs))])
-                            }
-                            ArithmeticOp::Div => todo!(),
-                            ArithmeticOp::Mul => todo!(),
-                            ArithmeticOp::Exp => todo!(),
-                            ArithmeticOp::Mod => todo!(),
+                    BinaryOp::Arithmetic(ar_bin) => match ar_bin {
+                        ArithmeticOp::Add => CsExpression::Sum(vec![lhs, rhs]),
+                        ArithmeticOp::Sub => {
+                            CsExpression::Sum(vec![lhs, CsExpression::Opposite(Box::new(rhs))])
                         }
-                    }
+                        ArithmeticOp::Div => todo!(),
+                        ArithmeticOp::Mul => todo!(),
+                        ArithmeticOp::Exp => todo!(),
+                        ArithmeticOp::Mod => todo!(),
+                    },
                     BinaryOp::Bitwise(_) => todo!(),
-                    BinaryOp::Relational(rel_bin) => {
-                        let lhs = self.expression(bin.lhs(), interner, vars, origin, params)?;
-                        let rhs = self.expression(bin.rhs(), interner, vars, origin, params)?;
-                        match rel_bin {
-                            RelationalOp::Equal => CsExpression::Equal(Box::new((lhs, rhs))),
-                            RelationalOp::NotEqual => todo!(),
-                            RelationalOp::StrictEqual => todo!(),
-                            RelationalOp::StrictNotEqual => todo!(),
-                            RelationalOp::GreaterThan => {
-                                CsExpression::Greater(Box::new((lhs, rhs)))
-                            }
-                            RelationalOp::GreaterThanOrEqual => {
-                                CsExpression::GreaterEq(Box::new((lhs, rhs)))
-                            }
-                            RelationalOp::LessThan => CsExpression::Less(Box::new((lhs, rhs))),
-                            RelationalOp::LessThanOrEqual => {
-                                CsExpression::LessEq(Box::new((lhs, rhs)))
-                            }
-                            RelationalOp::In => todo!(),
-                            RelationalOp::InstanceOf => todo!(),
+                    BinaryOp::Relational(rel_bin) => match rel_bin {
+                        RelationalOp::Equal => CsExpression::Equal(Box::new((lhs, rhs))),
+                        RelationalOp::NotEqual => todo!(),
+                        RelationalOp::StrictEqual => todo!(),
+                        RelationalOp::StrictNotEqual => todo!(),
+                        RelationalOp::GreaterThan => CsExpression::Greater(Box::new((lhs, rhs))),
+                        RelationalOp::GreaterThanOrEqual => {
+                            CsExpression::GreaterEq(Box::new((lhs, rhs)))
                         }
-                    }
-                    BinaryOp::Logical(_) => todo!(),
+                        RelationalOp::LessThan => CsExpression::Less(Box::new((lhs, rhs))),
+                        RelationalOp::LessThanOrEqual => CsExpression::LessEq(Box::new((lhs, rhs))),
+                        RelationalOp::In => todo!(),
+                        RelationalOp::InstanceOf => todo!(),
+                    },
+                    BinaryOp::Logical(op) => match op {
+                        LogicalOp::And => CsExpression::And(vec![lhs, rhs]),
+                        LogicalOp::Or => CsExpression::Or(vec![lhs, rhs]),
+                        LogicalOp::Coalesce => todo!(),
+                    },
                     BinaryOp::Comma => todo!(),
                 }
             }
@@ -1819,15 +1846,11 @@ impl ModelBuilder {
         let expr = match expr {
             boa_ast::Expression::This => todo!(),
             boa_ast::Expression::Identifier(ident) => {
-                let ident: &str = interner
-                    .resolve(ident.sym())
-                    .ok_or(anyhow!("unknown identifier"))?
-                    .utf8()
-                    .ok_or(anyhow!("not utf8"))?;
+                let ident = ident.to_interned_string(interner);
                 self.enums
-                    .get(ident)
+                    .get(&ident)
                     .map(|i| Val::Integer(*i))
-                    .ok_or(anyhow!("unknown identifier"))?
+                    .ok_or(anyhow!("unknown identifier: {ident}"))?
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
@@ -1910,12 +1933,8 @@ impl ModelBuilder {
         match expr {
             boa_ast::Expression::This => todo!(),
             boa_ast::Expression::Identifier(ident) => {
-                let ident: &str = interner
-                    .resolve(ident.sym())
-                    .ok_or(anyhow!("unknown identifier"))?
-                    .utf8()
-                    .ok_or(anyhow!("not utf8"))?;
-                match ident {
+                let ident = ident.to_interned_string(interner);
+                match ident.as_str() {
                     "_event" => Ok(EcmaObj::Properties(HashMap::from([
                         (
                             String::from("origin"),
@@ -1960,7 +1979,7 @@ impl ModelBuilder {
                             PropertyAccessField::Const(sym) => {
                                 let ident: &str = interner
                                     .resolve(*sym)
-                                    .ok_or(anyhow!("unknown identifier"))?
+                                    .ok_or(anyhow!("unknown symbol {:?}", sym))?
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
                                 match prop_target {
