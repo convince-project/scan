@@ -88,6 +88,9 @@ pub struct Location(usize);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Action(usize);
 
+/// Epsilon action to enable autonomous transitions.
+const EPSILON: Action = Action(usize::MAX);
+
 /// An indexing object for typed variables in a PG.
 ///
 /// These cannot be directly created or manipulated,
@@ -147,6 +150,9 @@ pub enum PgError {
     /// The action is a not a Receive communication.
     #[error("{0:?} is a not a Receive communication")]
     NotReceive(Action),
+    /// The epsilon action has no effects.
+    #[error("The epsilon action has no effects")]
+    EpsilonEffects,
 }
 
 // type FnExpr = Box<dyn Fn(&[Val]) -> Val + Send + Sync>;
@@ -174,6 +180,9 @@ enum FnEffect {
     Receive(Var),
 }
 
+// QUESTION: is there a better/more efficient representation?
+type Transitions = HashMap<(Action, Location), Option<FnExpression<Vec<Val>>>>;
+
 /// Representation of a PG that can be executed transition-by-transition.
 ///
 /// The structure of the PG cannot be changed,
@@ -189,8 +198,7 @@ pub struct ProgramGraph {
     current_location: Location,
     vars: Vec<Val>,
     effects: Arc<Vec<FnEffect>>,
-    // QUESTION: is there a better/more efficient representation?
-    transitions: Arc<Vec<HashMap<(Action, Location), Option<FnExpression<Vec<Val>>>>>>,
+    transitions: Arc<Vec<Transitions>>,
 }
 
 impl ProgramGraph {
@@ -262,15 +270,17 @@ impl ProgramGraph {
     /// Fails if the requested transition is not admissible.
     pub fn transition(&mut self, action: Action, post_state: Location) -> Result<(), PgError> {
         self.satisfies_guard(action, post_state)?;
-        if let FnEffect::Effects(effects) = &self.effects[action.0] {
-            for (var, effect) in effects {
-                self.vars[var.0] = effect.eval(&self.vars).expect("evaluation must succeed");
+        if action != EPSILON {
+            if let FnEffect::Effects(effects) = &self.effects[action.0] {
+                for (var, effect) in effects {
+                    self.vars[var.0] = effect.eval(&self.vars).expect("evaluation must succeed");
+                }
+            } else {
+                return Err(PgError::Communication(action));
             }
-            self.current_location = post_state;
-            Ok(())
-        } else {
-            Err(PgError::Communication(action))
         }
+        self.current_location = post_state;
+        Ok(())
     }
 
     pub(crate) fn send(&mut self, action: Action, post_state: Location) -> Result<Val, PgError> {

@@ -267,6 +267,37 @@ impl ChannelSystemBuilder {
         }
     }
 
+    /// Adds an autonomous transition to the PG.
+    ///
+    /// Fails if the CS contains no such PG, or if the given variable or locations do not belong to it.
+    ///
+    /// See also [`ProgramGraphBuilder::add_transition`].
+    pub fn add_autonomous_transition(
+        &mut self,
+        pg_id: PgId,
+        pre: Location,
+        post: Location,
+        guard: Option<CsExpression>,
+    ) -> Result<(), CsError> {
+        if pre.0 != pg_id {
+            Err(CsError::LocationNotInPg(pre, pg_id))
+        } else if post.0 != pg_id {
+            Err(CsError::LocationNotInPg(post, pg_id))
+        } else {
+            // Turn CsExpression into a PgExpression for Program Graph pg_id
+            let guard = guard
+                .map(|guard| PgExpression::try_from((pg_id, guard)))
+                .transpose()?;
+            self.program_graphs
+                .get_mut(pg_id.0)
+                .ok_or(CsError::MissingPg(pg_id))
+                .and_then(|pg| {
+                    pg.add_autonomous_transition(pre.1, post.1, guard)
+                        .map_err(|err| CsError::ProgramGraph(pg_id, err))
+                })
+        }
+    }
+
     /// Adds a new channel of the given type and capacity to the CS.
     ///
     /// - [`None`] capacity means that the channel's capacity is unlimited.

@@ -1037,9 +1037,6 @@ impl ModelBuilder {
             .unwrap_or_else(|| panic!("builder for {} must already exist", scxml.id));
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
-        // Generic action that progresses the execution of the FSM.
-        // WARN DO NOT ADD EFFECTS!
-        let step = self.cs.new_action(pg_id).expect("PG exists");
         // Initial location of Program Graph.
         let initial_loc = self
             .cs
@@ -1223,7 +1220,6 @@ impl ModelBuilder {
                     executable,
                     pg_id,
                     int_queue,
-                    step,
                     onentry_loc,
                     &vars,
                     None,
@@ -1338,7 +1334,12 @@ impl ModelBuilder {
                     }
                     // Check if event and sender are the correct ones in case of event with no parameter.
                     self.cs
-                        .add_transition(pg_id, current_loc, step, eventful_trans, is_event_sender)
+                        .add_autonomous_transition(
+                            pg_id,
+                            current_loc,
+                            eventful_trans,
+                            is_event_sender,
+                        )
                         .expect("has to work");
                 }
             }
@@ -1428,10 +1429,9 @@ impl ModelBuilder {
                 // If transition is active, execute the relevant executable content and then the transition to the target.
                 // Could fail if 'cond' expression was not acceptable as guard.
                 let mut exec_trans_loc = self.cs.new_location(pg_id)?;
-                self.cs.add_transition(
+                self.cs.add_autonomous_transition(
                     pg_id,
                     check_trans_loc,
-                    step,
                     exec_trans_loc,
                     guard.to_owned(),
                 )?;
@@ -1442,7 +1442,6 @@ impl ModelBuilder {
                         exec,
                         pg_id,
                         int_queue,
-                        step,
                         exec_trans_loc,
                         &vars,
                         exec_origin,
@@ -1453,7 +1452,7 @@ impl ModelBuilder {
                 // Transitioning to the target state/location.
                 // At this point, the transition cannot be stopped so there can be no guard.
                 self.cs
-                    .add_transition(pg_id, exec_trans_loc, step, target_loc, None)
+                    .add_autonomous_transition(pg_id, exec_trans_loc, target_loc, None)
                     .expect("has to work");
                 // If the current transition is not active, move on to check the next one.
                 // NOTE: an autonomous transition without cond is always active so there is no point processing further transitions.
@@ -1462,10 +1461,9 @@ impl ModelBuilder {
                     .map(|guard| CsExpression::Not(Box::new(guard)))
                     .unwrap_or(CsExpression::from(false));
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         check_trans_loc,
-                        step,
                         next_trans_loc,
                         Some(not_guard),
                     )
@@ -1475,10 +1473,10 @@ impl ModelBuilder {
             // Connect NULL events with named events
             // by transitioning from last "NUll" location to dequeuing event location.
             self.cs
-                .add_transition(pg_id, null_trans, step, int_queue_loc, None)?;
+                .add_autonomous_transition(pg_id, null_trans, int_queue_loc, None)?;
             // Return to dequeue a new (internal or external) event.
             self.cs
-                .add_transition(pg_id, eventful_trans, step, int_queue_loc, None)?;
+                .add_autonomous_transition(pg_id, eventful_trans, int_queue_loc, None)?;
         }
         Ok(())
     }
@@ -1489,7 +1487,6 @@ impl ModelBuilder {
         executable: &Executable,
         pg_id: PgId,
         int_queue: Channel,
-        step: Action,
         loc: Location,
         vars: &HashMap<String, (Var, String)>,
         origin: Option<Var>,
@@ -1602,7 +1599,7 @@ impl ModelBuilder {
                         }
                         // Once sending event and args done, get to exit-point
                         self.cs
-                            .add_transition(pg_id, next_loc, step, done_loc, None)
+                            .add_autonomous_transition(pg_id, next_loc, done_loc, None)
                             .expect("hand-made args");
                     }
 
@@ -1627,29 +1624,27 @@ impl ModelBuilder {
                 for (cond, execs) in r#elif {
                     let mut next_loc = self.cs.new_location(pg_id).unwrap();
                     let cond = self.expression(cond, interner, vars, origin, params)?;
-                    self.cs.add_transition(
+                    self.cs.add_autonomous_transition(
                         pg_id,
                         curr_loc,
-                        step,
                         next_loc,
                         Some(cond.to_owned()),
                     )?;
                     for exec in execs {
                         next_loc = self.add_executable(
-                            exec, pg_id, int_queue, step, next_loc, vars, origin, params, interner,
+                            exec, pg_id, int_queue, next_loc, vars, origin, params, interner,
                         )?;
                     }
                     // end of `if` branch, go to end_loc
                     self.cs
-                        .add_transition(pg_id, next_loc, step, end_loc, None)?;
+                        .add_autonomous_transition(pg_id, next_loc, end_loc, None)?;
                     // `elif/else` branch
                     let old_loc = curr_loc;
                     curr_loc = self.cs.new_location(pg_id).unwrap();
                     self.cs
-                        .add_transition(
+                        .add_autonomous_transition(
                             pg_id,
                             old_loc,
-                            step,
                             curr_loc,
                             Some(Expression::Not(Box::new(cond))),
                         )
@@ -1658,11 +1653,11 @@ impl ModelBuilder {
                 // Add executables for `else` (if any)
                 for exec in r#else {
                     curr_loc = self.add_executable(
-                        exec, pg_id, int_queue, step, curr_loc, vars, origin, params, interner,
+                        exec, pg_id, int_queue, curr_loc, vars, origin, params, interner,
                     )?;
                 }
                 self.cs
-                    .add_transition(pg_id, curr_loc, step, end_loc, None)?;
+                    .add_autonomous_transition(pg_id, curr_loc, end_loc, None)?;
                 Ok(end_loc)
             }
         }

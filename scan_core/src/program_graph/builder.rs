@@ -1,4 +1,6 @@
-use super::{Action, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph, Var};
+use super::{
+    Action, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph, Var, EPSILON,
+};
 use crate::grammar::{Type, Val};
 use log::info;
 use std::{collections::HashMap, sync::Arc};
@@ -27,6 +29,8 @@ impl From<Effect> for FnEffect {
     }
 }
 
+type Transitions = HashMap<(Action, Location), Option<PgExpression>>;
+
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
 pub struct ProgramGraphBuilder {
@@ -34,7 +38,7 @@ pub struct ProgramGraphBuilder {
     effects: Vec<Effect>,
     // Transitions are indexed by locations
     // We can assume there is at most one condition by logical disjunction
-    transitions: Vec<HashMap<(Action, Location), Option<PgExpression>>>,
+    transitions: Vec<Transitions>,
     vars: Vec<Val>,
 }
 
@@ -137,6 +141,9 @@ impl ProgramGraphBuilder {
         var: Var,
         effect: PgExpression,
     ) -> Result<(), PgError> {
+        if action == EPSILON {
+            return Err(PgError::EpsilonEffects);
+        }
         let var_type = self
             .vars
             .get(var.0)
@@ -208,6 +215,9 @@ impl ProgramGraphBuilder {
     ///
     /// // Add a transition
     /// pg_builder
+    ///     .add_transition(initial_loc, action, initial_loc, None)
+    ///     .expect("this transition can be added");
+    /// pg_builder
     ///     .add_transition(initial_loc, action, initial_loc, Some(PgExpression::from(1)))
     ///     .expect_err("the guard expression is not boolean");
     /// ```
@@ -223,7 +233,7 @@ impl ProgramGraphBuilder {
             Err(PgError::MissingLocation(pre))
         } else if self.transitions.len() <= post.0 {
             Err(PgError::MissingLocation(post))
-        } else if self.effects.len() <= action.0 {
+        } else if action != EPSILON && self.effects.len() <= action.0 {
             // Check 'action' exists
             Err(PgError::MissingAction(action))
         } else if guard.is_some() && !matches!(self.r#type(guard.as_ref().unwrap())?, Type::Boolean)
@@ -251,6 +261,38 @@ impl ProgramGraphBuilder {
                 .or_insert(guard);
             Ok(())
         }
+    }
+
+    /// Adds an autonomous transition to the PG, i.e., a transition enabled by the epsilon action.
+    /// Requires specifying:
+    ///
+    /// - state pre-transition,
+    /// - state post-transition, and
+    /// - (optionally) boolean expression guarding the transition.
+    ///
+    /// Fails if the provided guard is not a boolean expression.
+    ///
+    /// ```
+    /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
+    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// // The builder is initialized with an initial location
+    /// let initial_loc = pg_builder.initial_location();
+    ///
+    /// // Add a transition
+    /// pg_builder
+    ///     .add_autonomous_transition(initial_loc, initial_loc, None)
+    ///     .expect("this autonomous transition can be added");
+    /// pg_builder
+    ///     .add_autonomous_transition(initial_loc, initial_loc, Some(PgExpression::from(1)))
+    ///     .expect_err("the guard expression is not boolean");
+    /// ```
+    pub fn add_autonomous_transition(
+        &mut self,
+        pre: Location,
+        post: Location,
+        guard: Option<PgExpression>,
+    ) -> Result<(), PgError> {
+        self.add_transition(pre, EPSILON, post, guard)
     }
 
     // Computes the type of an expression.
