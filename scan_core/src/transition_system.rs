@@ -7,13 +7,6 @@ use rayon::prelude::*;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 
-pub struct Properties {
-    pub guarantees: Vec<Mtl<usize>>,
-    pub assumes: Vec<Mtl<usize>>,
-}
-
-// trait Oracle: Clone + Sync + Send + FnMut(&[bool]) -> bool {}
-
 /// Trait implementing a Transition System (TS), as defined in [^1].
 /// As such, it is possible to verify it against MTL specifications.
 ///
@@ -79,49 +72,27 @@ pub trait TransitionSystem: Clone + Send + Sync {
 
     fn find_counterexample(
         &self,
-        props: Properties,
+        guarantees: &[Mtl<usize>],
+        assumes: &[Mtl<usize>],
         confidence: f64,
         precision: f64,
     ) -> Option<Vec<(Self::Action, Vec<bool>)>> {
         // WARN FIXME TODO: Account for inconclusive traces (e.g. where assumes are violated)
-        let okamoto = okamoto(confidence, precision).ceil() as u32;
-        (0..okamoto).into_par_iter().find_map_any(|_| {
+        // Pass s=1, f=0 to adaptive criterion so that avarage success value v=1.
+        // In this case, the adaptive criterion is (much) lower than Okamoto criterion
+        // because v=1 is the furthest possible from v=0.5 where the two criteria coincide.
+        let runs = adaptive(1, 0, confidence, precision).ceil() as u32;
+        (0..runs).into_par_iter().find_map_any(|_| {
             let mut rng = rand::thread_rng();
-            self.clone().trace_counterexample(&props, &mut rng)
+            self.clone()
+                .trace_counterexample(guarantees, assumes, &mut rng)
         })
     }
 
-    // fn check_avarage(&self, props: Properties, experiments: usize) -> (u32, u32) {
-    //     (0..experiments)
-    //         .into_par_iter()
-    //         .filter_map(|_| {
-    //             let mut rng = rand::thread_rng();
-    //             let mut trace = Vec::new();
-    //             let mut actions = Vec::new();
-    //             let mut ts = self.to_owned();
-    //             while let Some((action, new_ts)) = ts.transitions().choose(&mut rng) {
-    //                 trace.push(new_ts.labels());
-    //                 actions.push(action.to_owned());
-    //                 ts = new_ts.to_owned();
-    //             }
-    //             if !props.assumes.iter().all(|p| p.eval(trace.as_slice())) {
-    //                 // If some assume is not satisfied,
-    //                 // disregard state and move on.
-    //                 None
-    //             } else if props.guarantees.iter().all(|p| p.eval(trace.as_slice())) {
-    //                 // If all guarantees are satisfied, execution succeeded.
-    //                 Some((1, 0))
-    //             } else {
-    //                 // If guarantee is violated, we have found a counter-example!
-    //                 Some((0, 1))
-    //             }
-    //         })
-    //         .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
-    // }
-
     fn trace_counterexample<R: Rng>(
         mut self,
-        props: &Properties,
+        guarantees: &[Mtl<usize>],
+        assumes: &[Mtl<usize>],
         rng: &mut R,
     ) -> Option<Vec<(Self::Action, Vec<bool>)>> {
         let mut trace = Vec::new();
@@ -131,11 +102,11 @@ pub trait TransitionSystem: Clone + Send + Sync {
             actions.push(action.to_owned());
             self = new_ts.to_owned();
         }
-        if !props.assumes.iter().all(|p| p.eval(trace.as_slice())) {
+        if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
             // If some assume is not satisfied,
             // disregard state and move on.
             None
-        } else if props.guarantees.iter().all(|p| p.eval(trace.as_slice())) {
+        } else if guarantees.iter().all(|p| p.eval(trace.as_slice())) {
             // If all guarantees are satisfied,
             None
         } else {
@@ -146,17 +117,22 @@ pub trait TransitionSystem: Clone + Send + Sync {
         }
     }
 
-    fn experiment<R: Rng>(mut self, props: &Properties, rng: &mut R) -> Option<bool> {
+    fn experiment<R: Rng>(
+        mut self,
+        guarantees: &[Mtl<usize>],
+        assumes: &[Mtl<usize>],
+        rng: &mut R,
+    ) -> Option<bool> {
         let mut trace = Vec::new();
         while let Some((_, new_ts)) = self.transitions().choose(rng) {
             trace.push(new_ts.labels());
             self = new_ts.to_owned();
         }
-        if !props.assumes.iter().all(|p| p.eval(trace.as_slice())) {
+        if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
             // If some assume is not satisfied,
             // disregard state and move on.
             None
-        } else if props.guarantees.iter().all(|p| p.eval(trace.as_slice())) {
+        } else if guarantees.iter().all(|p| p.eval(trace.as_slice())) {
             // If all guarantees are satisfied,
             Some(true)
         } else {
@@ -165,7 +141,13 @@ pub trait TransitionSystem: Clone + Send + Sync {
         }
     }
 
-    fn adaptive(&self, props: &Properties, confidence: f64, precision: f64) -> f64 {
+    fn adaptive(
+        &self,
+        guarantees: &[Mtl<usize>],
+        assumes: &[Mtl<usize>],
+        confidence: f64,
+        precision: f64,
+    ) -> f64 {
         let (s, f) = (0..)
             .fold_while((0, 0), |(s, f), _| {
                 let mut rng = rand::thread_rng();
@@ -179,12 +161,11 @@ pub trait TransitionSystem: Clone + Send + Sync {
                 }
                 let mut s = s;
                 let mut f = f;
-                if !props.assumes.iter().all(|p| p.eval(trace.as_slice())) {
+                if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
                     // If some assume is not satisfied,
                     // disregard state and move on.
                     return Continue((s, f));
-                } else if props.guarantees.iter().all(|p| p.eval(trace.as_slice()))
-                    && rng.gen_bool(0.666)
+                } else if guarantees.iter().all(|p| p.eval(trace.as_slice())) && rng.gen_bool(0.666)
                 {
                     // If all guarantees are satisfied,
                     s += 1;
@@ -192,7 +173,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
                     // If guarantee is violated, we have found a counter-example!
                     f += 1;
                 }
-                if adaptive_criterion(s, f, confidence, precision) {
+                if adaptive(s, f, confidence, precision) > (s + f) as f64 {
                     info!("runs: {s} successes, {f} failures");
                     Continue((s, f))
                 } else {
@@ -203,7 +184,13 @@ pub trait TransitionSystem: Clone + Send + Sync {
         s as f64 / (s + f) as f64
     }
 
-    fn par_adaptive(&self, props: &Properties, confidence: f64, precision: f64) -> f64 {
+    fn par_adaptive(
+        &self,
+        guarantees: &[Mtl<usize>],
+        assumes: &[Mtl<usize>],
+        confidence: f64,
+        precision: f64,
+    ) -> f64 {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         let s = AtomicUsize::new(0);
         let f = AtomicUsize::new(0);
@@ -211,7 +198,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
             .into_par_iter()
             .filter_map(|_| {
                 let mut rng = rand::thread_rng();
-                self.clone().experiment(props, &mut rng)
+                self.clone().experiment(guarantees, assumes, &mut rng)
             })
             .inspect(|result| {
                 if *result {
@@ -231,7 +218,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
             .take_any_while(|_| {
                 let s = s.load(Relaxed) as u32;
                 let f = f.load(Relaxed) as u32;
-                adaptive_criterion(s, f, confidence, precision)
+                adaptive(s, f, confidence, precision) > (s + f) as f64
             })
             .count();
         let s = s.into_inner();
@@ -248,10 +235,9 @@ fn okamoto(confidence: f64, precision: f64) -> f64 {
     2f64 * (2f64 / (1f64 - confidence)).ln() / precision.powf(2f64)
 }
 
-fn adaptive_criterion(s: u32, f: u32, confidence: f64, precision: f64) -> bool {
+fn adaptive(s: u32, f: u32, confidence: f64, precision: f64) -> f64 {
     let n = s + f;
-    let avg = s as f64 / (s + f) as f64;
-    (n as f64)
-        < okamoto(confidence, precision)
-            * (0.25f64 - ((avg - 0.5f64).abs() - (2f64 * precision / 3f64)).powf(2f64))
+    let avg = s as f64 / n as f64;
+    okamoto(confidence, precision)
+        * (0.25f64 - ((avg - 0.5f64).abs() - (2f64 * precision / 3f64)).powf(2f64))
 }

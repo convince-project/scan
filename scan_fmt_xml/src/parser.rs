@@ -7,11 +7,11 @@ mod property;
 mod vocabulary;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str;
 use std::str::Utf8Error;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use log::{error, info, trace, warn};
 use quick_xml::events::attributes::{AttrError, Attribute};
 use quick_xml::{events, Error as XmlError};
@@ -51,9 +51,9 @@ pub enum ParserError {
     UnknownMoC(String),
     #[error("behavior tree missing root node")]
     MissingBtRootNode,
-    #[error("something went wrong parsing EcmaScript code")]
+    #[error("error parsing EcmaScript code")]
     EcmaScriptParsing,
-    #[error("required type annotation missing")]
+    #[error("type annotation missing")]
     NoTypeAnnotation,
     #[error("provided path is not a file")]
     NotAFile,
@@ -106,9 +106,9 @@ impl Parser {
     /// Builds a [`Parser`] representation by parsing the given main file of a model specification in the CONVINCE-XML format.
     ///
     /// Fails if the parsed content contains syntactic errors.
-    pub fn parse(file: PathBuf) -> anyhow::Result<Parser> {
-        let mut reader = Reader::from_file(&file)?;
-        let root_folder = file.parent().ok_or(ParserError::NotAFile)?.to_path_buf();
+    pub fn parse(path: &Path) -> anyhow::Result<Parser> {
+        let mut reader = Reader::from_file(path)?;
+        let root_folder = path.parent().ok_or(ParserError::NotAFile)?.to_path_buf();
         let mut spec = Parser {
             root_folder,
             process_list: HashMap::new(),
@@ -119,7 +119,10 @@ impl Parser {
         let mut stack = Vec::new();
         info!("begin parsing");
         loop {
-            match reader.read_event_into(&mut buf)? {
+            match reader
+                .read_event_into(&mut buf)
+                .with_context(|| reader.error_position())?
+            {
                 Event::Start(tag) => {
                     let tag_name = tag.name();
                     let tag_name = str::from_utf8(tag_name.as_ref())?;
@@ -143,7 +146,9 @@ impl Parser {
                         // Unknown tag: skip till maching end tag
                         _ => {
                             warn!("unknown or unexpected tag {tag_name}, skipping");
-                            reader.read_to_end_into(tag.to_end().into_owned().name(), &mut buf)?;
+                            reader
+                                .read_to_end_into(tag.to_end().into_owned().name(), &mut buf)
+                                .with_context(|| reader.error_position())?;
                         }
                     }
                 }
@@ -156,7 +161,8 @@ impl Parser {
                         error!("unexpected end tag {tag_name}");
                         return Err(anyhow::Error::new(ParserError::UnexpectedEndTag(
                             tag_name.to_string(),
-                        )));
+                        )))
+                        .with_context(|| reader.buffer_position());
                     }
                 }
                 Event::Empty(tag) => {
@@ -171,7 +177,7 @@ impl Parser {
                                 .is_some_and(|tag| *tag == ConvinceTag::ProcessList) =>
                         {
                             spec.parse_process(tag)
-                                .map_err(|err| err.context(reader.error_position()))?;
+                                .with_context(|| reader.buffer_position())?;
                         }
                         TAG_TYPES
                             if stack
@@ -179,7 +185,7 @@ impl Parser {
                                 .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
                         {
                             spec.parse_types(tag)
-                                .map_err(|err| err.context(reader.error_position()))?;
+                                .with_context(|| reader.buffer_position())?;
                         }
                         TAG_PROPERTIES
                             if stack
@@ -187,7 +193,7 @@ impl Parser {
                                 .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
                         {
                             spec.parse_properties(tag)
-                                .map_err(|err| err.context(reader.error_position()))?;
+                                .with_context(|| reader.buffer_position())?;
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
@@ -200,19 +206,27 @@ impl Parser {
                 Event::Text(_) => continue,
                 // Ignore comments
                 Event::Comment(_) => continue,
-                Event::CData(_) => return Err(anyhow!("CData not supported")),
+                Event::CData(_) => {
+                    return Err(anyhow!("CData not supported"))
+                        .with_context(|| reader.buffer_position())
+                }
                 // Ignore XML declaration
                 Event::Decl(_) => continue,
-                Event::PI(_) => return Err(anyhow!("Processing Instructions not supported")),
-                Event::DocType(_) => return Err(anyhow!("DocType not supported")),
+                Event::PI(_) => {
+                    return Err(anyhow!("Processing Instructions not supported"))
+                        .with_context(|| reader.buffer_position())
+                }
+                Event::DocType(_) => {
+                    return Err(anyhow!("DocType not supported"))
+                        .with_context(|| reader.buffer_position())
+                }
                 // exits the loop when reaching end of file
                 Event::Eof => {
                     info!("parsing completed");
                     if !stack.is_empty() {
-                        return Err(anyhow!(ParserError::UnclosedTags,));
+                        return Err(anyhow!(ParserError::UnclosedTags))
+                            .with_context(|| reader.buffer_position());
                     }
-                    // let model = parser.model.build();
-                    // return Ok(model);
                     break;
                 }
             }

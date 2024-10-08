@@ -1,7 +1,7 @@
 use clap::Parser as ClapParser;
 use scan::*;
-use scan_fmt_xml::{scan_core::*, ModelBuilder, Parser};
-use std::{error::Error, path::PathBuf};
+use scan_fmt_xml::scan_core::*;
+use std::path::PathBuf;
 
 /// A statistical model checker for large concurrent systems
 #[derive(ClapParser)]
@@ -17,29 +17,26 @@ struct Cli {
     #[arg(short, long, default_value = "0.01")]
     precision: f64,
     /// Search for a counterexample
-    #[arg(short, long, default_value = "false")]
+    #[arg(long, default_value = "false")]
     counterexample: bool,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let cli = Cli::parse();
-    let parser = Parser::parse(cli.model.to_owned())?;
-    let scxml_model = ModelBuilder::visit(parser)?;
-    let props = Properties {
-        guarantees: scxml_model.guarantees.clone(),
-        assumes: scxml_model.assumes.clone(),
-    };
+    let scxml_model = scan_fmt_xml::load(&cli.model)?;
     let confidence = cli.confidence;
     let precision = cli.precision;
     if cli.counterexample {
         println!(
             "Searching for counterexample with confidence={confidence}, precision={precision}"
         );
-        if let Some(trace) = scxml_model
-            .model
-            .find_counterexample(props, confidence, precision)
-        {
+        if let Some(trace) = scxml_model.model.find_counterexample(
+            &scxml_model.guarantees,
+            &scxml_model.assumes,
+            confidence,
+            precision,
+        ) {
             println!("Counterexample trace:");
             scan::print_state(&scxml_model, scxml_model.model.labels());
             for (event, state) in trace {
@@ -51,9 +48,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     } else {
         println!("Verifying model with confidence={confidence}, precision={precision}");
-        let rate = scxml_model
-            .model
-            .par_adaptive(&props, confidence, precision);
+        let rate = scxml_model.model.par_adaptive(
+            &scxml_model.guarantees,
+            &scxml_model.assumes,
+            confidence,
+            precision,
+        );
         println!("Success rate: {rate}");
     }
     Ok(())

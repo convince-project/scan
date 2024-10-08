@@ -100,8 +100,8 @@ impl ModelBuilder {
     /// Can fail if the model specification contains semantic errors
     /// (particularly type mismatches)
     /// or references to non-existing items.
-    pub fn visit(parser: Parser) -> anyhow::Result<ScxmlModel> {
-        let mut model = ModelBuilder {
+    pub fn build(parser: Parser) -> anyhow::Result<ScxmlModel> {
+        let mut model_builder = ModelBuilder {
             cs: ChannelSystemBuilder::new(),
             types: HashMap::new(),
             enums: HashMap::new(),
@@ -119,21 +119,21 @@ impl ModelBuilder {
         };
 
         info!("Building types");
-        model.build_types(&parser.types)?;
+        model_builder.build_types(&parser.types)?;
 
-        model.prebuild_processes(&parser)?;
+        model_builder.prebuild_processes(&parser)?;
 
         info!("Visit process list");
         for (_id, declaration) in parser.process_list.iter() {
             match &declaration.moc {
-                MoC::Fsm(fsm) => model.build_fsm(fsm)?,
-                MoC::Bt(bt) => model.build_bt(bt)?,
+                MoC::Fsm(fsm) => model_builder.build_fsm(fsm)?,
+                MoC::Bt(bt) => model_builder.build_bt(bt)?,
             }
         }
 
-        model.build_predicates(&parser)?;
+        model_builder.build_predicates(&parser)?;
 
-        let model = model.build();
+        let model = model_builder.build_model();
 
         Ok(model)
     }
@@ -2150,7 +2150,7 @@ impl ModelBuilder {
         }
     }
 
-    fn build(self) -> ScxmlModel {
+    fn build_model(self) -> ScxmlModel {
         let mut model = CsModelBuilder::new(self.cs.build());
         let mut pred_names: HashMap<String, usize> = HashMap::new();
         let mut predicates = Vec::new();
