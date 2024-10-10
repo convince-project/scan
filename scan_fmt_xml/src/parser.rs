@@ -121,7 +121,7 @@ impl Parser {
         loop {
             match reader
                 .read_event_into(&mut buf)
-                .with_context(|| reader.error_position())?
+                .with_context(|| format!("parsing error at position {}", reader.error_position()))?
             {
                 Event::Start(tag) => {
                     let tag_name = tag.name();

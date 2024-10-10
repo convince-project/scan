@@ -56,12 +56,13 @@ pub struct Data {
 impl Data {
     fn parse(
         tag: events::BytesStart<'_>,
-        ident: String,
-        omg_type: String,
+        // ident: Option<String>,
+        omg_type: Option<String>,
         interner: &mut boa_interner::Interner,
     ) -> anyhow::Result<Data> {
         let mut id: Option<String> = None;
         let mut expr: Option<String> = None;
+        let mut r#type: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
@@ -73,6 +74,9 @@ impl Data {
                 ATTR_EXPR => {
                     expr = Some(attr.unescape_value()?.into_owned());
                 }
+                ATTR_TYPE => {
+                    r#type = Some(attr.unescape_value()?.into_owned());
+                }
                 key => {
                     error!("found unknown attribute {key} in {TAG_DATA}");
                     return Err(anyhow!(ParserError::UnknownKey(key.to_owned())));
@@ -81,9 +85,12 @@ impl Data {
         }
         let id = id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))?;
         // Check id is matching
-        if id != ident {
-            return Err(anyhow!(ParserError::NoTypeAnnotation));
-        }
+        // if id != ident {
+        //     return Err(anyhow!(ParserError::NoTypeAnnotation));
+        // }
+        let omg_type = r#type
+            .or(omg_type)
+            .ok_or(anyhow!(ParserError::NoTypeAnnotation))?;
         if let Some(expression) = expr {
             if let StatementListItem::Statement(boa_ast::Statement::Expression(expression)) =
                 boa_parser::Parser::new(boa_parser::Source::from_bytes(&expression))
@@ -473,13 +480,14 @@ pub struct Param {
 impl Param {
     fn parse(
         tag: events::BytesStart<'_>,
-        ident: String,
-        omg_type: String,
+        // ident: String,
+        omg_type: Option<String>,
         interner: &mut boa_interner::Interner,
     ) -> anyhow::Result<Param> {
         let mut name: Option<String> = None;
         let mut location: Option<String> = None;
         let mut expr: Option<String> = None;
+        let mut r#type: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
@@ -494,6 +502,9 @@ impl Param {
                 ATTR_EXPR => {
                     expr = Some(attr.unescape_value()?.into_owned());
                 }
+                ATTR_TYPE => {
+                    r#type = Some(attr.unescape_value()?.into_owned());
+                }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
                     return Err(anyhow!(ParserError::UnknownKey(key.to_owned())));
@@ -501,9 +512,12 @@ impl Param {
             }
         }
         let name = name.ok_or(ParserError::MissingAttr(ATTR_NAME.to_string()))?;
-        if name != ident {
-            return Err(anyhow!(ParserError::NoTypeAnnotation));
-        }
+        let omg_type = omg_type
+            .or(r#type)
+            .ok_or(anyhow!(ParserError::NoTypeAnnotation))?;
+        // if name != ident {
+        //     return Err(anyhow!(ParserError::NoTypeAnnotation));
+        // }
         let expr = expr.or(location).ok_or(ParserError::MissingExpr)?;
         if let StatementListItem::Statement(boa_ast::Statement::Expression(expr)) =
             boa_parser::Parser::new(boa_parser::Source::from_bytes(&expr))
@@ -576,7 +590,8 @@ impl Fsm {
     pub(super) fn parse<R: BufRead>(reader: &mut Reader<R>) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
         let mut stack: Vec<ScxmlTag> = Vec::new();
-        let mut type_annotation: Option<(String, String)> = None;
+        // let mut type_annotation: Option<(String, String)> = None;
+        let mut type_annotation: Option<String> = None;
         let mut interner = boa_interner::Interner::new();
         info!("parsing fsm");
         loop {
@@ -757,11 +772,7 @@ impl Fsm {
                                 .last()
                                 .is_some_and(|tag| matches!(*tag, ScxmlTag::Datamodel(_))) =>
                         {
-                            let (ident, omg_type) = type_annotation
-                                .take()
-                                .ok_or(anyhow!(ParserError::NoTypeAnnotation))
-                                .with_context(|| reader.buffer_position())?;
-                            let data = Data::parse(tag, ident, omg_type, &mut interner)
+                            let data = Data::parse(tag, type_annotation.take(), &mut interner)
                                 .with_context(|| reader.buffer_position())?;
                             Data::push(data, &mut stack)
                                 .with_context(|| reader.buffer_position())?;
@@ -815,12 +826,12 @@ impl Fsm {
                                 .last()
                                 .is_some_and(|tag| matches!(*tag, ScxmlTag::Send(_))) =>
                         {
-                            let (ident, omg_type) = type_annotation
-                                .take()
-                                .ok_or(anyhow::Error::from(ParserError::NoTypeAnnotation))
+                            // let (ident, omg_type) = type_annotation
+                            //     .take()
+                            //     .ok_or(anyhow::Error::from(ParserError::NoTypeAnnotation))
+                            //     .with_context(|| reader.buffer_position())?;
+                            let param = Param::parse(tag, type_annotation.take(), &mut interner)
                                 .with_context(|| reader.buffer_position())?;
-                            let param = Param::parse(tag, ident, omg_type, &mut interner)
-                                .map_err(|err| err.context(reader.buffer_position()))?;
                             if let ScxmlTag::Send(send) =
                                 stack.last_mut().expect("param must be inside other tag")
                             {
@@ -903,7 +914,7 @@ impl Fsm {
         }
     }
 
-    fn parse_comment(comment: String) -> anyhow::Result<Option<(String, String)>> {
+    fn parse_comment(comment: String) -> anyhow::Result<Option<String>> {
         let mut iter = comment.split_whitespace();
         let keyword = iter.next().ok_or(anyhow!("no keyword"))?;
         if keyword == "TYPE" {
@@ -913,7 +924,8 @@ impl Fsm {
                 .split_once(':')
                 .ok_or(anyhow!("badly formatted type declaration"))?;
             trace!("found ident: {ident}, type: {omg_type}");
-            Ok(Some((ident.to_string(), omg_type.to_string())))
+            // Ok(Some((ident.to_string(), omg_type.to_string())))
+            Ok(Some(omg_type.to_string()))
         } else {
             Ok(None)
         }

@@ -81,7 +81,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
         // Pass s=1, f=0 to adaptive criterion so that avarage success value v=1.
         // In this case, the adaptive criterion is (much) lower than Okamoto criterion
         // because v=1 is the furthest possible from v=0.5 where the two criteria coincide.
-        let runs = adaptive(1, 0, confidence, precision).ceil() as u32;
+        let runs = adaptive_bound(1, 0, confidence, precision).ceil() as u32;
         (0..runs).into_par_iter().find_map_any(|_| {
             let mut rng = rand::thread_rng();
             self.clone()
@@ -173,7 +173,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
                     // If guarantee is violated, we have found a counter-example!
                     f += 1;
                 }
-                if adaptive(s, f, confidence, precision) > (s + f) as f64 {
+                if adaptive_bound(s, f, confidence, precision) > (s + f) as f64 {
                     info!("runs: {s} successes, {f} failures");
                     Continue((s, f))
                 } else {
@@ -218,7 +218,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
             .take_any_while(|_| {
                 let s = s.load(Relaxed) as u32;
                 let f = f.load(Relaxed) as u32;
-                adaptive(s, f, confidence, precision) > (s + f) as f64
+                adaptive_bound(s, f, confidence, precision) > (s + f) as f64
             })
             .count();
         let s = s.into_inner();
@@ -231,13 +231,13 @@ pub trait TransitionSystem: Clone + Send + Sync {
 // Carlos E. Budde, Pedro R. D’Argenio, Arnd Hartmanns, Sean Sedwards.
 // International Journal on Software Tools for Technology Transfer (2020) 22:759–780
 // https://doi.org/10.1007/s10009-020-00563-2
-fn okamoto(confidence: f64, precision: f64) -> f64 {
-    2f64 * (2f64 / (1f64 - confidence)).ln() / precision.powf(2f64)
+fn okamoto_bound(confidence: f64, precision: f64) -> f64 {
+    (2f64 / (1f64 - confidence)).ln() / (2f64 * precision.powf(2f64))
 }
 
-fn adaptive(s: u32, f: u32, confidence: f64, precision: f64) -> f64 {
+fn adaptive_bound(s: u32, f: u32, confidence: f64, precision: f64) -> f64 {
     let n = s + f;
     let avg = s as f64 / n as f64;
-    okamoto(confidence, precision)
+    4f64 * okamoto_bound(confidence, precision)
         * (0.25f64 - ((avg - 0.5f64).abs() - (2f64 * precision / 3f64)).powf(2f64))
 }

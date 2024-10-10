@@ -108,7 +108,7 @@ impl PropertyTag {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParserPort {
-    pub(crate) r#type: String,
+    // pub(crate) r#type: String,
     pub(crate) origin: String,
     pub(crate) target: String,
     pub(crate) event: String,
@@ -118,7 +118,7 @@ pub(crate) struct ParserPort {
 impl ParserPort {
     fn parse(tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<(String, Self)> {
         let mut port_id: Option<String> = None;
-        let mut r#type: Option<String> = None;
+        // let mut r#type: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
@@ -128,7 +128,7 @@ impl ParserPort {
                     port_id = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_TYPE => {
-                    r#type = Some(attr.unescape_value()?.into_owned());
+                    // r#type = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -138,12 +138,12 @@ impl ParserPort {
         }
 
         let port_id = port_id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))?;
-        let r#type = r#type.ok_or(anyhow!(ParserError::MissingAttr(ATTR_TYPE.to_string())))?;
+        // let r#type = r#type.ok_or(anyhow!(ParserError::MissingAttr(ATTR_TYPE.to_string())))?;
 
         Ok((
             port_id,
             ParserPort {
-                r#type,
+                // r#type,
                 origin: String::new(),
                 target: String::new(),
                 event: String::new(),
