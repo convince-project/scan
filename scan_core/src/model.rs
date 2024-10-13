@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::channel_system::{Channel, ChannelSystem, Event, EventType};
 use crate::transition_system::TransitionSystem;
-use crate::{Expression, FnExpression, Integer, Val, ValsContainer};
+use crate::{Expression, FnExpression, Integer, Val};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Port {
@@ -11,13 +11,7 @@ pub enum Port {
     LastMessage,
 }
 
-type FnMdExpression = FnExpression<HashMap<Port, Val>>;
-
-impl ValsContainer<Port> for HashMap<Port, Val> {
-    fn value(&self, var: Port) -> Option<Val> {
-        self.get(&var).cloned()
-    }
-}
+type FnMdExpression = FnExpression<Port>;
 
 // Constant corresponding to no event index.
 const NO_EVENT: Integer = -1;
@@ -54,13 +48,11 @@ impl CsModelBuilder {
     }
 
     pub fn add_predicate(&mut self, predicate: Expression<Port>) -> Result<usize, ()> {
-        let predicate = FnMdExpression::try_from(predicate)?;
-        if predicate.eval(&self.vals).is_some() {
-            self.predicates.push(predicate);
-            Ok(self.predicates.len() - 1)
-        } else {
-            Err(())
-        }
+        let predicate = FnExpression::<Port>::from(predicate);
+        let _ = predicate.eval(&|port| self.vals.get(&port).unwrap().clone());
+        // let _ = predicate.eval(&|port| self.vals.get(&port).cloned());
+        self.predicates.push(predicate);
+        Ok(self.predicates.len() - 1)
     }
 
     /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
@@ -102,16 +94,18 @@ impl TransitionSystem for CsModel {
         self.predicates
             .iter()
             .map(|prop| {
-                if let Some(Val::Boolean(b)) = prop.eval(&self.vals) {
-                    // Some(b)
-                    b
+                if let Val::Boolean(b) = prop.eval(&|port| self.vals.get(&port).unwrap().clone())
+                // .eval(&|port| self.vals.get(&port).cloned())
+                // .expect("boolean value")
+                {
+                    Some(b)
                 } else {
-                    // None
-                    // FIXME
-                    panic!("I don't know how to handle this");
+                    None
                 }
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()
+            // FIXME: handle error or guarantee it won't happen
+            .unwrap()
     }
 
     fn transitions(mut self) -> Vec<(Event, CsModel)> {

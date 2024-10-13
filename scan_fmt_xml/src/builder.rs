@@ -399,7 +399,13 @@ impl ModelBuilder {
                 pg_id,
                 process_event,
                 ext_event_index,
-                CsExpression::Component(0, Box::new(CsExpression::Var(ext_event_var))),
+                CsExpression::Component(
+                    0,
+                    Box::new(CsExpression::Var(
+                        ext_event_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
+                ),
             )
             .unwrap();
         self.cs
@@ -407,7 +413,13 @@ impl ModelBuilder {
                 pg_id,
                 process_event,
                 ext_origin_var,
-                CsExpression::Component(1, Box::new(CsExpression::Var(ext_event_var))),
+                CsExpression::Component(
+                    1,
+                    Box::new(CsExpression::Var(
+                        ext_event_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
+                ),
             )
             .unwrap();
         let event_received = self.cs.new_location(pg_id).unwrap();
@@ -431,7 +443,7 @@ impl ModelBuilder {
                 event_processed,
                 loc_tick,
                 Some(CsExpression::Equal(Box::new((
-                    CsExpression::Var(ext_event_index),
+                    CsExpression::Var(ext_event_index, Type::Integer),
                     CsExpression::from(tick_idx),
                 )))),
             )
@@ -443,7 +455,7 @@ impl ModelBuilder {
                 event_processed,
                 loc_halt,
                 Some(CsExpression::Equal(Box::new((
-                    CsExpression::Var(ext_event_index),
+                    CsExpression::Var(ext_event_index, Type::Integer),
                     CsExpression::from(halt_idx),
                 )))),
             )
@@ -493,7 +505,11 @@ impl ModelBuilder {
                 .or_insert_with(|| self.cs.new_channel(Type::Integer, None));
             let send_result = self
                 .cs
-                .new_send(pg_id, *param_channel, Expression::Var(result))
+                .new_send(
+                    pg_id,
+                    *param_channel,
+                    Expression::Var(result, Type::Integer),
+                )
                 .unwrap();
             self.cs
                 .add_transition(
@@ -502,7 +518,7 @@ impl ModelBuilder {
                     send_result,
                     send_event_loc,
                     Some(Expression::Equal(Box::new((
-                        Expression::Var(ext_origin_var),
+                        Expression::Var(ext_origin_var, Type::Integer),
                         Expression::from(usize::from(caller) as Integer),
                     )))),
                 )
@@ -547,7 +563,7 @@ impl ModelBuilder {
                     send_event,
                     loc_idle,
                     Some(Expression::Equal(Box::new((
-                        Expression::Var(ext_origin_var),
+                        Expression::Var(ext_origin_var, Type::Integer),
                         Expression::from(usize::from(caller) as Integer),
                     )))),
                 )
@@ -650,6 +666,7 @@ impl ModelBuilder {
                         pt_ack,
                         Some(CsExpression::Not(Box::new(CsExpression::Var(
                             halting_after_failure,
+                            Type::Boolean,
                         )))),
                     )
                     .expect("hand-made args");
@@ -660,7 +677,7 @@ impl ModelBuilder {
                         prev_ack,
                         failure_after_halting,
                         pt_failure,
-                        Some(CsExpression::Var(halting_after_failure)),
+                        Some(CsExpression::Var(halting_after_failure, Type::Boolean)),
                     )
                     .expect("hand-made args");
             }
@@ -731,6 +748,7 @@ impl ModelBuilder {
                         pt_ack,
                         Some(CsExpression::Not(Box::new(CsExpression::Var(
                             halting_after_success,
+                            Type::Boolean,
                         )))),
                     )
                     .expect("hand-made args");
@@ -741,7 +759,7 @@ impl ModelBuilder {
                         prev_ack,
                         success_after_halting,
                         pt_success,
-                        Some(CsExpression::Var(halting_after_success)),
+                        Some(CsExpression::Var(halting_after_success, Type::Boolean)),
                     )
                     .expect("hand-made args");
             }
@@ -838,7 +856,7 @@ impl ModelBuilder {
                         got_tick_response_param,
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(SUCCESS).unwrap()),
                         )))),
                     )
@@ -849,7 +867,7 @@ impl ModelBuilder {
                         got_tick_response_param,
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(FAILURE).unwrap()),
                         )))),
                     )
@@ -860,7 +878,7 @@ impl ModelBuilder {
                         got_tick_response_param,
                         pt_running,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(RUNNING).unwrap()),
                         )))),
                     )
@@ -985,7 +1003,7 @@ impl ModelBuilder {
                         got_tick_response_param,
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(SUCCESS).unwrap()),
                         )))),
                     )
@@ -996,7 +1014,7 @@ impl ModelBuilder {
                         got_tick_response_param,
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(FAILURE).unwrap()),
                         )))),
                     )
@@ -1126,7 +1144,10 @@ impl ModelBuilder {
                 current_event_var,
                 CsExpression::Component(
                     0,
-                    Box::new(CsExpression::Var(current_event_and_origin_var)),
+                    Box::new(CsExpression::Var(
+                        current_event_and_origin_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
                 ),
             )
             .expect("hand-coded args");
@@ -1137,7 +1158,10 @@ impl ModelBuilder {
                 origin_var,
                 CsExpression::Component(
                     1,
-                    Box::new(CsExpression::Var(current_event_and_origin_var)),
+                    Box::new(CsExpression::Var(
+                        current_event_and_origin_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
                 ),
             )
             .expect("hand-coded args");
@@ -1294,11 +1318,11 @@ impl ModelBuilder {
                     let mut is_event_sender = Some(CsExpression::And(vec![
                         CsExpression::Equal(Box::new((
                             CsExpression::from(event_index as Integer),
-                            CsExpression::Var(current_event_var),
+                            CsExpression::Var(current_event_var, Type::Integer),
                         ))),
                         CsExpression::Equal(Box::new((
                             CsExpression::from(usize::from(sender_id) as Integer),
-                            CsExpression::Var(origin_var),
+                            CsExpression::Var(origin_var, Type::Integer),
                         ))),
                     ]));
                     let mut current_loc = ext_event_processing_param;
@@ -1392,7 +1416,7 @@ impl ModelBuilder {
                         .expect("event must be registered");
                     // Check if the current event (internal or external) corresponds to the event activating the transition.
                     let event_match = CsExpression::Equal(Box::new((
-                        CsExpression::Var(current_event_var),
+                        CsExpression::Var(current_event_var, Type::Integer),
                         CsExpression::from(event_index as Integer),
                     )));
                     // TODO FIXME: optimize And/Or expressions
@@ -1702,14 +1726,21 @@ impl ModelBuilder {
                 self.enums
                     .get(&ident)
                     .map(|i| CsExpression::from(*i))
-                    .or_else(|| vars.get(&ident).map(|(var, _)| CsExpression::Var(*var)))
+                    .or_else(|| {
+                        vars.get(&ident).and_then(|(var, t)| {
+                            self.types
+                                .get(t)
+                                .map(|(_, t)| CsExpression::Var(*var, t.to_owned()))
+                            // .ok_or(anyhow!("missing type {t}"))
+                        })
+                    })
                     .ok_or(anyhow!("unknown identifier: {ident}"))?
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
                 match lit {
                     Literal::String(_) => todo!(),
-                    Literal::Num(_) => todo!(),
+                    Literal::Num(f) => CsExpression::from(*f),
                     Literal::Int(i) => CsExpression::from(*i),
                     Literal::BigInt(_) => todo!(),
                     Literal::Bool(b) => CsExpression::from(*b),
@@ -1785,7 +1816,7 @@ impl ModelBuilder {
                         ArithmeticOp::Div => todo!(),
                         ArithmeticOp::Mul => todo!(),
                         ArithmeticOp::Exp => todo!(),
-                        ArithmeticOp::Mod => todo!(),
+                        ArithmeticOp::Mod => CsExpression::Mod(Box::new((lhs, rhs))),
                     },
                     BinaryOp::Bitwise(_) => todo!(),
                     BinaryOp::Relational(rel_bin) => match rel_bin {
@@ -1814,7 +1845,9 @@ impl ModelBuilder {
             boa_ast::Expression::Conditional(_) => todo!(),
             boa_ast::Expression::Await(_) => todo!(),
             boa_ast::Expression::Yield(_) => todo!(),
-            boa_ast::Expression::Parenthesized(_) => todo!(),
+            boa_ast::Expression::Parenthesized(par) => {
+                self.expression(par.expression(), interner, vars, origin, params)?
+            }
             _ => todo!(),
         };
         Ok(expr)
@@ -1921,7 +1954,10 @@ impl ModelBuilder {
                         (
                             String::from("origin"),
                             EcmaObj::PrimitiveData(
-                                Expression::Var(origin.ok_or(anyhow!("missing origin of _event"))?),
+                                Expression::Var(
+                                    origin.ok_or(anyhow!("missing origin of _event"))?,
+                                    Type::Integer,
+                                ),
                                 String::from("int32"),
                             ),
                         ),
@@ -1931,7 +1967,16 @@ impl ModelBuilder {
                                 |(n, (v, t))| {
                                     (
                                         n.to_owned(),
-                                        EcmaObj::PrimitiveData(CsExpression::Var(*v), t.to_owned()),
+                                        EcmaObj::PrimitiveData(
+                                            CsExpression::Var(
+                                                *v,
+                                                self.types
+                                                    .get(t)
+                                                    .map(|(_, t)| t.to_owned())
+                                                    .expect("type of data parameter"),
+                                            ),
+                                            t.to_owned(),
+                                        ),
                                     )
                                 },
                             ))),
@@ -1942,7 +1987,11 @@ impl ModelBuilder {
                             .get(ident)
                             .ok_or(anyhow!("location {} not found", ident))?
                             .to_owned();
-                        Ok(EcmaObj::PrimitiveData(Expression::Var(var), type_name))
+                        let (_, t) = self.types.get(&type_name).expect("var type");
+                        Ok(EcmaObj::PrimitiveData(
+                            Expression::Var(var, t.to_owned()),
+                            type_name,
+                        ))
                     }
                 }
             }
@@ -2045,15 +2094,27 @@ impl ModelBuilder {
                 let expr = Expression::And(vec![
                     Expression::Equal(Box::new((
                         Expression::from(channel.0 as Integer),
-                        Expression::Var(Port::LastMessage),
+                        Expression::Var(Port::LastMessage, Type::Integer),
                     ))),
                     Expression::Equal(Box::new((
                         Expression::from(event_id as Integer),
-                        Expression::Component(0, Box::new(Expression::Var(Port::Message(channel)))),
+                        Expression::Component(
+                            0,
+                            Box::new(Expression::Var(
+                                Port::Message(channel),
+                                Type::Product(vec![Type::Integer, Type::Integer]),
+                            )),
+                        ),
                     ))),
                     Expression::Equal(Box::new((
                         Expression::from(Into::<usize>::into(origin) as Integer),
-                        Expression::Component(1, Box::new(Expression::Var(Port::Message(channel)))),
+                        Expression::Component(
+                            1,
+                            Box::new(Expression::Var(
+                                Port::Message(channel),
+                                Type::Product(vec![Type::Integer, Type::Integer]),
+                            )),
+                        ),
                     ))),
                 ]);
                 // A port for an event becomes a predicate.
@@ -2078,11 +2139,12 @@ impl ModelBuilder {
     fn build_predicate(&self, predicate: &Expression<String>) -> anyhow::Result<Expression<Port>> {
         match predicate {
             Expression::Const(val) => Ok(Expression::Const(val.to_owned())),
-            Expression::Var(port) => self
+            // WARN: The variable type is wrong, it cannot be used!
+            Expression::Var(port, _wrong_type_do_not_use) => self
                 .ports
                 .get(port)
                 .cloned()
-                .map(|(port, _)| Expression::Var(port))
+                .map(|(port, val)| Expression::Var(port, val.r#type()))
                 .or_else(|| self.predicates.get(port).map(|pred| pred.to_owned()))
                 .ok_or(anyhow!("missing port {port}")),
             Expression::Tuple(_) => todo!(),
@@ -2147,6 +2209,10 @@ impl ModelBuilder {
             Expression::Len(expr) => Ok(Expression::Len(Box::new(
                 self.build_predicate(expr.as_ref())?,
             ))),
+            Expression::Mod(exprs) => Ok(Expression::Mod(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
         }
     }
 

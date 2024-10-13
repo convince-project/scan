@@ -303,7 +303,6 @@ impl Properties {
         let mut predicates = HashMap::new();
         let mut guarantees = HashMap::new();
         let mut assumes = HashMap::new();
-        // let mut assumes = Vec::new();
         info!("parsing properties");
         loop {
             let event = reader.read_event_into(&mut buf)?;
@@ -667,7 +666,10 @@ impl Properties {
                         }
                         TAG_VAR if stack.last().is_some_and(PropertyTag::is_expression) => {
                             let id = Self::parse_refid(tag)?;
-                            let expr = Expression::Var(id);
+                            // NOTE: Use fake type because we don't know it.
+                            // WARN: Do not use the fake type when building the expression
+                            // FIXIT: Replace workaround with proper solution
+                            let expr = Expression::Var(id, scan_core::Type::Product(Vec::new()));
                             push_expr(&mut stack, expr)?;
                         }
                         TAG_VAR if stack.last().is_some_and(PropertyTag::is_mtl) => {

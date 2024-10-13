@@ -31,9 +31,14 @@ pub struct OmgTypes {
 }
 
 impl OmgTypes {
-    pub const BASE_TYPES: [(&'static str, OmgType); 4] = [
+    pub const BASE_TYPES: [(&'static str, OmgType); 9] = [
         ("boolean", OmgType::Boolean),
+        ("bool", OmgType::Boolean),
+        ("int8", OmgType::Int32),
+        ("int16", OmgType::Int32),
         ("int32", OmgType::Int32),
+        ("int64", OmgType::Int32),
+        ("float32", OmgType::F64),
         ("float64", OmgType::F64),
         ("URI", OmgType::Uri),
     ];

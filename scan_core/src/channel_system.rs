@@ -93,16 +93,13 @@
 //! ```
 
 mod builder;
-
 pub use builder::*;
-
-use thiserror::Error;
 
 use crate::grammar::*;
 use crate::program_graph::{Action as PgAction, Location as PgLocation, Var as PgVar, *};
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// An indexing object for PGs in a CS.
 ///
@@ -208,6 +205,9 @@ pub enum CsError {
     /// Cannot probe for fullness an infinite capacity channel
     #[error("cannot probe for fullness the infinite capacity {0:?}")]
     ProbingInfiniteQueue(Channel),
+    /// A type error
+    #[error("type error")]
+    Type(#[source] TypeError),
 }
 
 /// A Channel System event related to a channel.

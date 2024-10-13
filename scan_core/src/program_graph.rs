@@ -98,12 +98,6 @@ const EPSILON: Action = Action(usize::MAX);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Var(usize);
 
-impl ValsContainer<Var> for Vec<Val> {
-    fn value(&self, var: Var) -> Option<Val> {
-        self.get(var.0).cloned()
-    }
-}
-
 /// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
 
@@ -153,6 +147,9 @@ pub enum PgError {
     /// The epsilon action has no effects.
     #[error("The epsilon action has no effects")]
     EpsilonEffects,
+    /// A type error
+    #[error("type error")]
+    Type(#[source] TypeError),
 }
 
 // type FnExpr = Box<dyn Fn(&[Val]) -> Val + Send + Sync>;
@@ -175,13 +172,13 @@ pub enum PgError {
 enum FnEffect {
     // TODO: use SmallVec optimization
     // NOTE: SmallVec here would not appear in public API
-    Effects(Vec<(Var, FnExpression<Vec<Val>>)>),
-    Send(FnExpression<Vec<Val>>),
+    Effects(Vec<(Var, FnExpression<Var>)>),
+    Send(FnExpression<Var>),
     Receive(Var),
 }
 
 // QUESTION: is there a better/more efficient representation?
-type Transitions = HashMap<(Action, Location), Option<FnExpression<Vec<Val>>>>;
+type Transitions = HashMap<(Action, Location), Option<FnExpression<Var>>>;
 
 /// Representation of a PG that can be executed transition-by-transition.
 ///
@@ -233,7 +230,10 @@ impl ProgramGraph {
             .iter()
             .filter_map(|((action, post), guard)| {
                 if let Some(guard) = guard {
-                    if let Some(Val::Boolean(pass)) = guard.eval(&self.vars) {
+                    if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0].clone())
+                    // .eval(&|var| self.vars.get(var.0).cloned())
+                    // .expect("boolean value")
+                    {
                         if pass {
                             Some((*action, *post))
                         } else {
@@ -253,7 +253,10 @@ impl ProgramGraph {
             .get(&(action, post_state))
             .ok_or(PgError::MissingTransition)?;
         if guard.as_ref().map_or(true, |guard| {
-            if let Val::Boolean(pass) = guard.eval(&self.vars).expect("evaluation must succeed") {
+            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0].clone())
+            // .eval(&|var| self.vars.get(var.0).cloned())
+            // .expect("boolean value")
+            {
                 pass
             } else {
                 panic!("guard is not a boolean");
@@ -273,7 +276,9 @@ impl ProgramGraph {
         if action != EPSILON {
             if let FnEffect::Effects(effects) = &self.effects[action.0] {
                 for (var, effect) in effects {
-                    self.vars[var.0] = effect.eval(&self.vars).expect("evaluation must succeed");
+                    self.vars[var.0] = effect.eval(&|var| self.vars[var.0].clone());
+                    // .eval(&|var| self.vars.get(var.0).cloned())
+                    // .expect("evaluate effect");
                 }
             } else {
                 return Err(PgError::Communication(action));
@@ -286,7 +291,9 @@ impl ProgramGraph {
     pub(crate) fn send(&mut self, action: Action, post_state: Location) -> Result<Val, PgError> {
         self.satisfies_guard(action, post_state)?;
         if let FnEffect::Send(effect) = &self.effects[action.0] {
-            let val = effect.eval(&self.vars).expect("evaluation must succeed");
+            let val = effect.eval(&|var| self.vars[var.0].clone());
+            // .eval(&|var| self.vars.get(var.0).cloned())
+            // .expect("evaluate effect");
             self.current_location = post_state;
             Ok(val)
         } else {
@@ -302,10 +309,7 @@ impl ProgramGraph {
     ) -> Result<Val, PgError> {
         self.satisfies_guard(action, post_state)?;
         if let FnEffect::Receive(var) = &self.effects[action.0] {
-            let var_content = self
-                .vars
-                .get_mut(var.0)
-                .ok_or_else(|| PgError::MissingVar(var.to_owned()))?;
+            let var_content = self.vars.get_mut(var.0).expect("variable exists");
             if var_content.r#type() == val.r#type() {
                 let previous_val = var_content.clone();
                 *var_content = val;
@@ -360,7 +364,7 @@ mod tests {
             move_left,
             battery,
             PgExpression::Sum(vec![
-                PgExpression::Var(battery),
+                PgExpression::Var(battery, Type::Integer),
                 // PgExpression::Opposite(Box::new(PgExpression::Const(Val::Integer(1)))),
                 PgExpression::Const(Val::Integer(-1)),
             ]),
@@ -370,14 +374,14 @@ mod tests {
             move_right,
             battery,
             PgExpression::Sum(vec![
-                PgExpression::Var(battery),
+                PgExpression::Var(battery, Type::Integer),
                 // PgExpression::Opposite(Box::new(PgExpression::Const(Val::Integer(1)))),
                 PgExpression::Const(Val::Integer(-1)),
             ]),
         )?;
         // Guards
         let out_of_charge = PgExpression::Greater(Box::new((
-            PgExpression::Var(battery),
+            PgExpression::Var(battery, Type::Integer),
             PgExpression::Const(Val::Integer(0)),
         )));
         // Program graph definition

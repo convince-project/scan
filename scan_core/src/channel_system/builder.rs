@@ -19,8 +19,8 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
     fn try_from((pg_id, expr): (PgId, CsExpression)) -> Result<Self, Self::Error> {
         match expr {
             Expression::Const(val) => Ok(Expression::Const(val)),
-            Expression::Var(cs_var) if cs_var.0 == pg_id => Ok(Expression::Var(cs_var.1)),
-            Expression::Var(cs_var) => Err(CsError::VarNotInPg(cs_var, pg_id)),
+            Expression::Var(cs_var, t) if cs_var.0 == pg_id => Ok(Expression::Var(cs_var.1, t)),
+            Expression::Var(cs_var, _t) => Err(CsError::VarNotInPg(cs_var, pg_id)),
             Expression::Tuple(comps) => Ok(Expression::Tuple(
                 comps
                     .into_iter()
@@ -91,6 +91,10 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
                 Ok(Expression::Truncate(Box::new((pg_id, *comp).try_into()?)))
             }
             Expression::Len(comp) => Ok(Expression::Len(Box::new((pg_id, *comp).try_into()?))),
+            Expression::Mod(comps) => Ok(Expression::Mod(Box::new((
+                (pg_id, comps.0).try_into()?,
+                (pg_id, comps.1).try_into()?,
+            )))),
         }
     }
 }
@@ -324,12 +328,7 @@ impl ChannelSystemBuilder {
             .0
             .to_owned();
         let msg = PgExpression::try_from((pg_id, msg))?;
-        let message_type = self
-            .program_graphs
-            .get(pg_id.0)
-            .ok_or(CsError::MissingPg(pg_id))?
-            .r#type(&msg)
-            .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
+        let message_type = msg.r#type().map_err(CsError::Type)?;
         if channel_type != message_type {
             Err(CsError::ProgramGraph(pg_id, PgError::TypeMismatch))
         } else {
