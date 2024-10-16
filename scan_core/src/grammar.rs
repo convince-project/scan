@@ -368,7 +368,6 @@ where
 }
 
 type DynFnExpr<V> = dyn Fn(&dyn Fn(V) -> Val) -> Val + Send + Sync;
-// type DynFnExpr<V> = dyn Fn(&dyn Fn(V) -> Option<Val>) -> Result<Val, TypeError> + Send + Sync;
 
 pub(crate) struct FnExpression<V>(Box<DynFnExpr<V>>);
 
@@ -583,15 +582,19 @@ impl<V: Clone + Copy + Send + Sync + 'static> From<Expression<V>> for FnExpressi
                 })
             }
             Expression::LessEq(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
+                let (source_lhs, source_rhs) = *exprs;
+                let lhs = FnExpression::from(source_lhs.to_owned());
+                let rhs = FnExpression::from(source_rhs.to_owned());
                 Box::new(move |vars| {
                     if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
                     {
                         Val::Boolean(lhs <= rhs)
                     } else {
-                        panic!("type mismatch");
+                        panic!(
+                            "type mismatch {:?} != {:?}",
+                            source_lhs.r#type(),
+                            source_rhs.r#type()
+                        );
                     }
                 })
             }

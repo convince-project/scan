@@ -117,16 +117,18 @@ impl Parser {
         };
         let mut buf = Vec::new();
         let mut stack = Vec::new();
-        info!("begin parsing");
+        info!(target: "parsing", "begin parsing");
+        info!(target: "parsing", "parsing main model file: {:?}", path.as_os_str());
         loop {
             match reader
                 .read_event_into(&mut buf)
-                .with_context(|| format!("parsing error at position {}", reader.error_position()))?
+                .with_context(|| format!("parsing {:?}", path.as_os_str()))
+                .with_context(|| format!("parser position {}", reader.error_position()))?
             {
                 Event::Start(tag) => {
                     let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
-                    trace!("'{tag_name}' open tag");
+                    let tag_name = &*reader.decoder().decode(tag_name.as_ref())?;
+                    trace!(target: "parsing", "open tag: '{tag_name}'");
                     match tag_name {
                         TAG_SPECIFICATION if stack.is_empty() => {
                             stack.push(ConvinceTag::Specification);
@@ -145,24 +147,26 @@ impl Parser {
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
-                            warn!("unknown or unexpected tag {tag_name}, skipping");
+                            error!(target: "parsing", "unknown or unexpected tag {tag_name}, skipping");
                             reader
                                 .read_to_end_into(tag.to_end().into_owned().name(), &mut buf)
-                                .with_context(|| reader.error_position())?;
+                                .with_context(|| {
+                                    format!("parser position {}", reader.error_position())
+                                })?;
                         }
                     }
                 }
                 Event::End(tag) => {
                     let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = &*reader.decoder().decode(tag_name.as_ref())?;
                     if stack.pop().is_some_and(|tag| <&str>::from(tag) == tag_name) {
-                        trace!("'{tag_name}' end tag");
+                        trace!(target: "parsing", "end tag: '{tag_name}'");
                     } else {
-                        error!("unexpected end tag {tag_name}");
+                        error!(target: "parsing", "unexpected end tag {tag_name}");
                         return Err(anyhow::Error::new(ParserError::UnexpectedEndTag(
                             tag_name.to_string(),
                         )))
-                        .with_context(|| reader.buffer_position());
+                        .with_context(|| format!("parser position {}", reader.buffer_position()));
                     }
                 }
                 Event::Empty(tag) => {
@@ -176,24 +180,27 @@ impl Parser {
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::ProcessList) =>
                         {
-                            spec.parse_process(tag)
-                                .with_context(|| reader.buffer_position())?;
+                            spec.parse_process(tag).with_context(|| {
+                                format!("parser position {}", reader.buffer_position())
+                            })?;
                         }
                         TAG_TYPES
                             if stack
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
                         {
-                            spec.parse_types(tag)
-                                .with_context(|| reader.buffer_position())?;
+                            spec.parse_types(tag).with_context(|| {
+                                format!("parser position {}", reader.buffer_position())
+                            })?;
                         }
                         TAG_PROPERTIES
                             if stack
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::Specification) =>
                         {
-                            spec.parse_properties(tag)
-                                .with_context(|| reader.buffer_position())?;
+                            spec.parse_properties(tag).with_context(|| {
+                                format!("parser position {}", reader.buffer_position())
+                            })?;
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
@@ -208,24 +215,25 @@ impl Parser {
                 Event::Comment(_) => continue,
                 Event::CData(_) => {
                     return Err(anyhow!("CData not supported"))
-                        .with_context(|| reader.buffer_position())
+                        .with_context(|| format!("parser position {}", reader.buffer_position()));
                 }
                 // Ignore XML declaration
                 Event::Decl(_) => continue,
                 Event::PI(_) => {
                     return Err(anyhow!("Processing Instructions not supported"))
-                        .with_context(|| reader.buffer_position())
+                        .with_context(|| format!("parser position {}", reader.buffer_position()));
                 }
                 Event::DocType(_) => {
                     return Err(anyhow!("DocType not supported"))
-                        .with_context(|| reader.buffer_position())
+                        .with_context(|| format!("parser position {}", reader.buffer_position()));
                 }
                 // exits the loop when reaching end of file
                 Event::Eof => {
-                    info!("parsing completed");
+                    info!(target: "parsing", "parsing completed");
                     if !stack.is_empty() {
-                        return Err(anyhow!(ParserError::UnclosedTags))
-                            .with_context(|| reader.buffer_position());
+                        return Err(anyhow!(ParserError::UnclosedTags)).with_context(|| {
+                            format!("parser position {}", reader.buffer_position())
+                        });
                     }
                     break;
                 }

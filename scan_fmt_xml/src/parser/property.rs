@@ -677,7 +677,7 @@ impl Properties {
                             let expr = Mtl::Atom(id);
                             push_mtl(&mut stack, expr)?;
                         }
-                        TAG_CONST => {
+                        TAG_CONST if stack.last().is_some_and(PropertyTag::is_expression) => {
                             let val = Self::parse_const(tag)?;
                             let expr = Expression::Const(val);
                             push_expr(&mut stack, expr)?;

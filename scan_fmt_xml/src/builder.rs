@@ -1304,6 +1304,8 @@ impl ModelBuilder {
                     )
                     .expect("hand-coded args");
             }
+            // Keep track of all known events.
+            let mut known_events = Vec::new();
             // Retreive external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
             // from any possible other fsm,
@@ -1315,7 +1317,8 @@ impl ModelBuilder {
             {
                 let event_index = event_builder.index;
                 for &sender_id in &event_builder.senders {
-                    let mut is_event_sender = Some(CsExpression::And(vec![
+                    // Expression checking event and sender correspond to the given ones.
+                    let is_event_sender = CsExpression::And(vec![
                         CsExpression::Equal(Box::new((
                             CsExpression::from(event_index as Integer),
                             CsExpression::Var(current_event_var, Type::Integer),
@@ -1324,7 +1327,11 @@ impl ModelBuilder {
                             CsExpression::from(usize::from(sender_id) as Integer),
                             CsExpression::Var(origin_var, Type::Integer),
                         ))),
-                    ]));
+                    ]);
+                    // Add event (and sender) to list of known events.
+                    known_events.push(is_event_sender.to_owned());
+                    // We need to use this as guard only once, so we wrap it in an Option.
+                    let mut is_event_sender = Some(is_event_sender);
                     let mut current_loc = ext_event_processing_param;
                     for (param_name, _) in event_builder.params.iter() {
                         let read_param = *param_actions
@@ -1354,6 +1361,20 @@ impl ModelBuilder {
                         .expect("has to work");
                 }
             }
+            // Proceed if event is unknown (without retreiving parameters).
+            let unknown_event = if known_events.is_empty() {
+                None
+            } else {
+                Some(Expression::Not(Box::new(Expression::Or(known_events))))
+            };
+            self.cs
+                .add_autonomous_transition(
+                    pg_id,
+                    ext_event_processing_param,
+                    eventful_trans,
+                    unknown_event,
+                )
+                .expect("has to work");
 
             // Consider each of the state's transitions.
             for transition in state.transitions.iter() {
