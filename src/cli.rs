@@ -116,7 +116,7 @@ impl Cli {
         let local_s = s.load(Ordering::Relaxed);
         let local_f = f.load(Ordering::Relaxed);
         let rate = local_s as f64 / (local_s + local_f) as f64;
-        println!("Success rate: {rate:.0$}", mag);
+        println!("Success rate {rate:.0$}", mag);
         Ok(())
     }
 }
