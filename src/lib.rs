@@ -20,3 +20,7 @@
 // - [ ] use fast hasher for hashmap and hashset
 // - [ ] smallvec optimization
 // - [ ] multi-threading
+
+mod print_trace;
+
+pub use print_trace::*;

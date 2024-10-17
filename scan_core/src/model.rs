@@ -11,7 +11,7 @@ pub enum Port {
     LastMessage,
 }
 
-type FnMdExpression = FnExpression<HashMap<Port, Val>>;
+type FnMdExpression = FnExpression<Port>;
 
 // Constant corresponding to no event index.
 const NO_EVENT: Integer = -1;
@@ -48,13 +48,11 @@ impl CsModelBuilder {
     }
 
     pub fn add_predicate(&mut self, predicate: Expression<Port>) -> Result<usize, ()> {
-        let predicate = FnMdExpression::try_from(predicate)?;
-        if predicate.eval(&self.vals).is_some() {
-            self.predicates.push(predicate);
-            Ok(self.predicates.len() - 1)
-        } else {
-            Err(())
-        }
+        let predicate = FnExpression::<Port>::from(predicate);
+        let _ = predicate.eval(&|port| self.vals.get(&port).unwrap().clone());
+        // let _ = predicate.eval(&|port| self.vals.get(&port).cloned());
+        self.predicates.push(predicate);
+        Ok(self.predicates.len() - 1)
     }
 
     /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
@@ -96,16 +94,18 @@ impl TransitionSystem for CsModel {
         self.predicates
             .iter()
             .map(|prop| {
-                if let Some(Val::Boolean(b)) = prop.eval(&self.vals) {
-                    // Some(b)
-                    b
+                if let Val::Boolean(b) = prop.eval(&|port| self.vals.get(&port).unwrap().clone())
+                // .eval(&|port| self.vals.get(&port).cloned())
+                // .expect("boolean value")
+                {
+                    Some(b)
                 } else {
-                    // None
-                    // FIXME
-                    panic!("I don't know how to handle this");
+                    None
                 }
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()
+            // FIXME: handle error or guarantee it won't happen
+            .unwrap()
     }
 
     fn transitions(mut self) -> Vec<(Event, CsModel)> {

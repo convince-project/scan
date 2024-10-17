@@ -1,4 +1,6 @@
-use super::{Action, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph, Var};
+use super::{
+    Action, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph, Var, EPSILON,
+};
 use crate::grammar::{Type, Val};
 use log::info;
 use std::{collections::HashMap, sync::Arc};
@@ -16,7 +18,9 @@ impl From<Effect> for FnEffect {
             Effect::Effects(effects) => FnEffect::Effects(
                 effects
                     .into_iter()
-                    .map(|(var, expr)| -> (Var, FnExpression) { (var, expr.into()) })
+                    .map(|(var, expr)| -> (Var, FnExpression<Var>) {
+                        (var, FnExpression::<Var>::from(expr))
+                    })
                     .collect(),
             ),
             Effect::Send(msg) => FnEffect::Send(msg.into()),
@@ -25,189 +29,7 @@ impl From<Effect> for FnEffect {
     }
 }
 
-// WARN: Can produce FnExpression's that will panic when computed if passed a badly-typed expresstion.
-// NOTE: There is no way to ensure a correct conversion a-priori because we don't know the type of variables here.
-// TODO: This should probably become a method in ProgramGraphBuilder that does proper checks.
-impl From<PgExpression> for FnExpression {
-    fn from(value: PgExpression) -> Self {
-        FnExpression(match value {
-            PgExpression::Const(val) => Box::new(move |_| val.to_owned()),
-            PgExpression::Var(var) => Box::new(move |vars: &[Val]| vars[var.0].to_owned()),
-            PgExpression::Tuple(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Tuple(exprs.iter().map(|expr| expr.eval(vars)).collect::<Vec<_>>())
-                })
-            }
-            PgExpression::Component(index, expr) => {
-                let expr = Into::<FnExpression>::into(*expr).0;
-                Box::new(move |vars: &[Val]| {
-                    if let Val::Tuple(vals) = expr(vars) {
-                        vals[index].to_owned()
-                    } else {
-                        panic!();
-                    }
-                })
-            }
-            PgExpression::And(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Boolean(exprs.iter().all(|expr| {
-                        if let Val::Boolean(b) = expr.eval(vars) {
-                            b
-                        } else {
-                            panic!()
-                        }
-                    }))
-                })
-            }
-            PgExpression::Or(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Boolean(exprs.iter().any(|expr| {
-                        if let Val::Boolean(b) = expr.eval(vars) {
-                            b
-                        } else {
-                            panic!()
-                        }
-                    }))
-                })
-            }
-            PgExpression::Implies(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Boolean(lhs), Val::Boolean(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(rhs || !lhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Not(expr) => {
-                let expr = FnExpression::from(*expr);
-                Box::new(move |vars: &[Val]| {
-                    if let Val::Boolean(b) = expr.eval(vars) {
-                        Val::Boolean(!b)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Opposite(expr) => {
-                let expr = FnExpression::from(*expr);
-                Box::new(move |vars: &[Val]| {
-                    if let Val::Integer(i) = expr.eval(vars) {
-                        Val::Integer(-i)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Sum(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Integer(
-                        exprs
-                            .iter()
-                            .map(|expr| {
-                                if let Val::Integer(i) = expr.eval(vars) {
-                                    i
-                                } else {
-                                    panic!()
-                                }
-                            })
-                            .sum(),
-                    )
-                })
-            }
-            PgExpression::Mult(exprs) => {
-                let exprs: Vec<FnExpression> = exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars: &[Val]| {
-                    Val::Integer(
-                        exprs
-                            .iter()
-                            .map(|expr| {
-                                if let Val::Integer(i) = expr.eval(vars) {
-                                    i
-                                } else {
-                                    panic!()
-                                }
-                            })
-                            .product(),
-                    )
-                })
-            }
-            PgExpression::Equal(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs == rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Greater(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs > rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::GreaterEq(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs >= rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::Less(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs < rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-            PgExpression::LessEq(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars: &[Val]| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs <= rhs)
-                    } else {
-                        panic!()
-                    }
-                })
-            }
-        })
-    }
-}
+type Transitions = HashMap<(Action, Location), Option<PgExpression>>;
 
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
@@ -216,7 +38,7 @@ pub struct ProgramGraphBuilder {
     effects: Vec<Effect>,
     // Transitions are indexed by locations
     // We can assume there is at most one condition by logical disjunction
-    transitions: Vec<HashMap<(Action, Location), Option<PgExpression>>>,
+    transitions: Vec<Transitions>,
     vars: Vec<Val>,
 }
 
@@ -277,8 +99,12 @@ impl ProgramGraphBuilder {
     pub fn new_var(&mut self, init: PgExpression) -> Result<Var, PgError> {
         let idx = self.vars.len();
         // We check the type to make sure the expression is well-formed
-        let _ = self.r#type(&init)?;
-        let val = FnExpression::from(init).eval(&self.vars);
+        let _ = init.r#type().map_err(PgError::Type)?;
+        init.context(&|var| self.vars.get(var.0).map(Val::r#type))
+            .map_err(PgError::Type)?;
+        let val = FnExpression::from(init).eval(&|var| self.vars[var.0].clone());
+        // .eval(&|var| self.vars.get(var.0).cloned())
+        // .map_err(|err| PgError::Type(err))?;
         self.vars.push(val);
         Ok(Var(idx))
     }
@@ -316,12 +142,18 @@ impl ProgramGraphBuilder {
         var: Var,
         effect: PgExpression,
     ) -> Result<(), PgError> {
+        if action == EPSILON {
+            return Err(PgError::EpsilonEffects);
+        }
+        effect
+            .context(&|var| self.vars.get(var.0).map(Val::r#type))
+            .map_err(PgError::Type)?;
         let var_type = self
             .vars
             .get(var.0)
             .map(Val::r#type)
             .ok_or_else(|| PgError::MissingVar(var.to_owned()))?;
-        if var_type == self.r#type(&effect)? {
+        if var_type == effect.r#type().map_err(PgError::Type)? {
             match self
                 .effects
                 .get_mut(action.0)
@@ -341,7 +173,9 @@ impl ProgramGraphBuilder {
 
     pub(crate) fn new_send(&mut self, msg: PgExpression) -> Result<Action, PgError> {
         // Actions are indexed progressively
-        let _ = self.r#type(&msg)?;
+        msg.context(&|var| self.vars.get(var.0).map(Val::r#type))
+            .map_err(PgError::Type)?;
+        let _ = msg.r#type().map_err(PgError::Type)?;
         let idx = self.effects.len();
         self.effects.push(Effect::Send(msg));
         Ok(Action(idx))
@@ -387,6 +221,9 @@ impl ProgramGraphBuilder {
     ///
     /// // Add a transition
     /// pg_builder
+    ///     .add_transition(initial_loc, action, initial_loc, None)
+    ///     .expect("this transition can be added");
+    /// pg_builder
     ///     .add_transition(initial_loc, action, initial_loc, Some(PgExpression::from(1)))
     ///     .expect_err("the guard expression is not boolean");
     /// ```
@@ -402,13 +239,20 @@ impl ProgramGraphBuilder {
             Err(PgError::MissingLocation(pre))
         } else if self.transitions.len() <= post.0 {
             Err(PgError::MissingLocation(post))
-        } else if self.effects.len() <= action.0 {
+        } else if action != EPSILON && self.effects.len() <= action.0 {
             // Check 'action' exists
             Err(PgError::MissingAction(action))
-        } else if guard.is_some() && !matches!(self.r#type(guard.as_ref().unwrap())?, Type::Boolean)
+        } else if guard
+            .as_ref()
+            .is_some_and(|guard| !matches!(guard.r#type(), Ok(Type::Boolean)))
         {
             Err(PgError::TypeMismatch)
         } else {
+            if let Some(guard) = &guard {
+                guard
+                    .context(&|var| self.vars.get(var.0).map(Val::r#type))
+                    .map_err(PgError::Type)?;
+            }
             let _ = self.transitions[pre.0]
                 .entry((action, post))
                 .and_modify(|previous_guard| {
@@ -432,96 +276,36 @@ impl ProgramGraphBuilder {
         }
     }
 
-    // Computes the type of an expression.
-    // Fails if the expression is badly typed,
-    // e.g., if variables in it have type incompatible with the expression.
-    pub(crate) fn r#type(&self, expr: &PgExpression) -> Result<Type, PgError> {
-        match expr {
-            PgExpression::Const(val) => Ok(val.r#type()),
-            PgExpression::Tuple(tuple) => Ok(Type::Product(
-                tuple
-                    .iter()
-                    .map(|e| self.r#type(e))
-                    .collect::<Result<Vec<Type>, PgError>>()?,
-            )),
-            PgExpression::Var(var) => self
-                .vars
-                .get(var.0)
-                .map(Val::r#type)
-                .ok_or_else(|| PgError::MissingVar(var.to_owned())),
-            PgExpression::And(props) | PgExpression::Or(props) => {
-                if props
-                    .iter()
-                    .map(|prop| self.r#type(prop))
-                    .collect::<Result<Vec<Type>, PgError>>()?
-                    .iter()
-                    .all(|prop| matches!(prop, Type::Boolean))
-                {
-                    Ok(Type::Boolean)
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Implies(props) => {
-                if matches!(self.r#type(&props.0)?, Type::Boolean)
-                    && matches!(self.r#type(&props.1)?, Type::Boolean)
-                {
-                    Ok(Type::Boolean)
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Not(prop) => {
-                if matches!(self.r#type(prop)?, Type::Boolean) {
-                    Ok(Type::Boolean)
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Opposite(expr) => {
-                if matches!(self.r#type(expr)?, Type::Integer) {
-                    Ok(Type::Integer)
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Sum(exprs) | PgExpression::Mult(exprs) => {
-                if exprs
-                    .iter()
-                    .map(|expr| self.r#type(expr))
-                    .collect::<Result<Vec<Type>, PgError>>()?
-                    .iter()
-                    .all(|expr| matches!(expr, Type::Integer))
-                {
-                    Ok(Type::Integer)
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Equal(exprs)
-            | PgExpression::Greater(exprs)
-            | PgExpression::GreaterEq(exprs)
-            | PgExpression::Less(exprs)
-            | PgExpression::LessEq(exprs) => {
-                if matches!(self.r#type(&exprs.0)?, Type::Integer)
-                    && matches!(self.r#type(&exprs.1)?, Type::Integer)
-                {
-                    Ok(Type::Boolean)
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-            PgExpression::Component(index, expr) => {
-                if let Type::Product(components) = self.r#type(expr)? {
-                    components
-                        .get(*index)
-                        .cloned()
-                        .ok_or(PgError::MissingComponent(*index))
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            }
-        }
+    /// Adds an autonomous transition to the PG, i.e., a transition enabled by the epsilon action.
+    /// Requires specifying:
+    ///
+    /// - state pre-transition,
+    /// - state post-transition, and
+    /// - (optionally) boolean expression guarding the transition.
+    ///
+    /// Fails if the provided guard is not a boolean expression.
+    ///
+    /// ```
+    /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
+    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// // The builder is initialized with an initial location
+    /// let initial_loc = pg_builder.initial_location();
+    ///
+    /// // Add a transition
+    /// pg_builder
+    ///     .add_autonomous_transition(initial_loc, initial_loc, None)
+    ///     .expect("this autonomous transition can be added");
+    /// pg_builder
+    ///     .add_autonomous_transition(initial_loc, initial_loc, Some(PgExpression::from(1)))
+    ///     .expect_err("the guard expression is not boolean");
+    /// ```
+    pub fn add_autonomous_transition(
+        &mut self,
+        pre: Location,
+        post: Location,
+        guard: Option<PgExpression>,
+    ) -> Result<(), PgError> {
+        self.add_transition(pre, EPSILON, post, guard)
     }
 
     /// Produces a [`ProgramGraph`] defined by the [`ProgramGraphBuilder`]'s data and consuming it.
