@@ -7,13 +7,19 @@ use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
+pub enum Atom<A: Clone + PartialEq> {
+    Predicate(usize),
+    Event(A),
+}
+
 /// Trait implementing a Transition System (TS), as defined in [^1].
 /// As such, it is possible to verify it against MTL specifications.
 ///
 /// [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
 pub trait TransitionSystem: Clone + Send + Sync {
     /// The type of the actions that trigger transitions between states in the TS.
-    type Action: Clone + Send;
+    type Action: Clone + PartialEq + Send + Sync;
 
     /// The label function of the TS valuates the propositions of its set of propositions for the current state.
     // TODO FIXME: bitset instead of Vec<bool>?
@@ -72,8 +78,8 @@ pub trait TransitionSystem: Clone + Send + Sync {
 
     fn find_counterexample(
         &self,
-        guarantees: &[Mtl<usize>],
-        assumes: &[Mtl<usize>],
+        guarantees: &[Mtl<Atom<Self::Action>>],
+        assumes: &[Mtl<Atom<Self::Action>>],
         confidence: f64,
         precision: f64,
     ) -> Option<Vec<(Self::Action, Vec<bool>)>> {
@@ -91,15 +97,13 @@ pub trait TransitionSystem: Clone + Send + Sync {
 
     fn trace_counterexample<R: Rng>(
         mut self,
-        guarantees: &[Mtl<usize>],
-        assumes: &[Mtl<usize>],
+        guarantees: &[Mtl<Atom<Self::Action>>],
+        assumes: &[Mtl<Atom<Self::Action>>],
         rng: &mut R,
     ) -> Option<Vec<(Self::Action, Vec<bool>)>> {
         let mut trace = Vec::new();
-        let mut actions = Vec::new();
         while let Some((action, new_ts)) = self.transitions().choose(rng) {
-            trace.push(new_ts.labels());
-            actions.push(action.to_owned());
+            trace.push((action.to_owned(), new_ts.labels()));
             self = new_ts.to_owned();
         }
         if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
@@ -111,21 +115,19 @@ pub trait TransitionSystem: Clone + Send + Sync {
             None
         } else {
             // If guarantee is violated, we have found a counter-example!
-            let annotated_trace: Vec<(Self::Action, Vec<bool>)> =
-                actions.into_iter().zip(trace).collect();
-            Some(annotated_trace)
+            Some(trace)
         }
     }
 
     fn experiment<R: Rng>(
         mut self,
-        guarantees: &[Mtl<usize>],
-        assumes: &[Mtl<usize>],
+        guarantees: &[Mtl<Atom<Self::Action>>],
+        assumes: &[Mtl<Atom<Self::Action>>],
         rng: &mut R,
     ) -> Option<bool> {
         let mut trace = Vec::new();
-        while let Some((_, new_ts)) = self.transitions().choose(rng) {
-            trace.push(new_ts.labels());
+        while let Some((action, new_ts)) = self.transitions().choose(rng) {
+            trace.push((action.to_owned(), new_ts.labels()));
             self = new_ts.to_owned();
         }
         if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
@@ -143,8 +145,8 @@ pub trait TransitionSystem: Clone + Send + Sync {
 
     fn adaptive(
         &self,
-        guarantees: &[Mtl<usize>],
-        assumes: &[Mtl<usize>],
+        guarantees: &[Mtl<Atom<Self::Action>>],
+        assumes: &[Mtl<Atom<Self::Action>>],
         confidence: f64,
         precision: f64,
     ) -> f64 {
@@ -152,11 +154,9 @@ pub trait TransitionSystem: Clone + Send + Sync {
             .fold_while((0, 0), |(s, f), _| {
                 let mut rng = rand::thread_rng();
                 let mut trace = Vec::new();
-                // let mut actions = Vec::new();
                 let mut ts = self.to_owned();
-                while let Some((_action, new_ts)) = ts.transitions().choose(&mut rng) {
-                    trace.push(new_ts.labels());
-                    // actions.push(action.to_owned());
+                while let Some((action, new_ts)) = ts.transitions().choose(&mut rng) {
+                    trace.push((action.to_owned(), new_ts.labels()));
                     ts = new_ts.to_owned();
                 }
                 let mut s = s;
@@ -185,8 +185,8 @@ pub trait TransitionSystem: Clone + Send + Sync {
 
     fn par_adaptive(
         &self,
-        guarantees: &[Mtl<usize>],
-        assumes: &[Mtl<usize>],
+        guarantees: &[Mtl<Atom<Self::Action>>],
+        assumes: &[Mtl<Atom<Self::Action>>],
         confidence: f64,
         precision: f64,
         s: Arc<AtomicU32>,

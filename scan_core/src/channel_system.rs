@@ -211,7 +211,7 @@ pub enum CsError {
 }
 
 /// A Channel System event related to a channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     /// The PG producing the event in the course of a transition.
     pub pg_id: PgId,
@@ -222,7 +222,7 @@ pub struct Event {
 }
 
 /// A Channel System event type related to a channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EventType {
     /// Sending a value to a channel.
     Send(Val),

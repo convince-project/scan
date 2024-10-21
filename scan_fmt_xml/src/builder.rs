@@ -19,8 +19,8 @@ use std::collections::{HashMap, HashSet};
 pub struct ScxmlModel {
     pub model: CsModel,
     pub predicates: Vec<String>,
-    pub guarantees: Vec<Mtl<usize>>,
-    pub assumes: Vec<Mtl<usize>>,
+    pub guarantees: Vec<Mtl<Atom<Event>>>,
+    pub assumes: Vec<Mtl<Atom<Event>>>,
     pub fsm_names: HashMap<PgId, String>,
     pub fsm_indexes: HashMap<usize, String>,
     pub parameters: HashMap<Channel, (PgId, PgId, usize, String)>,
@@ -88,8 +88,9 @@ pub struct ModelBuilder {
     // Properties
     guarantees: HashMap<String, Mtl<String>>,
     assumes: HashMap<String, Mtl<String>>,
-    predicates: HashMap<String, Expression<Port>>,
-    ports: HashMap<String, (Port, Val)>,
+    predicates: HashMap<String, Expression<Channel>>,
+    atoms: HashMap<String, Atom<Event>>,
+    ports: HashMap<String, (Channel, Val)>,
     // extra data
     int_queues: HashSet<Channel>,
 }
@@ -115,6 +116,7 @@ impl ModelBuilder {
             assumes: HashMap::new(),
             predicates: HashMap::new(),
             ports: HashMap::new(),
+            atoms: HashMap::new(),
             int_queues: HashSet::new(),
         };
 
@@ -2101,45 +2103,20 @@ impl ModelBuilder {
                     .parameters
                     .get(&(origin, target, event_id, param.to_owned()))
                     .ok_or(anyhow!("param {param} not found"))?;
-                self.ports
-                    .insert(port_id.to_owned(), (Port::Message(channel), init));
+                self.ports.insert(port_id.to_owned(), (channel, init));
             } else {
                 let channel = target_builder.ext_queue;
-                self.ports.insert(
-                    format!("{target:?}"),
-                    (
-                        Port::Message(channel),
-                        Val::Tuple(vec![Val::Integer(-1), Val::Integer(-1)]),
-                    ),
+                self.atoms.insert(
+                    port_id.to_owned(),
+                    Atom::Event(Event {
+                        pg_id: origin,
+                        channel,
+                        event_type: EventType::Send(Val::Tuple(vec![
+                            Val::Integer(event_id as Integer),
+                            Val::Integer(Into::<usize>::into(origin) as Integer),
+                        ])),
+                    }),
                 );
-                let expr = Expression::And(vec![
-                    Expression::Equal(Box::new((
-                        Expression::from(channel.0 as Integer),
-                        Expression::Var(Port::LastMessage, Type::Integer),
-                    ))),
-                    Expression::Equal(Box::new((
-                        Expression::from(event_id as Integer),
-                        Expression::Component(
-                            0,
-                            Box::new(Expression::Var(
-                                Port::Message(channel),
-                                Type::Product(vec![Type::Integer, Type::Integer]),
-                            )),
-                        ),
-                    ))),
-                    Expression::Equal(Box::new((
-                        Expression::from(Into::<usize>::into(origin) as Integer),
-                        Expression::Component(
-                            1,
-                            Box::new(Expression::Var(
-                                Port::Message(channel),
-                                Type::Product(vec![Type::Integer, Type::Integer]),
-                            )),
-                        ),
-                    ))),
-                ]);
-                // A port for an event becomes a predicate.
-                self.predicates.insert(port_id.to_owned(), expr);
             }
         }
         for (predicate_id, predicate) in parser.properties.predicates.iter() {
@@ -2157,7 +2134,10 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_predicate(&self, predicate: &Expression<String>) -> anyhow::Result<Expression<Port>> {
+    fn build_predicate(
+        &self,
+        predicate: &Expression<String>,
+    ) -> anyhow::Result<Expression<Channel>> {
         match predicate {
             Expression::Const(val) => Ok(Expression::Const(val.to_owned())),
             // WARN: The variable type is wrong, it cannot be used!
@@ -2241,11 +2221,9 @@ impl ModelBuilder {
         let mut model = CsModelBuilder::new(self.cs.build());
         let mut pred_names: HashMap<String, usize> = HashMap::new();
         let mut predicates = Vec::new();
-        for (_port_name, (port, init)) in self.ports {
+        for (_port_name, (channel, init)) in self.ports {
             // TODO FIXME handle error.
-            if let Port::Message(channel) = port {
-                model.add_port(channel, init).unwrap();
-            }
+            model.add_port(channel, init).unwrap();
         }
         for (pred_name, pred_expr) in self.predicates {
             // TODO FIXME handle error.
@@ -2258,13 +2236,19 @@ impl ModelBuilder {
             model: model.build(),
             guarantees: self
                 .guarantees
-                .into_values()
-                .map(|prop| map_predicates_in_property(prop, &pred_names))
+                .values()
+                .map(|prop| {
+                    Self::build_property(&self.atoms, prop, &pred_names)
+                        .expect("hopefully a property")
+                })
                 .collect(),
             assumes: self
                 .assumes
-                .into_values()
-                .map(|prop| map_predicates_in_property(prop, &pred_names))
+                .values()
+                .map(|prop| {
+                    Self::build_property(&self.atoms, prop, &pred_names)
+                        .expect("hopefully a property")
+                })
                 .collect(),
             fsm_names: self.fsm_names,
             parameters: self
@@ -2291,40 +2275,51 @@ impl ModelBuilder {
             predicates,
         }
     }
-}
 
-fn map_predicates_in_property(
-    property: Mtl<String>,
-    predicates: &HashMap<String, usize>,
-) -> Mtl<usize> {
-    match property {
-        Mtl::True => Mtl::True,
-        // FIXME TODO handle error
-        Mtl::Atom(pred) => Mtl::Atom(*predicates.get(&pred).unwrap()),
-        Mtl::And(formulae) => Mtl::And(
-            formulae
-                .into_iter()
-                .map(|f| map_predicates_in_property(f, predicates))
-                .collect(),
-        ),
-        // Mtl::Or(formulae) => Mtl::Or(
-        //     formulae
-        //         .into_iter()
-        //         .map(|f| map_predicates_in_property(f, predicates))
-        //         .collect(),
-        // ),
-        Mtl::Not(formula) => Mtl::Not(Box::new(map_predicates_in_property(*formula, predicates))),
-        // Mtl::Implies(_) => todo!(),
-        Mtl::Next(_) => todo!(),
-        Mtl::Until(formulae, range) => {
-            let (lhs, rhs) = *formulae;
-            Mtl::Until(
-                Box::new((
-                    map_predicates_in_property(lhs, predicates),
-                    map_predicates_in_property(rhs, predicates),
-                )),
-                range,
-            )
+    fn build_property(
+        atoms: &HashMap<String, Atom<Event>>,
+        property: &Mtl<String>,
+        predicates: &HashMap<String, usize>,
+    ) -> anyhow::Result<Mtl<Atom<Event>>> {
+        match property {
+            Mtl::True => Ok(Mtl::True),
+            // FIXME TODO handle error
+            Mtl::Atom(pred) => {
+                if let Some(atom) = atoms.get(pred.as_str()) {
+                    Ok(Mtl::Atom(atom.to_owned()))
+                } else {
+                    Ok(Mtl::Atom(Atom::Predicate(
+                        *predicates.get(pred.as_str()).unwrap(),
+                    )))
+                }
+            }
+            Mtl::And(formulae) => Ok(Mtl::And(
+                formulae
+                    .iter()
+                    .map(|f| Self::build_property(atoms, f, predicates))
+                    .collect::<Result<_, _>>()?,
+            )),
+            // Mtl::Or(formulae) => Mtl::Or(
+            //     formulae
+            //         .into_iter()
+            //         .map(|f| map_predicates_in_property(f, predicates))
+            //         .collect(),
+            // ),
+            Mtl::Not(formula) => Ok(Mtl::Not(Box::new(Self::build_property(
+                atoms, formula, predicates,
+            )?))),
+            // Mtl::Implies(_) => todo!(),
+            Mtl::Next(_) => todo!(),
+            Mtl::Until(formulae, range) => {
+                let (ref lhs, ref rhs) = **formulae;
+                Ok(Mtl::Until(
+                    Box::new((
+                        Self::build_property(atoms, lhs, predicates)?,
+                        Self::build_property(atoms, rhs, predicates)?,
+                    )),
+                    range.to_owned(),
+                ))
+            }
         }
     }
 }
