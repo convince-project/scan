@@ -67,56 +67,64 @@ impl Cli {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("???");
-        println!(
-            "Verifying model '{model_name}' with confidence {} and precision {}",
-            self.confidence, self.precision
-        );
+        let confidence = self.confidence;
+        let precision = self.precision;
+        println!("SCANning '{model_name}' (confidence {confidence}; precision {precision})");
         let s = Arc::new(AtomicU32::new(0));
         let f = Arc::new(AtomicU32::new(0));
         let mag = (-self.precision.log10().floor()) as usize;
-        std::thread::scope(|scope| {
-            let s0 = Arc::clone(&s);
-            let f0 = Arc::clone(&f);
-            scope.spawn(move || {
-                scxml_model.model.par_adaptive(
-                    &scxml_model.guarantees,
-                    &scxml_model.assumes,
-                    self.confidence,
-                    self.precision,
-                    s0,
-                    f0,
-                );
-            });
-            let s1 = Arc::clone(&s);
-            let f1 = Arc::clone(&f);
-            scope.spawn(move || {
-                let mut local_s = 0;
-                let mut local_f = 0;
-                let mut bound = okamoto_bound(self.confidence, self.precision);
-                let style = ProgressStyle::with_template(
-                    "[{elapsed_precise}] {percent:>2}% {wide_bar} {msg} ETA: {eta:<5}",
-                )
-                .unwrap();
-                let bar = ProgressBar::new(bound.ceil() as u64).with_style(style);
-                while bound > (local_s + local_f) as f64 {
-                    let rate = local_s as f64 / (local_s + local_f) as f64;
-                    let derived_precision = derive_precision(local_s, local_f, self.confidence);
-                    bar.set_length(bound.ceil() as u64);
-                    bar.set_position((local_s + local_f) as u64);
-                    bar.set_message(format!("Rate: {rate:.1$}±{:.1$}", derived_precision, mag));
-                    // Sleep a while to limit update/refresh rate.
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    local_s = s1.load(Ordering::Relaxed);
-                    local_f = f1.load(Ordering::Relaxed);
-                    bound = adaptive_bound(local_s, local_f, self.confidence, self.precision);
-                }
-                bar.finish_and_clear();
-            });
-        });
-        let local_s = s.load(Ordering::Relaxed);
-        let local_f = f.load(Ordering::Relaxed);
-        let rate = local_s as f64 / (local_s + local_f) as f64;
-        println!("Success rate {rate:.0$}", mag);
+        {
+            let s = s.to_owned();
+            let f = f.to_owned();
+            std::thread::spawn(move || print_progress_bar(s, f, confidence, precision));
+        }
+        scxml_model.model.par_adaptive(
+            &scxml_model.guarantees,
+            &scxml_model.assumes,
+            confidence,
+            precision,
+            s.to_owned(),
+            f.to_owned(),
+        );
+        let s = s.load(Ordering::Relaxed);
+        let f = f.load(Ordering::Relaxed);
+        let rate = s as f64 / (s + f) as f64;
+        println!(
+            "Success rate {rate:.0$}±{precision} (confidence {confidence})",
+            mag
+        );
         Ok(())
     }
+}
+
+fn print_progress_bar(s: Arc<AtomicU32>, f: Arc<AtomicU32>, confidence: f64, precision: f64) {
+    const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
+    let mut local_s = s.load(Ordering::Relaxed);
+    let mut local_f = f.load(Ordering::Relaxed);
+    let mut bound = adaptive_bound(local_s, local_f, confidence, precision);
+    let style = ProgressStyle::with_template(
+        "[{elapsed_precise}] {percent:>2}% {wide_bar} {msg} ETA: {eta:<5}",
+    )
+    .unwrap()
+    .progress_chars(FINE_BAR);
+    let bar = ProgressBar::new(bound.ceil() as u64).with_style(style);
+    // Magnitude of precision, to round results to sensible number of digits
+    let mag = (-precision.log10().floor()) as usize;
+    while bound > (local_s + local_f) as f64 {
+        // Check if new runs arrived
+        if local_s + local_f > bar.position() as u32 {
+            bound = adaptive_bound(local_s, local_f, confidence, precision);
+            bar.set_length(bound.ceil() as u64);
+            bar.set_position((local_s + local_f) as u64);
+            let rate = local_s as f64 / (local_s + local_f) as f64;
+            let derived_precision = derive_precision(local_s, local_f, confidence);
+            bar.set_message(format!("Rate: {rate:.0$}±{derived_precision:.0$}", mag));
+            bar.tick();
+        }
+        // Sleep a while to limit update/refresh rate.
+        std::thread::sleep(std::time::Duration::from_millis(32));
+        local_s = s.load(Ordering::Relaxed);
+        local_f = f.load(Ordering::Relaxed);
+    }
+    bar.finish_and_clear();
 }

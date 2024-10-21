@@ -235,7 +235,7 @@ pub fn okamoto_bound(confidence: f64, precision: f64) -> f64 {
 pub fn adaptive_bound(s: u32, f: u32, confidence: f64, precision: f64) -> f64 {
     let n = s + f;
     // Avoid division by 0
-    let avg = s as f64 / n.max(1) as f64;
+    let avg = if n == 0 { 0.5f64 } else { s as f64 / n as f64 };
     4f64 * okamoto_bound(confidence, precision)
         * (0.25f64 - ((avg - 0.5f64).abs() - (2f64 * precision / 3f64)).powf(2f64))
 }
