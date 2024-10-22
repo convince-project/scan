@@ -72,12 +72,9 @@ impl Cli {
         println!("SCANning '{model_name}' (confidence {confidence}; precision {precision})");
         let s = Arc::new(AtomicU32::new(0));
         let f = Arc::new(AtomicU32::new(0));
-        let mag = (-self.precision.log10().floor()) as usize;
-        {
-            let s = s.to_owned();
-            let f = f.to_owned();
-            std::thread::spawn(move || print_progress_bar(s, f, confidence, precision));
-        }
+        let bar_s = s.to_owned();
+        let bar_f = f.to_owned();
+        std::thread::spawn(move || print_progress_bar(bar_s, bar_f, confidence, precision));
         scxml_model.model.par_adaptive(
             &scxml_model.guarantees,
             &scxml_model.assumes,
@@ -89,6 +86,7 @@ impl Cli {
         let s = s.load(Ordering::Relaxed);
         let f = f.load(Ordering::Relaxed);
         let rate = s as f64 / (s + f) as f64;
+        let mag = precision.log10().abs().ceil() as usize;
         println!(
             "Success rate {rate:.0$}±{precision} (confidence {confidence})",
             mag
@@ -109,7 +107,7 @@ fn print_progress_bar(s: Arc<AtomicU32>, f: Arc<AtomicU32>, confidence: f64, pre
     .progress_chars(FINE_BAR);
     let bar = ProgressBar::new(bound.ceil() as u64).with_style(style);
     // Magnitude of precision, to round results to sensible number of digits
-    let mag = (-precision.log10().floor()) as usize;
+    let mag = precision.log10().abs().ceil() as usize;
     while bound > (local_s + local_f) as f64 {
         // Check if new runs arrived
         if local_s + local_f > bar.position() as u32 {
