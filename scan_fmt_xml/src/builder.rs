@@ -1543,18 +1543,41 @@ impl ModelBuilder {
                 event,
                 target,
                 params: send_params,
-            }) => match target {
-                Target::Id(target) => {
-                    let target_builder = self
-                        .fsm_builders
-                        .get(target)
-                        .ok_or(anyhow!(format!("target {target} not found")))?;
-                    let target_id = target_builder.pg_id;
+            }) => {
+                let done_loc = self.cs.new_location(pg_id)?;
+                let targets;
+                let event_idx = *self
+                    .event_indexes
+                    .get(event)
+                    .ok_or(anyhow!("event not found"))?;
+                let target_expr;
+                match target {
+                    Some(Target::Id(target)) => {
+                        let target_builder = self
+                            .fsm_builders
+                            .get(target)
+                            .ok_or(anyhow!(format!("target {target} not found")))?;
+                        targets = vec![target_builder.pg_id];
+                        target_expr = Some(CsExpression::from(
+                            usize::from(target_builder.pg_id) as Integer
+                        ));
+                    }
+                    Some(Target::Expr(targetexpr)) => {
+                        target_expr =
+                            Some(self.expression(targetexpr, interner, vars, origin, params)?);
+                        targets = self.events[event_idx].receivers.iter().cloned().collect();
+                    }
+                    None => {
+                        // WARN: This behavior is non-compliant with the SCXML specification
+                        // An event sent without specifiying the target is sent to all FSMs that can process it
+                        target_expr = None;
+                        targets = self.events[event_idx].receivers.iter().cloned().collect();
+                    }
+                }
+                for target_id in targets {
+                    let target_name = self.fsm_names.get(&target_id).unwrap();
+                    let target_builder = self.fsm_builders.get(target_name).expect("it must exist");
                     let target_ext_queue = target_builder.ext_queue;
-                    let event_idx = *self
-                        .event_indexes
-                        .get(event)
-                        .expect("builder for {event} already exists");
                     let send_event = self
                         .cs
                         .new_send(
@@ -1565,14 +1588,26 @@ impl ModelBuilder {
                                 CsExpression::from(usize::from(pg_id) as Integer),
                             ]),
                         )
-                        .expect("must work");
+                        .expect("params are hard-coded");
 
                     // Send event and event origin before moving on to next location.
-                    let mut next_loc = self.cs.new_location(pg_id)?;
+                    let mut next_loc = self.cs.new_location(pg_id).expect("PG exists");
                     self.cs
-                        .add_transition(pg_id, loc, send_event, next_loc, None)?;
+                        .add_transition(
+                            pg_id,
+                            loc,
+                            send_event,
+                            next_loc,
+                            target_expr.as_ref().map(|target_expr| {
+                                CsExpression::Equal(Box::new((
+                                    CsExpression::from(usize::from(target_id) as Integer),
+                                    target_expr.to_owned(),
+                                )))
+                            }),
+                        )
+                        .expect("params are right");
 
-                    // Pass parameters.
+                    // Pass parameters. This could fail due to param content.
                     for param in send_params {
                         // Updates next location.
                         next_loc = self.send_param(
@@ -1580,67 +1615,14 @@ impl ModelBuilder {
                             interner,
                         )?;
                     }
-
-                    Ok(next_loc)
+                    // Once sending event and args done, get to exit-point
+                    self.cs
+                        .add_autonomous_transition(pg_id, next_loc, done_loc, None)
+                        .expect("hand-made args");
                 }
-                Target::Expr(targetexpr) => {
-                    let targetexpr = self.expression(targetexpr, interner, vars, origin, params)?;
-                    let event_idx = *self
-                        .event_indexes
-                        .get(event)
-                        .ok_or(anyhow!("event not found"))?;
-                    // Location representing having sent the event to the correct target after evaluating expression.
-                    let done_loc = self.cs.new_location(pg_id).expect("PG exists");
-                    for target_id in self.events[event_idx].receivers.clone() {
-                        let target_name = self.fsm_names.get(&target_id).unwrap();
-                        let target_builder =
-                            self.fsm_builders.get(target_name).expect("it must exist");
-                        let target_ext_queue = target_builder.ext_queue;
-                        let send_event = self
-                            .cs
-                            .new_send(
-                                pg_id,
-                                target_ext_queue,
-                                CsExpression::Tuple(vec![
-                                    CsExpression::from(event_idx as Integer),
-                                    CsExpression::from(usize::from(pg_id) as Integer),
-                                ]),
-                            )
-                            .expect("params are hard-coded");
-
-                        // Send event and event origin before moving on to next location.
-                        let mut next_loc = self.cs.new_location(pg_id).expect("PG exists");
-                        self.cs
-                            .add_transition(
-                                pg_id,
-                                loc,
-                                send_event,
-                                next_loc,
-                                Some(CsExpression::Equal(Box::new((
-                                    CsExpression::from(usize::from(target_id) as Integer),
-                                    targetexpr.to_owned(),
-                                )))),
-                            )
-                            .expect("params are right");
-
-                        // Pass parameters. This could fail due to param content.
-                        for param in send_params {
-                            // Updates next location.
-                            next_loc = self.send_param(
-                                pg_id, target_id, param, event_idx, next_loc, vars, origin, params,
-                                interner,
-                            )?;
-                        }
-                        // Once sending event and args done, get to exit-point
-                        self.cs
-                            .add_autonomous_transition(pg_id, next_loc, done_loc, None)
-                            .expect("hand-made args");
-                    }
-
-                    // Return exit point
-                    Ok(done_loc)
-                }
-            },
+                // Return exit point
+                Ok(done_loc)
+            }
             Executable::Assign { location, expr } => {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
                 let expr = self.expression(expr, interner, vars, origin, params)?;

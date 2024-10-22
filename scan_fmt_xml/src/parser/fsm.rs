@@ -360,7 +360,7 @@ impl Executable {
 #[derive(Debug, Clone)]
 pub struct Send {
     pub(crate) event: String,
-    pub(crate) target: Target,
+    pub(crate) target: Option<Target>,
     pub(crate) params: Vec<Param>,
 }
 
@@ -394,7 +394,7 @@ impl Send {
         }
         let event = event.ok_or(ParserError::MissingAttr(ATTR_EVENT.to_string()))?;
         let target = if let Some(target) = target {
-            Target::Id(target)
+            Some(Target::Id(target))
         } else if let Some(targetexpr) = targetexpr {
             if let StatementListItem::Statement(boa_ast::Statement::Expression(targetexpr)) =
                 boa_parser::Parser::new(boa_parser::Source::from_bytes(&targetexpr))
@@ -405,14 +405,12 @@ impl Send {
                     .expect("hopefully there is a statement")
                     .to_owned()
             {
-                Target::Expr(targetexpr)
+                Some(Target::Expr(targetexpr))
             } else {
                 return Err(anyhow!(ParserError::EcmaScriptParsing));
             }
         } else {
-            return Err(anyhow!(ParserError::MissingAttr(
-                ATTR_TARGETEXPR.to_string()
-            )));
+            None
         };
         Ok(Send {
             event,
