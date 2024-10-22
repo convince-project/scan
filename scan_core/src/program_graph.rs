@@ -152,22 +152,6 @@ pub enum PgError {
     Type(#[source] TypeError),
 }
 
-// type FnExpr = Box<dyn Fn(&[Val]) -> Val + Send + Sync>;
-
-// struct FnExpression(FnExpr);
-
-// impl std::fmt::Debug for FnExpression {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "Expression")
-//     }
-// }
-
-// impl FnExpression {
-//     fn eval(&self, vals: &[Val]) -> Val {
-//         self.0(vals)
-//     }
-// }
-
 #[derive(Debug)]
 enum FnEffect {
     // TODO: use SmallVec optimization

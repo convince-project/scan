@@ -73,34 +73,3 @@ impl<A: Clone + PartialEq> Mtl<Atom<A>> {
         }
     }
 }
-
-impl<V: Clone> Mtl<V> {
-    pub fn gen_eval(&self, trace_len: usize, trace: &dyn Fn(usize, &V) -> bool) -> bool {
-        match self {
-            Mtl::True => true,
-            Mtl::Atom(id) => trace(0, id),
-            Mtl::And(formulae) => formulae.iter().all(|f| f.gen_eval(trace_len, trace)),
-            // Mtl::Or(formulae) => formulae.iter().any(|f| f.eval(vars)),
-            Mtl::Not(formula) => !formula.gen_eval(trace_len, trace),
-            // Mtl::Implies(formulae) => formulae.1.eval(vars) || !formulae.0.eval(vars),
-            Mtl::Next(formula) => formula.gen_eval(trace_len - 1, &|n, v| trace(n + 1, v)),
-            Mtl::Until(formulae, _) => {
-                let (lhs, rhs) = formulae.borrow();
-                for i in 0..trace_len {
-                    if rhs.gen_eval(trace_len - i, &|n, v| trace(n + i, v)) {
-                        return true;
-                    } else if !lhs.gen_eval(trace_len - i, &|n, v| trace(n + i, v)) {
-                        return false;
-                    } else {
-                        continue;
-                    }
-                }
-                false
-            } // Mtl::WeakUntil(_, _) => todo!(),
-              // Mtl::Release(_, _) => todo!(),
-              // Mtl::WeakRelease(_, _) => todo!(),
-              // Mtl::Eventually(_, _) => todo!(),
-              // Mtl::Always(_, _) => todo!(),
-        }
-    }
-}
