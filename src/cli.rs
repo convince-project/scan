@@ -99,7 +99,13 @@ fn print_progress_bar(s: Arc<AtomicU32>, f: Arc<AtomicU32>, confidence: f64, pre
     const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
     let mut local_s = s.load(Ordering::Relaxed);
     let mut local_f = f.load(Ordering::Relaxed);
-    let mut bound = adaptive_bound(local_s, local_f, confidence, precision);
+    let runs = local_s + local_f;
+    let avg = if runs != 0 {
+        local_s as f64 / runs as f64
+    } else {
+        0.5f64
+    };
+    let mut bound = adaptive_bound(avg, confidence, precision);
     let style = ProgressStyle::with_template(
         "[{elapsed_precise}] {percent:>2}% {wide_bar} {msg} ETA: {eta:<5}",
     )
@@ -111,12 +117,16 @@ fn print_progress_bar(s: Arc<AtomicU32>, f: Arc<AtomicU32>, confidence: f64, pre
     while bound > (local_s + local_f) as f64 {
         // Check if new runs arrived
         if local_s + local_f > bar.position() as u32 {
-            bound = adaptive_bound(local_s, local_f, confidence, precision);
+            let runs = local_s + local_f;
+            let avg = local_s as f64 / runs as f64;
+            bound = adaptive_bound(avg, confidence, precision);
             bar.set_length(bound.ceil() as u64);
-            bar.set_position((local_s + local_f) as u64);
-            let rate = local_s as f64 / (local_s + local_f) as f64;
+            bar.set_position(runs as u64);
             let derived_precision = derive_precision(local_s, local_f, confidence);
-            bar.set_message(format!("Rate: {rate:.0$}±{derived_precision:.0$}", mag));
+            bar.set_message(format!(
+                "Success rate: {avg:.0$}±{derived_precision:.0$}",
+                mag
+            ));
             bar.tick();
         }
         // Sleep a while to limit update/refresh rate.

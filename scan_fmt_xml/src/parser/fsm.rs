@@ -471,7 +471,7 @@ impl If {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub(crate) name: String,
-    pub(crate) omg_type: String,
+    pub(crate) omg_type: Option<String>,
     pub(crate) expr: BoaExpression,
 }
 
@@ -510,9 +510,8 @@ impl Param {
             }
         }
         let name = name.ok_or(ParserError::MissingAttr(ATTR_NAME.to_string()))?;
-        let omg_type = omg_type
-            .or(r#type)
-            .ok_or(anyhow!(ParserError::NoTypeAnnotation))?;
+        let omg_type = omg_type.or(r#type);
+        // .ok_or(anyhow!(ParserError::NoTypeAnnotation))?;
         // if name != ident {
         //     return Err(anyhow!(ParserError::NoTypeAnnotation));
         // }

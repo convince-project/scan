@@ -9,6 +9,10 @@ pub use builder::ScxmlModel;
 pub use scan_core;
 
 pub fn load(path: &Path) -> anyhow::Result<ScxmlModel> {
-    let parser = parser::Parser::parse(path)?;
+    let parser = if path.is_file() {
+        parser::Parser::parse(path)
+    } else {
+        parser::Parser::parse_folder(path)
+    }?;
     builder::ModelBuilder::build(parser)
 }

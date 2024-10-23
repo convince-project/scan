@@ -8,14 +8,13 @@ mod vocabulary;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::str;
 use std::str::Utf8Error;
 
 use anyhow::{anyhow, Context};
 use log::{error, info, trace, warn};
 use quick_xml::events::attributes::{AttrError, Attribute};
-use quick_xml::{events, Error as XmlError};
-use quick_xml::{events::Event, Reader};
+use quick_xml::events::Event;
+use quick_xml::{Error as XmlError, Reader};
 use thiserror::Error;
 
 pub use self::bt::*;
@@ -103,6 +102,46 @@ pub struct Parser {
 }
 
 impl Parser {
+    pub fn parse_folder(path: &Path) -> anyhow::Result<Parser> {
+        let mut process_list = HashMap::new();
+        let mut properties = Properties::new();
+        if path.is_dir() {
+            for entry in std::fs::read_dir(path)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    // visit_dirs(&path, cb)?;
+                } else if path
+                    .extension()
+                    .is_some_and(|ext| ext.to_str().unwrap() == "scxml")
+                {
+                    info!("creating reader from file {0}", path.display());
+                    let mut reader = Reader::from_file(path)?;
+                    let fsm = Fsm::parse(&mut reader)?;
+                    process_list.insert(
+                        fsm.scxml.id.to_owned(),
+                        Process {
+                            moc: MoC::Fsm(Box::new(fsm)),
+                        },
+                    );
+                } else if path
+                    .extension()
+                    .is_some_and(|ext| ext.to_str().unwrap() == "xml")
+                {
+                    info!("creating reader from file {0}", path.display());
+                    let mut reader = Reader::from_file(path)?;
+                    properties = Properties::parse(&mut reader)?;
+                }
+            }
+        }
+        Ok(Parser {
+            root_folder: path.to_path_buf(),
+            process_list,
+            types: OmgTypes::new(),
+            properties,
+        })
+    }
+
     /// Builds a [`Parser`] representation by parsing the given main file of a model specification in the CONVINCE-XML format.
     ///
     /// Fails if the parsed content contains syntactic errors.
@@ -171,7 +210,7 @@ impl Parser {
                 }
                 Event::Empty(tag) => {
                     let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = std::str::from_utf8(tag_name.as_ref())?;
                     trace!("'{tag_name}' empty tag");
                     // let tag_name = ConvinceTag::from(tag_name.as_str());
                     match tag_name {
@@ -244,7 +283,7 @@ impl Parser {
         Ok(spec)
     }
 
-    fn parse_process(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<()> {
+    fn parse_process(&mut self, tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<()> {
         let mut process_id: Option<String> = None;
         let mut moc: Option<String> = None;
         let mut path: Option<String> = None;
@@ -252,7 +291,7 @@ impl Parser {
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
-            match str::from_utf8(attr.key.as_ref())? {
+            match std::str::from_utf8(attr.key.as_ref())? {
                 ATTR_ID => {
                     process_id = Some(String::from_utf8(attr.value.into_owned())?);
                 }
@@ -304,13 +343,13 @@ impl Parser {
         }
     }
 
-    fn parse_types(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<()> {
+    fn parse_types(&mut self, tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<()> {
         let mut path: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
-            match str::from_utf8(attr.key.as_ref())? {
+            match std::str::from_utf8(attr.key.as_ref())? {
                 ATTR_PATH => {
                     path = Some(String::from_utf8(attr.value.into_owned())?);
                 }
@@ -329,13 +368,13 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_properties(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<()> {
+    fn parse_properties(&mut self, tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<()> {
         let mut path: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
-            match str::from_utf8(attr.key.as_ref())? {
+            match std::str::from_utf8(attr.key.as_ref())? {
                 ATTR_PATH => {
                     path = Some(String::from_utf8(attr.value.into_owned())?);
                 }

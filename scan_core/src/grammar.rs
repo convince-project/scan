@@ -234,9 +234,9 @@ where
                 }
             }
             Expression::Equal(exprs) | Expression::GreaterEq(exprs) | Expression::LessEq(exprs) => {
-                if matches!(exprs.0.r#type()?, Type::Integer)
-                    && matches!(exprs.1.r#type()?, Type::Integer)
-                {
+                let type_0 = exprs.0.r#type()?;
+                let type_1 = exprs.1.r#type()?;
+                if matches!(type_0, Type::Integer | Type::Boolean) && type_0 == type_1 {
                     Ok(Type::Boolean)
                 } else {
                     Err(TypeError::TypeMismatch)
@@ -382,11 +382,6 @@ impl<V> FnExpression<V> {
     pub fn eval(&self, vars: &dyn Fn(V) -> Val) -> Val {
         self.0(vars)
     }
-
-    // #[inline(always)]
-    // pub fn eval(&self, vars: &dyn Fn(V) -> Option<Val>) -> Result<Val, TypeError> {
-    //     self.0(vars)
-    // }
 }
 
 impl<V: Clone + Copy + Send + Sync + 'static> From<Expression<V>> for FnExpression<V> {
@@ -523,13 +518,10 @@ impl<V: Clone + Copy + Send + Sync + 'static> From<Expression<V>> for FnExpressi
                 let (lhs, rhs) = *exprs;
                 let lhs = FnExpression::from(lhs);
                 let rhs = FnExpression::from(rhs);
-                Box::new(move |vars| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) = (lhs.eval(vars), rhs.eval(vars))
-                    {
-                        Val::Boolean(lhs == rhs)
-                    } else {
-                        panic!("type mismatch");
-                    }
+                Box::new(move |vars| match (lhs.eval(vars), rhs.eval(vars)) {
+                    (Val::Integer(lhs), Val::Integer(rhs)) => Val::Boolean(lhs == rhs),
+                    (Val::Boolean(lhs), Val::Boolean(rhs)) => Val::Boolean(lhs == rhs),
+                    _ => panic!("type mismatch"),
                 })
             }
             Expression::Greater(exprs) => {

@@ -101,7 +101,7 @@ impl ModelBuilder {
     /// Can fail if the model specification contains semantic errors
     /// (particularly type mismatches)
     /// or references to non-existing items.
-    pub fn build(parser: Parser) -> anyhow::Result<ScxmlModel> {
+    pub fn build(mut parser: Parser) -> anyhow::Result<ScxmlModel> {
         let mut model_builder = ModelBuilder {
             cs: ChannelSystemBuilder::new(),
             types: HashMap::new(),
@@ -123,7 +123,7 @@ impl ModelBuilder {
         info!("Building types");
         model_builder.build_types(&parser.types)?;
 
-        model_builder.prebuild_processes(&parser)?;
+        model_builder.prebuild_processes(&mut parser)?;
 
         info!("Visit process list");
         for (_id, declaration) in parser.process_list.iter() {
@@ -210,41 +210,56 @@ impl ModelBuilder {
         self.fsm_builders.get(id).expect("just inserted")
     }
 
-    fn prebuild_processes(&mut self, parser: &Parser) -> anyhow::Result<()> {
-        for (id, declaration) in parser.process_list.iter() {
+    fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
+        for (id, declaration) in parser.process_list.iter_mut() {
             let pg_id = self.fsm_builder(id).pg_id;
-            match &declaration.moc {
-                MoC::Fsm(fsm) => self.prebuild_fsms(pg_id, &fsm.scxml)?,
+            match &mut declaration.moc {
+                MoC::Fsm(fsm) => self.prebuild_fsms(pg_id, &mut fsm.scxml, &fsm.interner)?,
                 MoC::Bt(bt) => self.prebuild_bt(pg_id, bt)?,
             }
         }
         Ok(())
     }
 
-    fn prebuild_fsms(&mut self, pg_id: PgId, fmt: &Scxml) -> anyhow::Result<()> {
-        for (_, state) in fmt.states.iter() {
-            for exec in state.on_entry.iter() {
-                self.prebuild_exec(pg_id, exec)?;
+    fn prebuild_fsms(
+        &mut self,
+        pg_id: PgId,
+        fmt: &mut Scxml,
+        interner: &boa_interner::Interner,
+    ) -> anyhow::Result<()> {
+        let mut types = HashMap::new();
+        for data in &fmt.datamodel {
+            types.insert(data.id.to_owned(), data.omg_type.as_str().to_owned());
+        }
+        for (_, state) in fmt.states.iter_mut() {
+            for exec in state.on_entry.iter_mut() {
+                self.prebuild_exec(pg_id, exec, &types, interner)?;
             }
-            for transition in state.transitions.iter() {
+            for transition in state.transitions.iter_mut() {
                 if let Some(ref event) = transition.event {
                     // Event may or may not have been processed before
                     let event_index = self.event_index(event);
                     let builder = self.events.get_mut(event_index).expect("index must exist");
                     builder.receivers.insert(pg_id);
                 }
-                for exec in transition.effects.iter() {
-                    self.prebuild_exec(pg_id, exec)?;
+                for exec in transition.effects.iter_mut() {
+                    self.prebuild_exec(pg_id, exec, &types, interner)?;
                 }
             }
-            for exec in state.on_exit.iter() {
-                self.prebuild_exec(pg_id, exec)?;
+            for exec in state.on_exit.iter_mut() {
+                self.prebuild_exec(pg_id, exec, &types, interner)?;
             }
         }
         Ok(())
     }
 
-    fn prebuild_exec(&mut self, pg_id: PgId, executable: &Executable) -> anyhow::Result<()> {
+    fn prebuild_exec(
+        &mut self,
+        pg_id: PgId,
+        executable: &mut Executable,
+        types: &HashMap<String, String>,
+        interner: &boa_interner::Interner,
+    ) -> anyhow::Result<()> {
         match executable {
             Executable::Assign {
                 location: _,
@@ -260,12 +275,19 @@ impl ModelBuilder {
                 let builder = self.events.get_mut(event_index).expect("index must exist");
                 builder.senders.insert(pg_id);
                 for param in params {
+                    let param_type = param.omg_type.to_owned();
+                    let param_type = param_type
+                        .or_else(|| self.infer_type(&param.expr, types, interner).ok())
+                        .ok_or(anyhow!("missing type annotation for param {}", param.name))?;
+                    // Update omg_type value so that it contains its type for sure
+                    param.omg_type = Some(param_type.to_owned());
+                    let builder = self.events.get_mut(event_index).expect("index must exist");
                     let prev_type = builder
                         .params
-                        .insert(param.name.to_owned(), param.omg_type.to_owned());
+                        .insert(param.name.to_owned(), param_type.to_owned());
                     // Type parameters should not change type
                     if let Some(prev_type) = prev_type {
-                        if prev_type != param.omg_type {
+                        if prev_type != param_type {
                             return Err(anyhow!("type parameter mismatch"));
                         }
                     }
@@ -280,14 +302,82 @@ impl ModelBuilder {
                 // preprocess all executables
                 for (_, executables) in elifs {
                     for executable in executables {
-                        self.prebuild_exec(pg_id, executable)?;
+                        self.prebuild_exec(pg_id, executable, types, interner)?;
                     }
                 }
                 for executable in r#else {
-                    self.prebuild_exec(pg_id, executable)?;
+                    self.prebuild_exec(pg_id, executable, types, interner)?;
                 }
                 Ok(())
             }
+        }
+    }
+
+    fn infer_type(
+        &self,
+        expr: &boa_ast::Expression,
+        types: &HashMap<String, String>,
+        interner: &boa_interner::Interner,
+    ) -> anyhow::Result<String> {
+        match expr {
+            boa_ast::Expression::This => todo!(),
+            boa_ast::Expression::Identifier(ident) => {
+                let ident = ident.to_interned_string(interner);
+                types
+                    .get(&ident)
+                    .cloned()
+                    .or_else(|| {
+                        if self.enums.contains_key(&ident) {
+                            Some(String::from("int32"))
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or(anyhow!("type cannot be inferred"))
+            }
+            boa_ast::Expression::Literal(lit) => {
+                use boa_ast::expression::literal::Literal;
+                match lit {
+                    Literal::String(_) => todo!(),
+                    Literal::Num(_) => Ok(String::from("f64")),
+                    Literal::Int(_) => Ok(String::from("int32")),
+                    Literal::BigInt(_) => todo!(),
+                    Literal::Bool(_) => Ok(String::from("bool")),
+                    Literal::Null => todo!(),
+                    Literal::Undefined => todo!(),
+                }
+            }
+            boa_ast::Expression::RegExpLiteral(_) => todo!(),
+            boa_ast::Expression::ArrayLiteral(_) => todo!(),
+            boa_ast::Expression::ObjectLiteral(_) => todo!(),
+            boa_ast::Expression::Spread(_) => todo!(),
+            boa_ast::Expression::Function(_) => todo!(),
+            boa_ast::Expression::ArrowFunction(_) => todo!(),
+            boa_ast::Expression::AsyncArrowFunction(_) => todo!(),
+            boa_ast::Expression::Generator(_) => todo!(),
+            boa_ast::Expression::AsyncFunction(_) => todo!(),
+            boa_ast::Expression::AsyncGenerator(_) => todo!(),
+            boa_ast::Expression::Class(_) => todo!(),
+            boa_ast::Expression::TemplateLiteral(_) => todo!(),
+            boa_ast::Expression::PropertyAccess(_) => todo!(),
+            boa_ast::Expression::New(_) => todo!(),
+            boa_ast::Expression::Call(_) => todo!(),
+            boa_ast::Expression::SuperCall(_) => todo!(),
+            boa_ast::Expression::ImportCall(_) => todo!(),
+            boa_ast::Expression::Optional(_) => todo!(),
+            boa_ast::Expression::TaggedTemplate(_) => todo!(),
+            boa_ast::Expression::NewTarget => todo!(),
+            boa_ast::Expression::ImportMeta => todo!(),
+            boa_ast::Expression::Assign(_) => todo!(),
+            boa_ast::Expression::Unary(_) => todo!(),
+            boa_ast::Expression::Update(_) => todo!(),
+            boa_ast::Expression::Binary(_) => todo!(),
+            boa_ast::Expression::BinaryInPrivate(_) => todo!(),
+            boa_ast::Expression::Conditional(_) => todo!(),
+            boa_ast::Expression::Await(_) => todo!(),
+            boa_ast::Expression::Yield(_) => todo!(),
+            boa_ast::Expression::Parenthesized(_) => todo!(),
+            _ => todo!(),
         }
     }
 
@@ -1182,7 +1272,7 @@ impl ModelBuilder {
                 let param_type = self
                     .types
                     .get(param_type_name)
-                    .ok_or(anyhow!("type {} not found", param_type_name))?
+                    .ok_or(anyhow!("type {} not found", param_name))?
                     .1
                     .to_owned();
                 // Variable where to store parameter.
@@ -1544,84 +1634,108 @@ impl ModelBuilder {
                 target,
                 params: send_params,
             }) => {
-                let done_loc = self.cs.new_location(pg_id)?;
-                let targets;
                 let event_idx = *self
                     .event_indexes
                     .get(event)
                     .ok_or(anyhow!("event not found"))?;
-                let target_expr;
-                match target {
-                    Some(Target::Id(target)) => {
-                        let target_builder = self
-                            .fsm_builders
-                            .get(target)
-                            .ok_or(anyhow!(format!("target {target} not found")))?;
-                        targets = vec![target_builder.pg_id];
-                        target_expr = Some(CsExpression::from(
-                            usize::from(target_builder.pg_id) as Integer
-                        ));
+                if let Some(target) = target {
+                    let done_loc = self.cs.new_location(pg_id)?;
+                    let targets;
+                    let target_expr;
+                    match target {
+                        Target::Id(target) => {
+                            let target_builder = self
+                                .fsm_builders
+                                .get(target)
+                                .ok_or(anyhow!(format!("target {target} not found")))?;
+                            targets = vec![target_builder.pg_id];
+                            target_expr = Some(CsExpression::from(
+                                usize::from(target_builder.pg_id) as Integer,
+                            ));
+                        }
+                        Target::Expr(targetexpr) => {
+                            target_expr =
+                                Some(self.expression(targetexpr, interner, vars, origin, params)?);
+                            targets = self.events[event_idx].receivers.iter().cloned().collect();
+                        }
                     }
-                    Some(Target::Expr(targetexpr)) => {
-                        target_expr =
-                            Some(self.expression(targetexpr, interner, vars, origin, params)?);
-                        targets = self.events[event_idx].receivers.iter().cloned().collect();
-                    }
-                    None => {
-                        // WARN: This behavior is non-compliant with the SCXML specification
-                        // An event sent without specifiying the target is sent to all FSMs that can process it
-                        target_expr = None;
-                        targets = self.events[event_idx].receivers.iter().cloned().collect();
-                    }
-                }
-                for target_id in targets {
-                    let target_name = self.fsm_names.get(&target_id).unwrap();
-                    let target_builder = self.fsm_builders.get(target_name).expect("it must exist");
-                    let target_ext_queue = target_builder.ext_queue;
-                    let send_event = self
-                        .cs
-                        .new_send(
-                            pg_id,
-                            target_ext_queue,
-                            CsExpression::Tuple(vec![
-                                CsExpression::from(event_idx as Integer),
-                                CsExpression::from(usize::from(pg_id) as Integer),
-                            ]),
-                        )
-                        .expect("params are hard-coded");
+                    for target_id in targets {
+                        let target_name = self.fsm_names.get(&target_id).unwrap();
+                        let target_builder =
+                            self.fsm_builders.get(target_name).expect("it must exist");
+                        let target_ext_queue = target_builder.ext_queue;
+                        let send_event = self
+                            .cs
+                            .new_send(
+                                pg_id,
+                                target_ext_queue,
+                                CsExpression::Tuple(vec![
+                                    CsExpression::from(event_idx as Integer),
+                                    CsExpression::from(usize::from(pg_id) as Integer),
+                                ]),
+                            )
+                            .expect("params are hard-coded");
 
-                    // Send event and event origin before moving on to next location.
-                    let mut next_loc = self.cs.new_location(pg_id).expect("PG exists");
-                    self.cs
-                        .add_transition(
-                            pg_id,
-                            loc,
-                            send_event,
-                            next_loc,
-                            target_expr.as_ref().map(|target_expr| {
-                                CsExpression::Equal(Box::new((
-                                    CsExpression::from(usize::from(target_id) as Integer),
-                                    target_expr.to_owned(),
-                                )))
+                        // Send event and event origin before moving on to next location.
+                        let mut next_loc = self.cs.new_location(pg_id).expect("PG exists");
+                        self.cs
+                            .add_transition(
+                                pg_id,
+                                loc,
+                                send_event,
+                                next_loc,
+                                target_expr.as_ref().map(|target_expr| {
+                                    CsExpression::Equal(Box::new((
+                                        CsExpression::from(usize::from(target_id) as Integer),
+                                        target_expr.to_owned(),
+                                    )))
+                                }),
+                            )
+                            .expect("params are right");
+
+                        // Pass parameters. This could fail due to param content.
+                        for param in send_params {
+                            // Updates next location.
+                            next_loc = self.send_param(
+                                pg_id, target_id, param, event_idx, next_loc, vars, origin, params,
+                                interner,
+                            )?;
+                        }
+                        // Once sending event and args done, get to exit-point
+                        self.cs
+                            .add_autonomous_transition(pg_id, next_loc, done_loc, None)
+                            .expect("hand-made args");
+                    }
+                    // Return exit point
+                    Ok(done_loc)
+                } else {
+                    // WARN: This behavior is non-compliant with the SCXML specification
+                    // An event sent without specifiying the target is sent to all FSMs that can process it
+                    let targets = self.events[event_idx]
+                        .receivers
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let mut next_loc = loc;
+                    for target in targets {
+                        let target_name = self.fsm_names.get(&target).cloned();
+                        next_loc = self.add_executable(
+                            &Executable::Send(Send {
+                                event: event.to_owned(),
+                                target: target_name.map(Target::Id),
+                                params: send_params.to_owned(),
                             }),
-                        )
-                        .expect("params are right");
-
-                    // Pass parameters. This could fail due to param content.
-                    for param in send_params {
-                        // Updates next location.
-                        next_loc = self.send_param(
-                            pg_id, target_id, param, event_idx, next_loc, vars, origin, params,
+                            pg_id,
+                            int_queue,
+                            next_loc,
+                            vars,
+                            origin,
+                            params,
                             interner,
                         )?;
                     }
-                    // Once sending event and args done, get to exit-point
-                    self.cs
-                        .add_autonomous_transition(pg_id, next_loc, done_loc, None)
-                        .expect("hand-made args");
+                    Ok(next_loc)
                 }
-                // Return exit point
-                Ok(done_loc)
             }
             Executable::Assign { location, expr } => {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
@@ -1695,7 +1809,7 @@ impl ModelBuilder {
         // Get param type.
         let scan_type = self
             .types
-            .get(param.omg_type.as_str())
+            .get(param.omg_type.as_ref().expect("type name annotation"))
             .cloned()
             .ok_or(anyhow!("undefined type"))?
             .1;
@@ -1793,12 +1907,11 @@ impl ModelBuilder {
             boa_ast::Expression::Assign(_) => todo!(),
             boa_ast::Expression::Unary(unary) => {
                 use boa_ast::expression::operator::unary::UnaryOp;
+                let expr = self.expression(unary.target(), interner, vars, origin, params)?;
                 match unary.op() {
-                    UnaryOp::Minus => todo!(),
-                    UnaryOp::Plus => todo!(),
-                    UnaryOp::Not => self
-                        .expression(unary.target(), interner, vars, origin, params)
-                        .map(|expr| Expression::Not(Box::new(expr)))?,
+                    UnaryOp::Minus => Expression::Opposite(Box::new(expr)),
+                    UnaryOp::Plus => expr,
+                    UnaryOp::Not => Expression::Not(Box::new(expr)),
                     UnaryOp::Tilde => todo!(),
                     UnaryOp::TypeOf => todo!(),
                     UnaryOp::Delete => todo!(),
@@ -1826,7 +1939,9 @@ impl ModelBuilder {
                     BinaryOp::Bitwise(_) => todo!(),
                     BinaryOp::Relational(rel_bin) => match rel_bin {
                         RelationalOp::Equal => CsExpression::Equal(Box::new((lhs, rhs))),
-                        RelationalOp::NotEqual => todo!(),
+                        RelationalOp::NotEqual => {
+                            CsExpression::Not(Box::new(CsExpression::Equal(Box::new((lhs, rhs)))))
+                        }
                         RelationalOp::StrictEqual => todo!(),
                         RelationalOp::StrictNotEqual => todo!(),
                         RelationalOp::GreaterThan => CsExpression::Greater(Box::new((lhs, rhs))),
@@ -1955,38 +2070,59 @@ impl ModelBuilder {
             boa_ast::Expression::Identifier(ident) => {
                 let ident = ident.to_interned_string(interner);
                 match ident.as_str() {
-                    "_event" => Ok(EcmaObj::Properties(HashMap::from([
-                        (
-                            String::from("origin"),
-                            EcmaObj::PrimitiveData(
-                                Expression::Var(
-                                    origin.ok_or(anyhow!("missing origin of _event"))?,
-                                    Type::Integer,
+                    "_event" => Ok(EcmaObj::Properties(HashMap::from_iter(
+                        [
+                            (
+                                String::from("origin"),
+                                EcmaObj::PrimitiveData(
+                                    Expression::Var(
+                                        origin.ok_or(anyhow!("missing origin of _event"))?,
+                                        Type::Integer,
+                                    ),
+                                    String::from("int32"),
                                 ),
-                                String::from("int32"),
                             ),
-                        ),
-                        (
-                            String::from("data"),
-                            EcmaObj::Properties(HashMap::from_iter(params.iter().map(
-                                |(n, (v, t))| {
-                                    (
-                                        n.to_owned(),
-                                        EcmaObj::PrimitiveData(
-                                            CsExpression::Var(
-                                                *v,
-                                                self.types
-                                                    .get(t)
-                                                    .map(|(_, t)| t.to_owned())
-                                                    .expect("type of data parameter"),
+                            (
+                                String::from("data"),
+                                EcmaObj::Properties(HashMap::from_iter(params.iter().map(
+                                    |(n, (v, t))| {
+                                        (
+                                            n.to_owned(),
+                                            EcmaObj::PrimitiveData(
+                                                CsExpression::Var(
+                                                    *v,
+                                                    self.types
+                                                        .get(t)
+                                                        .map(|(_, t)| t.to_owned())
+                                                        .expect("type of data parameter"),
+                                                ),
+                                                t.to_owned(),
                                             ),
-                                            t.to_owned(),
-                                        ),
-                                    )
-                                },
-                            ))),
-                        ),
-                    ]))),
+                                        )
+                                    },
+                                ))),
+                            ),
+                        ]
+                        // WARN: This allows the non-conformant notation `_event.<PARAM>` in place of `_event.data.<PARAM>`
+                        // for compatibility with the format produced by AS2FM.
+                        // TODO: remove when not necessary anymore.
+                        .into_iter()
+                        .chain(params.iter().map(|(n, (v, t))| {
+                            (
+                                n.to_owned(),
+                                EcmaObj::PrimitiveData(
+                                    CsExpression::Var(
+                                        *v,
+                                        self.types
+                                            .get(t)
+                                            .map(|(_, t)| t.to_owned())
+                                            .expect("type of data parameter"),
+                                    ),
+                                    t.to_owned(),
+                                ),
+                            )
+                        })),
+                    ))),
                     ident => {
                         let (var, type_name) = vars
                             .get(ident)
