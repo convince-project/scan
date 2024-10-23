@@ -1,11 +1,13 @@
 use std::{borrow::Borrow, ops::Range};
 
+use crate::Atom;
+
 pub type Time = usize;
 
 #[derive(Debug, Clone)]
 pub enum Mtl<V>
 where
-    V: Clone + Eq,
+    V: Clone,
 {
     True,
     Atom(V),
@@ -24,7 +26,7 @@ where
 
 impl<V> Mtl<V>
 where
-    V: Clone + Eq,
+    V: Clone,
 {
     pub fn is_boolean(&self) -> bool {
         match self {
@@ -38,11 +40,14 @@ where
     }
 }
 
-impl Mtl<usize> {
-    pub fn eval(&self, trace: &[Vec<bool>]) -> bool {
+impl<A: Clone + PartialEq> Mtl<Atom<A>> {
+    pub fn eval(&self, trace: &[(A, Vec<bool>)]) -> bool {
         match self {
             Mtl::True => true,
-            Mtl::Atom(id) => trace[0][*id],
+            Mtl::Atom(atom) => match atom {
+                Atom::Predicate(p) => trace[0].1[*p],
+                Atom::Event(e) => *e == trace[0].0,
+            },
             Mtl::And(formulae) => formulae.iter().all(|f| f.eval(trace)),
             // Mtl::Or(formulae) => formulae.iter().any(|f| f.eval(vars)),
             Mtl::Not(formula) => !formula.eval(trace),

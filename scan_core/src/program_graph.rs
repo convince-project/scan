@@ -88,6 +88,9 @@ pub struct Location(usize);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Action(usize);
 
+/// Epsilon action to enable autonomous transitions.
+const EPSILON: Action = Action(usize::MAX);
+
 /// An indexing object for typed variables in a PG.
 ///
 /// These cannot be directly created or manipulated,
@@ -141,32 +144,25 @@ pub enum PgError {
     /// The action is a not a Receive communication.
     #[error("{0:?} is a not a Receive communication")]
     NotReceive(Action),
-}
-
-type FnExpr = Box<dyn Fn(&[Val]) -> Val + Send + Sync>;
-
-struct FnExpression(FnExpr);
-
-impl std::fmt::Debug for FnExpression {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Expression")
-    }
-}
-
-impl FnExpression {
-    fn eval(&self, vals: &[Val]) -> Val {
-        self.0(vals)
-    }
+    /// The epsilon action has no effects.
+    #[error("The epsilon action has no effects")]
+    EpsilonEffects,
+    /// A type error
+    #[error("type error")]
+    Type(#[source] TypeError),
 }
 
 #[derive(Debug)]
 enum FnEffect {
     // TODO: use SmallVec optimization
     // NOTE: SmallVec here would not appear in public API
-    Effects(Vec<(Var, FnExpression)>),
-    Send(FnExpression),
+    Effects(Vec<(Var, FnExpression<Var>)>),
+    Send(FnExpression<Var>),
     Receive(Var),
 }
+
+// QUESTION: is there a better/more efficient representation?
+type Transitions = HashMap<(Action, Location), Option<FnExpression<Var>>>;
 
 /// Representation of a PG that can be executed transition-by-transition.
 ///
@@ -183,8 +179,7 @@ pub struct ProgramGraph {
     current_location: Location,
     vars: Vec<Val>,
     effects: Arc<Vec<FnEffect>>,
-    // QUESTION: is there a better/more efficient representation?
-    transitions: Arc<Vec<HashMap<(Action, Location), Option<FnExpression>>>>,
+    transitions: Arc<Vec<Transitions>>,
 }
 
 impl ProgramGraph {
@@ -219,7 +214,10 @@ impl ProgramGraph {
             .iter()
             .filter_map(|((action, post), guard)| {
                 if let Some(guard) = guard {
-                    if let Val::Boolean(pass) = guard.eval(&self.vars) {
+                    if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0].clone())
+                    // .eval(&|var| self.vars.get(var.0).cloned())
+                    // .expect("boolean value")
+                    {
                         if pass {
                             Some((*action, *post))
                         } else {
@@ -239,7 +237,10 @@ impl ProgramGraph {
             .get(&(action, post_state))
             .ok_or(PgError::MissingTransition)?;
         if guard.as_ref().map_or(true, |guard| {
-            if let Val::Boolean(pass) = guard.eval(&self.vars) {
+            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0].clone())
+            // .eval(&|var| self.vars.get(var.0).cloned())
+            // .expect("boolean value")
+            {
                 pass
             } else {
                 panic!("guard is not a boolean");
@@ -256,21 +257,27 @@ impl ProgramGraph {
     /// Fails if the requested transition is not admissible.
     pub fn transition(&mut self, action: Action, post_state: Location) -> Result<(), PgError> {
         self.satisfies_guard(action, post_state)?;
-        if let FnEffect::Effects(effects) = &self.effects[action.0] {
-            for (var, effect) in effects {
-                self.vars[var.0] = effect.eval(&self.vars);
+        if action != EPSILON {
+            if let FnEffect::Effects(effects) = &self.effects[action.0] {
+                for (var, effect) in effects {
+                    self.vars[var.0] = effect.eval(&|var| self.vars[var.0].clone());
+                    // .eval(&|var| self.vars.get(var.0).cloned())
+                    // .expect("evaluate effect");
+                }
+            } else {
+                return Err(PgError::Communication(action));
             }
-            self.current_location = post_state;
-            Ok(())
-        } else {
-            Err(PgError::Communication(action))
         }
+        self.current_location = post_state;
+        Ok(())
     }
 
     pub(crate) fn send(&mut self, action: Action, post_state: Location) -> Result<Val, PgError> {
         self.satisfies_guard(action, post_state)?;
         if let FnEffect::Send(effect) = &self.effects[action.0] {
-            let val = effect.eval(&self.vars);
+            let val = effect.eval(&|var| self.vars[var.0].clone());
+            // .eval(&|var| self.vars.get(var.0).cloned())
+            // .expect("evaluate effect");
             self.current_location = post_state;
             Ok(val)
         } else {
@@ -286,10 +293,7 @@ impl ProgramGraph {
     ) -> Result<Val, PgError> {
         self.satisfies_guard(action, post_state)?;
         if let FnEffect::Receive(var) = &self.effects[action.0] {
-            let var_content = self
-                .vars
-                .get_mut(var.0)
-                .ok_or_else(|| PgError::MissingVar(var.to_owned()))?;
+            let var_content = self.vars.get_mut(var.0).expect("variable exists");
             if var_content.r#type() == val.r#type() {
                 let previous_val = var_content.clone();
                 *var_content = val;
@@ -344,7 +348,7 @@ mod tests {
             move_left,
             battery,
             PgExpression::Sum(vec![
-                PgExpression::Var(battery),
+                PgExpression::Var(battery, Type::Integer),
                 // PgExpression::Opposite(Box::new(PgExpression::Const(Val::Integer(1)))),
                 PgExpression::Const(Val::Integer(-1)),
             ]),
@@ -354,14 +358,14 @@ mod tests {
             move_right,
             battery,
             PgExpression::Sum(vec![
-                PgExpression::Var(battery),
+                PgExpression::Var(battery, Type::Integer),
                 // PgExpression::Opposite(Box::new(PgExpression::Const(Val::Integer(1)))),
                 PgExpression::Const(Val::Integer(-1)),
             ]),
         )?;
         // Guards
         let out_of_charge = PgExpression::Greater(Box::new((
-            PgExpression::Var(battery),
+            PgExpression::Var(battery, Type::Integer),
             PgExpression::Const(Val::Integer(0)),
         )));
         // Program graph definition

@@ -10,14 +10,14 @@ fn counter_pg() -> Result<(), PgError> {
         action,
         var,
         Expression::Sum(vec![
-            Expression::Var(var),
+            Expression::Var(var, Type::Integer),
             Expression::Const(Val::Integer(1)),
         ]),
     )
     .unwrap();
     for counter in 0..10 {
         let guard = Expression::Equal(Box::new((
-            Expression::Var(var),
+            Expression::Var(var, Type::Integer),
             Expression::Const(Val::Integer(counter)),
         )));
         pg.add_transition(initial, action, initial, Some(guard))

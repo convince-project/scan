@@ -3,43 +3,29 @@ use std::sync::Arc;
 
 use crate::channel_system::{Channel, ChannelSystem, Event, EventType};
 use crate::transition_system::TransitionSystem;
-use crate::{Expression, FnExpression, Integer, Val};
+use crate::{Expression, FnExpression, Val};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Port {
-    Message(Channel),
-    LastMessage,
-}
-
-type FnMdExpression = FnExpression<HashMap<Port, Val>>;
-
-// Constant corresponding to no event index.
-const NO_EVENT: Integer = -1;
+type FnMdExpression = FnExpression<Channel>;
 
 #[derive(Debug)]
 pub struct CsModelBuilder {
     cs: ChannelSystem,
-    vals: HashMap<Port, Val>,
+    vals: HashMap<Channel, Val>,
     predicates: Vec<FnMdExpression>,
 }
 
 impl CsModelBuilder {
     pub fn new(initial_state: ChannelSystem) -> Self {
-        let mut vals = HashMap::new();
-        // As default value for LastMessage, take the constant NO_EVENT.
-        let _ = vals.insert(Port::LastMessage, Val::Integer(NO_EVENT));
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         Self {
             cs: initial_state,
-            vals,
+            vals: HashMap::new(),
             predicates: Vec::new(),
         }
     }
 
     pub fn add_port(&mut self, channel: Channel, default: Val) -> Result<(), ()> {
-        if let std::collections::hash_map::Entry::Vacant(e) =
-            self.vals.entry(Port::Message(channel))
-        {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.vals.entry(channel) {
             e.insert(default);
             Ok(())
         } else {
@@ -47,14 +33,12 @@ impl CsModelBuilder {
         }
     }
 
-    pub fn add_predicate(&mut self, predicate: Expression<Port>) -> Result<usize, ()> {
-        let predicate = FnMdExpression::try_from(predicate)?;
-        if predicate.eval(&self.vals).is_some() {
-            self.predicates.push(predicate);
-            Ok(self.predicates.len() - 1)
-        } else {
-            Err(())
-        }
+    pub fn add_predicate(&mut self, predicate: Expression<Channel>) -> Result<usize, ()> {
+        let predicate = FnExpression::<Channel>::from(predicate);
+        let _ = predicate.eval(&|port| self.vals.get(&port).unwrap().clone());
+        // let _ = predicate.eval(&|port| self.vals.get(&port).cloned());
+        self.predicates.push(predicate);
+        Ok(self.predicates.len() - 1)
     }
 
     /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
@@ -65,6 +49,7 @@ impl CsModelBuilder {
         CsModel {
             cs: self.cs,
             vals: self.vals,
+            last_event: None,
             predicates: Arc::new(self.predicates),
         }
     }
@@ -78,8 +63,9 @@ impl CsModelBuilder {
 #[derive(Debug, Clone)]
 pub struct CsModel {
     cs: ChannelSystem,
-    vals: HashMap<Port, Val>,
+    vals: HashMap<Channel, Val>,
     predicates: Arc<Vec<FnMdExpression>>,
+    last_event: Option<Event>,
 }
 
 impl CsModel {
@@ -96,16 +82,18 @@ impl TransitionSystem for CsModel {
         self.predicates
             .iter()
             .map(|prop| {
-                if let Some(Val::Boolean(b)) = prop.eval(&self.vals) {
-                    // Some(b)
-                    b
+                if let Val::Boolean(b) = prop.eval(&|port| self.vals.get(&port).unwrap().clone())
+                // .eval(&|port| self.vals.get(&port).cloned())
+                // .expect("boolean value")
+                {
+                    Some(b)
                 } else {
-                    // None
-                    // FIXME
-                    panic!("I don't know how to handle this");
+                    None
                 }
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()
+            // FIXME: handle error or guarantee it won't happen
+            .unwrap()
     }
 
     fn transitions(mut self) -> Vec<(Event, CsModel)> {
@@ -121,36 +109,13 @@ impl TransitionSystem for CsModel {
                     .cs
                     .transition(pg_id, action, post)
                     .expect("transition is possible");
+                model.last_event = event.clone();
                 if let Some(event) = event {
                     if let EventType::Send(ref val) = event.event_type {
-                        model
-                            .vals
-                            .insert(Port::Message(event.channel), val.to_owned());
-                        model
-                            .vals
-                            .insert(Port::LastMessage, Val::Integer(event.channel.0 as Integer));
-                    } else {
-                        let _ = model.vals.insert(Port::LastMessage, Val::Integer(NO_EVENT));
+                        model.vals.insert(event.channel, val.to_owned());
                     }
-                    // match event.event_type {
-                    //     EventType::Send(ref val) => {
-                    //         model.vals.insert(
-                    //             (event.pg_id, event.channel, Message::Send),
-                    //             val.to_owned(),
-                    //         );
-                    //     }
-                    //     EventType::Receive(ref val) => {
-                    //         model.vals.insert(
-                    //             (event.pg_id, event.channel, Message::Receive),
-                    //             val.to_owned(),
-                    //         );
-                    //     }
-                    //     // No meaningful value can be associated to these events.
-                    //     EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => {}
-                    // };
                     vec![(event, model)]
                 } else {
-                    let _ = model.vals.insert(Port::LastMessage, Val::Integer(NO_EVENT));
                     model.transitions()
                 }
             })

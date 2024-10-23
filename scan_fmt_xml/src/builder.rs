@@ -6,6 +6,7 @@ use crate::parser::{
     TICK_CALL, TICK_RETURN,
 };
 use anyhow::anyhow;
+use boa_interner::ToInternedString;
 use log::{info, trace};
 use scan_core::{channel_system::*, *};
 use std::collections::{HashMap, HashSet};
@@ -17,11 +18,12 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug)]
 pub struct ScxmlModel {
     pub model: CsModel,
-    pub guarantees: Vec<Mtl<usize>>,
-    pub assumes: Vec<Mtl<usize>>,
+    pub predicates: Vec<String>,
+    pub guarantees: Vec<Mtl<Atom<Event>>>,
+    pub assumes: Vec<Mtl<Atom<Event>>>,
     pub fsm_names: HashMap<PgId, String>,
     pub fsm_indexes: HashMap<usize, String>,
-    pub parameters: HashMap<Channel, (PgId, PgId, String)>,
+    pub parameters: HashMap<Channel, (PgId, PgId, usize, String)>,
     pub int_queues: HashSet<Channel>,
     pub ext_queues: HashMap<Channel, PgId>,
     pub events: HashMap<usize, String>,
@@ -86,8 +88,9 @@ pub struct ModelBuilder {
     // Properties
     guarantees: HashMap<String, Mtl<String>>,
     assumes: HashMap<String, Mtl<String>>,
-    predicates: HashMap<String, Expression<Port>>,
-    ports: HashMap<String, (Port, Val)>,
+    predicates: HashMap<String, Expression<Channel>>,
+    atoms: HashMap<String, Atom<Event>>,
+    ports: HashMap<String, (Channel, Val)>,
     // extra data
     int_queues: HashSet<Channel>,
 }
@@ -98,8 +101,8 @@ impl ModelBuilder {
     /// Can fail if the model specification contains semantic errors
     /// (particularly type mismatches)
     /// or references to non-existing items.
-    pub fn visit(parser: Parser) -> anyhow::Result<ScxmlModel> {
-        let mut model = ModelBuilder {
+    pub fn build(mut parser: Parser) -> anyhow::Result<ScxmlModel> {
+        let mut model_builder = ModelBuilder {
             cs: ChannelSystemBuilder::new(),
             types: HashMap::new(),
             enums: HashMap::new(),
@@ -113,25 +116,26 @@ impl ModelBuilder {
             assumes: HashMap::new(),
             predicates: HashMap::new(),
             ports: HashMap::new(),
+            atoms: HashMap::new(),
             int_queues: HashSet::new(),
         };
 
         info!("Building types");
-        model.build_types(&parser.types)?;
+        model_builder.build_types(&parser.types)?;
 
-        model.prebuild_processes(&parser)?;
+        model_builder.prebuild_processes(&mut parser)?;
 
         info!("Visit process list");
         for (_id, declaration) in parser.process_list.iter() {
             match &declaration.moc {
-                MoC::Fsm(fsm) => model.build_fsm(fsm)?,
-                MoC::Bt(bt) => model.build_bt(bt)?,
+                MoC::Fsm(fsm) => model_builder.build_fsm(fsm)?,
+                MoC::Bt(bt) => model_builder.build_bt(bt)?,
             }
         }
 
-        model.build_predicates(&parser)?;
+        model_builder.build_predicates(&parser)?;
 
-        let model = model.build();
+        let model = model_builder.build_model();
 
         Ok(model)
     }
@@ -141,6 +145,7 @@ impl ModelBuilder {
             let scan_type = match omg_type {
                 OmgType::Boolean => Type::Boolean,
                 OmgType::Int32 => Type::Integer,
+                OmgType::F64 => Type::Float,
                 OmgType::Uri => Type::Integer,
                 OmgType::Structure(fields) => {
                     let mut fields_type: Vec<Type> = Vec::new();
@@ -205,41 +210,56 @@ impl ModelBuilder {
         self.fsm_builders.get(id).expect("just inserted")
     }
 
-    fn prebuild_processes(&mut self, parser: &Parser) -> anyhow::Result<()> {
-        for (id, declaration) in parser.process_list.iter() {
+    fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
+        for (id, declaration) in parser.process_list.iter_mut() {
             let pg_id = self.fsm_builder(id).pg_id;
-            match &declaration.moc {
-                MoC::Fsm(fsm) => self.prebuild_fsms(pg_id, &fsm.scxml)?,
+            match &mut declaration.moc {
+                MoC::Fsm(fsm) => self.prebuild_fsms(pg_id, &mut fsm.scxml, &fsm.interner)?,
                 MoC::Bt(bt) => self.prebuild_bt(pg_id, bt)?,
             }
         }
         Ok(())
     }
 
-    fn prebuild_fsms(&mut self, pg_id: PgId, fmt: &Scxml) -> anyhow::Result<()> {
-        for (_, state) in fmt.states.iter() {
-            for exec in state.on_entry.iter() {
-                self.prebuild_exec(pg_id, exec)?;
+    fn prebuild_fsms(
+        &mut self,
+        pg_id: PgId,
+        fmt: &mut Scxml,
+        interner: &boa_interner::Interner,
+    ) -> anyhow::Result<()> {
+        let mut types = HashMap::new();
+        for data in &fmt.datamodel {
+            types.insert(data.id.to_owned(), data.omg_type.as_str().to_owned());
+        }
+        for (_, state) in fmt.states.iter_mut() {
+            for exec in state.on_entry.iter_mut() {
+                self.prebuild_exec(pg_id, exec, &types, interner)?;
             }
-            for transition in state.transitions.iter() {
+            for transition in state.transitions.iter_mut() {
                 if let Some(ref event) = transition.event {
                     // Event may or may not have been processed before
                     let event_index = self.event_index(event);
                     let builder = self.events.get_mut(event_index).expect("index must exist");
                     builder.receivers.insert(pg_id);
                 }
-                for exec in transition.effects.iter() {
-                    self.prebuild_exec(pg_id, exec)?;
+                for exec in transition.effects.iter_mut() {
+                    self.prebuild_exec(pg_id, exec, &types, interner)?;
                 }
             }
-            for exec in state.on_exit.iter() {
-                self.prebuild_exec(pg_id, exec)?;
+            for exec in state.on_exit.iter_mut() {
+                self.prebuild_exec(pg_id, exec, &types, interner)?;
             }
         }
         Ok(())
     }
 
-    fn prebuild_exec(&mut self, pg_id: PgId, executable: &Executable) -> anyhow::Result<()> {
+    fn prebuild_exec(
+        &mut self,
+        pg_id: PgId,
+        executable: &mut Executable,
+        types: &HashMap<String, String>,
+        interner: &boa_interner::Interner,
+    ) -> anyhow::Result<()> {
         match executable {
             Executable::Assign {
                 location: _,
@@ -255,24 +275,109 @@ impl ModelBuilder {
                 let builder = self.events.get_mut(event_index).expect("index must exist");
                 builder.senders.insert(pg_id);
                 for param in params {
+                    let param_type = param.omg_type.to_owned();
+                    let param_type = param_type
+                        .or_else(|| self.infer_type(&param.expr, types, interner).ok())
+                        .ok_or(anyhow!("missing type annotation for param {}", param.name))?;
+                    // Update omg_type value so that it contains its type for sure
+                    param.omg_type = Some(param_type.to_owned());
+                    let builder = self.events.get_mut(event_index).expect("index must exist");
                     let prev_type = builder
                         .params
-                        .insert(param.name.to_owned(), param.omg_type.to_owned());
+                        .insert(param.name.to_owned(), param_type.to_owned());
                     // Type parameters should not change type
                     if let Some(prev_type) = prev_type {
-                        if prev_type != param.omg_type {
+                        if prev_type != param_type {
                             return Err(anyhow!("type parameter mismatch"));
                         }
                     }
                 }
                 Ok(())
             }
-            Executable::If(If { cond: _, execs }) => {
-                for executable in execs {
-                    self.prebuild_exec(pg_id, executable)?;
+            Executable::If(If {
+                r#elif: elifs,
+                r#else,
+                ..
+            }) => {
+                // preprocess all executables
+                for (_, executables) in elifs {
+                    for executable in executables {
+                        self.prebuild_exec(pg_id, executable, types, interner)?;
+                    }
+                }
+                for executable in r#else {
+                    self.prebuild_exec(pg_id, executable, types, interner)?;
                 }
                 Ok(())
             }
+        }
+    }
+
+    fn infer_type(
+        &self,
+        expr: &boa_ast::Expression,
+        types: &HashMap<String, String>,
+        interner: &boa_interner::Interner,
+    ) -> anyhow::Result<String> {
+        match expr {
+            boa_ast::Expression::This => todo!(),
+            boa_ast::Expression::Identifier(ident) => {
+                let ident = ident.to_interned_string(interner);
+                types
+                    .get(&ident)
+                    .cloned()
+                    .or_else(|| {
+                        if self.enums.contains_key(&ident) {
+                            Some(String::from("int32"))
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or(anyhow!("type cannot be inferred"))
+            }
+            boa_ast::Expression::Literal(lit) => {
+                use boa_ast::expression::literal::Literal;
+                match lit {
+                    Literal::String(_) => todo!(),
+                    Literal::Num(_) => Ok(String::from("f64")),
+                    Literal::Int(_) => Ok(String::from("int32")),
+                    Literal::BigInt(_) => todo!(),
+                    Literal::Bool(_) => Ok(String::from("bool")),
+                    Literal::Null => todo!(),
+                    Literal::Undefined => todo!(),
+                }
+            }
+            boa_ast::Expression::RegExpLiteral(_) => todo!(),
+            boa_ast::Expression::ArrayLiteral(_) => todo!(),
+            boa_ast::Expression::ObjectLiteral(_) => todo!(),
+            boa_ast::Expression::Spread(_) => todo!(),
+            boa_ast::Expression::Function(_) => todo!(),
+            boa_ast::Expression::ArrowFunction(_) => todo!(),
+            boa_ast::Expression::AsyncArrowFunction(_) => todo!(),
+            boa_ast::Expression::Generator(_) => todo!(),
+            boa_ast::Expression::AsyncFunction(_) => todo!(),
+            boa_ast::Expression::AsyncGenerator(_) => todo!(),
+            boa_ast::Expression::Class(_) => todo!(),
+            boa_ast::Expression::TemplateLiteral(_) => todo!(),
+            boa_ast::Expression::PropertyAccess(_) => todo!(),
+            boa_ast::Expression::New(_) => todo!(),
+            boa_ast::Expression::Call(_) => todo!(),
+            boa_ast::Expression::SuperCall(_) => todo!(),
+            boa_ast::Expression::ImportCall(_) => todo!(),
+            boa_ast::Expression::Optional(_) => todo!(),
+            boa_ast::Expression::TaggedTemplate(_) => todo!(),
+            boa_ast::Expression::NewTarget => todo!(),
+            boa_ast::Expression::ImportMeta => todo!(),
+            boa_ast::Expression::Assign(_) => todo!(),
+            boa_ast::Expression::Unary(_) => todo!(),
+            boa_ast::Expression::Update(_) => todo!(),
+            boa_ast::Expression::Binary(_) => todo!(),
+            boa_ast::Expression::BinaryInPrivate(_) => todo!(),
+            boa_ast::Expression::Conditional(_) => todo!(),
+            boa_ast::Expression::Await(_) => todo!(),
+            boa_ast::Expression::Yield(_) => todo!(),
+            boa_ast::Expression::Parenthesized(_) => todo!(),
+            _ => todo!(),
         }
     }
 
@@ -356,7 +461,6 @@ impl ModelBuilder {
         let loc_failure = self.cs.new_location(pg_id).unwrap();
         let loc_halt = self.cs.new_location(pg_id).unwrap();
         let loc_ack = self.cs.new_location(pg_id).unwrap();
-        let step = self.cs.new_action(pg_id).unwrap();
         self.build_bt_node(
             pg_id,
             loc_tick,
@@ -365,7 +469,6 @@ impl ModelBuilder {
             loc_failure,
             loc_halt,
             loc_ack,
-            step,
             &bt.root,
         )?;
 
@@ -388,7 +491,13 @@ impl ModelBuilder {
                 pg_id,
                 process_event,
                 ext_event_index,
-                CsExpression::Component(0, Box::new(CsExpression::Var(ext_event_var))),
+                CsExpression::Component(
+                    0,
+                    Box::new(CsExpression::Var(
+                        ext_event_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
+                ),
             )
             .unwrap();
         self.cs
@@ -396,7 +505,13 @@ impl ModelBuilder {
                 pg_id,
                 process_event,
                 ext_origin_var,
-                CsExpression::Component(1, Box::new(CsExpression::Var(ext_event_var))),
+                CsExpression::Component(
+                    1,
+                    Box::new(CsExpression::Var(
+                        ext_event_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
+                ),
             )
             .unwrap();
         let event_received = self.cs.new_location(pg_id).unwrap();
@@ -415,26 +530,24 @@ impl ModelBuilder {
         let halt_idx = *self.event_indexes.get(HALT_CALL).unwrap() as Integer;
         let halt_return_idx = *self.event_indexes.get(HALT_RETURN).unwrap() as Integer;
         self.cs
-            .add_transition(
+            .add_autonomous_transition(
                 pg_id,
                 event_processed,
-                step,
                 loc_tick,
                 Some(CsExpression::Equal(Box::new((
-                    CsExpression::Var(ext_event_index),
+                    CsExpression::Var(ext_event_index, Type::Integer),
                     CsExpression::from(tick_idx),
                 )))),
             )
             .expect("hope this works");
         // HALT
         self.cs
-            .add_transition(
+            .add_autonomous_transition(
                 pg_id,
                 event_processed,
-                step,
                 loc_halt,
                 Some(CsExpression::Equal(Box::new((
-                    CsExpression::Var(ext_event_index),
+                    CsExpression::Var(ext_event_index, Type::Integer),
                     CsExpression::from(halt_idx),
                 )))),
             )
@@ -484,7 +597,11 @@ impl ModelBuilder {
                 .or_insert_with(|| self.cs.new_channel(Type::Integer, None));
             let send_result = self
                 .cs
-                .new_send(pg_id, *param_channel, Expression::Var(result))
+                .new_send(
+                    pg_id,
+                    *param_channel,
+                    Expression::Var(result, Type::Integer),
+                )
                 .unwrap();
             self.cs
                 .add_transition(
@@ -493,7 +610,7 @@ impl ModelBuilder {
                     send_result,
                     send_event_loc,
                     Some(Expression::Equal(Box::new((
-                        Expression::Var(ext_origin_var),
+                        Expression::Var(ext_origin_var, Type::Integer),
                         Expression::from(usize::from(caller) as Integer),
                     )))),
                 )
@@ -538,7 +655,7 @@ impl ModelBuilder {
                     send_event,
                     loc_idle,
                     Some(Expression::Equal(Box::new((
-                        Expression::Var(ext_origin_var),
+                        Expression::Var(ext_origin_var, Type::Integer),
                         Expression::from(usize::from(caller) as Integer),
                     )))),
                 )
@@ -569,7 +686,6 @@ impl ModelBuilder {
         pt_failure: Location,
         pt_halt: Location,
         pt_ack: Location,
-        step: Action,
         node: &BtNode,
     ) -> anyhow::Result<()> {
         match node {
@@ -620,7 +736,6 @@ impl ModelBuilder {
                         loc_failure,
                         loc_halt,
                         loc_ack,
-                        step,
                         branch,
                     )?;
                     prev_success = loc_success;
@@ -629,21 +744,21 @@ impl ModelBuilder {
                 }
                 // If all children are successful, return success to father node.
                 self.cs
-                    .add_transition(pg_id, prev_success, step, pt_success, None)
+                    .add_autonomous_transition(pg_id, prev_success, pt_success, None)
                     .unwrap();
                 // If last child fails, return failure to father node.
                 self.cs
-                    .add_transition(pg_id, prev_failure, step, pt_failure, None)
+                    .add_autonomous_transition(pg_id, prev_failure, pt_failure, None)
                     .unwrap();
                 // If all children acknowledge halting, return ack to father node.
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         prev_ack,
-                        step,
                         pt_ack,
                         Some(CsExpression::Not(Box::new(CsExpression::Var(
                             halting_after_failure,
+                            Type::Boolean,
                         )))),
                     )
                     .expect("hand-made args");
@@ -654,7 +769,7 @@ impl ModelBuilder {
                         prev_ack,
                         failure_after_halting,
                         pt_failure,
-                        Some(CsExpression::Var(halting_after_failure)),
+                        Some(CsExpression::Var(halting_after_failure, Type::Boolean)),
                     )
                     .expect("hand-made args");
             }
@@ -705,7 +820,6 @@ impl ModelBuilder {
                         loc_failure,
                         loc_halt,
                         loc_ack,
-                        step,
                         branch,
                     )?;
                     prev_success = loc_success;
@@ -713,20 +827,20 @@ impl ModelBuilder {
                     prev_ack = loc_ack;
                 }
                 self.cs
-                    .add_transition(pg_id, prev_success, step, pt_success, None)
+                    .add_autonomous_transition(pg_id, prev_success, pt_success, None)
                     .unwrap();
                 self.cs
-                    .add_transition(pg_id, prev_failure, step, pt_failure, None)
+                    .add_autonomous_transition(pg_id, prev_failure, pt_failure, None)
                     .unwrap();
                 // If all children acknowledge halting, return ack to father node.
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         prev_ack,
-                        step,
                         pt_ack,
                         Some(CsExpression::Not(Box::new(CsExpression::Var(
                             halting_after_success,
+                            Type::Boolean,
                         )))),
                     )
                     .expect("hand-made args");
@@ -737,7 +851,7 @@ impl ModelBuilder {
                         prev_ack,
                         success_after_halting,
                         pt_success,
-                        Some(CsExpression::Var(halting_after_success)),
+                        Some(CsExpression::Var(halting_after_success, Type::Boolean)),
                     )
                     .expect("hand-made args");
             }
@@ -829,37 +943,34 @@ impl ModelBuilder {
                     )
                     .expect("hand-made args");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(SUCCESS).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(FAILURE).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_running,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(RUNNING).unwrap()),
                         )))),
                     )
@@ -974,25 +1085,23 @@ impl ModelBuilder {
                     )
                     .expect("hand-made args");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_success,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(SUCCESS).unwrap()),
                         )))),
                     )
                     .expect("hope this works");
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         got_tick_response_param,
-                        step,
                         pt_failure,
                         Some(CsExpression::Equal(Box::new((
-                            CsExpression::Var(tick_response_param),
+                            CsExpression::Var(tick_response_param, Type::Integer),
                             CsExpression::from(*self.enums.get(FAILURE).unwrap()),
                         )))),
                     )
@@ -1002,7 +1111,7 @@ impl ModelBuilder {
                 let halt_sent = pt_halt;
                 let got_halt_response = pt_ack;
                 self.cs
-                    .add_transition(pg_id, halt_sent, step, got_halt_response, None)
+                    .add_autonomous_transition(pg_id, halt_sent, got_halt_response, None)
                     .expect("hand-made args");
             }
         }
@@ -1020,9 +1129,6 @@ impl ModelBuilder {
             .unwrap_or_else(|| panic!("builder for {} must already exist", scxml.id));
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
-        // Generic action that progresses the execution of the FSM.
-        // WARN DO NOT ADD EFFECTS!
-        let step = self.cs.new_action(pg_id).expect("PG exists");
         // Initial location of Program Graph.
         let initial_loc = self
             .cs
@@ -1125,7 +1231,10 @@ impl ModelBuilder {
                 current_event_var,
                 CsExpression::Component(
                     0,
-                    Box::new(CsExpression::Var(current_event_and_origin_var)),
+                    Box::new(CsExpression::Var(
+                        current_event_and_origin_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
                 ),
             )
             .expect("hand-coded args");
@@ -1136,7 +1245,10 @@ impl ModelBuilder {
                 origin_var,
                 CsExpression::Component(
                     1,
-                    Box::new(CsExpression::Var(current_event_and_origin_var)),
+                    Box::new(CsExpression::Var(
+                        current_event_and_origin_var,
+                        Type::Product(vec![Type::Integer, Type::Integer]),
+                    )),
                 ),
             )
             .expect("hand-coded args");
@@ -1155,7 +1267,7 @@ impl ModelBuilder {
                 let param_type = self
                     .types
                     .get(param_type_name)
-                    .ok_or(anyhow!("type {} not found", param_type_name))?
+                    .ok_or(anyhow!("type {} not found", param_name))?
                     .1
                     .to_owned();
                 // Variable where to store parameter.
@@ -1206,7 +1318,6 @@ impl ModelBuilder {
                     executable,
                     pg_id,
                     int_queue,
-                    step,
                     onentry_loc,
                     &vars,
                     None,
@@ -1280,6 +1391,8 @@ impl ModelBuilder {
                     )
                     .expect("hand-coded args");
             }
+            // Keep track of all known events.
+            let mut known_events = Vec::new();
             // Retreive external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
             // from any possible other fsm,
@@ -1291,16 +1404,21 @@ impl ModelBuilder {
             {
                 let event_index = event_builder.index;
                 for &sender_id in &event_builder.senders {
-                    let mut is_event_sender = Some(CsExpression::And(vec![
+                    // Expression checking event and sender correspond to the given ones.
+                    let is_event_sender = CsExpression::And(vec![
                         CsExpression::Equal(Box::new((
                             CsExpression::from(event_index as Integer),
-                            CsExpression::Var(current_event_var),
+                            CsExpression::Var(current_event_var, Type::Integer),
                         ))),
                         CsExpression::Equal(Box::new((
                             CsExpression::from(usize::from(sender_id) as Integer),
-                            CsExpression::Var(origin_var),
+                            CsExpression::Var(origin_var, Type::Integer),
                         ))),
-                    ]));
+                    ]);
+                    // Add event (and sender) to list of known events.
+                    known_events.push(is_event_sender.to_owned());
+                    // We need to use this as guard only once, so we wrap it in an Option.
+                    let mut is_event_sender = Some(is_event_sender);
                     let mut current_loc = ext_event_processing_param;
                     for (param_name, _) in event_builder.params.iter() {
                         let read_param = *param_actions
@@ -1321,10 +1439,29 @@ impl ModelBuilder {
                     }
                     // Check if event and sender are the correct ones in case of event with no parameter.
                     self.cs
-                        .add_transition(pg_id, current_loc, step, eventful_trans, is_event_sender)
+                        .add_autonomous_transition(
+                            pg_id,
+                            current_loc,
+                            eventful_trans,
+                            is_event_sender,
+                        )
                         .expect("has to work");
                 }
             }
+            // Proceed if event is unknown (without retreiving parameters).
+            let unknown_event = if known_events.is_empty() {
+                None
+            } else {
+                Some(Expression::Not(Box::new(Expression::Or(known_events))))
+            };
+            self.cs
+                .add_autonomous_transition(
+                    pg_id,
+                    ext_event_processing_param,
+                    eventful_trans,
+                    unknown_event,
+                )
+                .expect("has to work");
 
             // Consider each of the state's transitions.
             for transition in state.transitions.iter() {
@@ -1387,7 +1524,7 @@ impl ModelBuilder {
                         .expect("event must be registered");
                     // Check if the current event (internal or external) corresponds to the event activating the transition.
                     let event_match = CsExpression::Equal(Box::new((
-                        CsExpression::Var(current_event_var),
+                        CsExpression::Var(current_event_var, Type::Integer),
                         CsExpression::from(event_index as Integer),
                     )));
                     // TODO FIXME: optimize And/Or expressions
@@ -1411,10 +1548,9 @@ impl ModelBuilder {
                 // If transition is active, execute the relevant executable content and then the transition to the target.
                 // Could fail if 'cond' expression was not acceptable as guard.
                 let mut exec_trans_loc = self.cs.new_location(pg_id)?;
-                self.cs.add_transition(
+                self.cs.add_autonomous_transition(
                     pg_id,
                     check_trans_loc,
-                    step,
                     exec_trans_loc,
                     guard.to_owned(),
                 )?;
@@ -1425,7 +1561,6 @@ impl ModelBuilder {
                         exec,
                         pg_id,
                         int_queue,
-                        step,
                         exec_trans_loc,
                         &vars,
                         exec_origin,
@@ -1436,7 +1571,7 @@ impl ModelBuilder {
                 // Transitioning to the target state/location.
                 // At this point, the transition cannot be stopped so there can be no guard.
                 self.cs
-                    .add_transition(pg_id, exec_trans_loc, step, target_loc, None)
+                    .add_autonomous_transition(pg_id, exec_trans_loc, target_loc, None)
                     .expect("has to work");
                 // If the current transition is not active, move on to check the next one.
                 // NOTE: an autonomous transition without cond is always active so there is no point processing further transitions.
@@ -1445,10 +1580,9 @@ impl ModelBuilder {
                     .map(|guard| CsExpression::Not(Box::new(guard)))
                     .unwrap_or(CsExpression::from(false));
                 self.cs
-                    .add_transition(
+                    .add_autonomous_transition(
                         pg_id,
                         check_trans_loc,
-                        step,
                         next_trans_loc,
                         Some(not_guard),
                     )
@@ -1458,10 +1592,10 @@ impl ModelBuilder {
             // Connect NULL events with named events
             // by transitioning from last "NUll" location to dequeuing event location.
             self.cs
-                .add_transition(pg_id, null_trans, step, int_queue_loc, None)?;
+                .add_autonomous_transition(pg_id, null_trans, int_queue_loc, None)?;
             // Return to dequeue a new (internal or external) event.
             self.cs
-                .add_transition(pg_id, eventful_trans, step, int_queue_loc, None)?;
+                .add_autonomous_transition(pg_id, eventful_trans, int_queue_loc, None)?;
         }
         Ok(())
     }
@@ -1472,7 +1606,6 @@ impl ModelBuilder {
         executable: &Executable,
         pg_id: PgId,
         int_queue: Channel,
-        step: Action,
         loc: Location,
         vars: &HashMap<String, (Var, String)>,
         origin: Option<Var>,
@@ -1495,55 +1628,33 @@ impl ModelBuilder {
                 event,
                 target,
                 params: send_params,
-            }) => match target {
-                Target::Id(target) => {
-                    let target_builder = self
-                        .fsm_builders
-                        .get(target)
-                        .ok_or(anyhow!(format!("target {target} not found")))?;
-                    let target_id = target_builder.pg_id;
-                    let target_ext_queue = target_builder.ext_queue;
-                    let event_idx = *self
-                        .event_indexes
-                        .get(event)
-                        .expect("builder for {event} already exists");
-                    let send_event = self
-                        .cs
-                        .new_send(
-                            pg_id,
-                            target_ext_queue,
-                            CsExpression::Tuple(vec![
-                                CsExpression::from(event_idx as Integer),
-                                CsExpression::from(usize::from(pg_id) as Integer),
-                            ]),
-                        )
-                        .expect("must work");
-
-                    // Send event and event origin before moving on to next location.
-                    let mut next_loc = self.cs.new_location(pg_id)?;
-                    self.cs
-                        .add_transition(pg_id, loc, send_event, next_loc, None)?;
-
-                    // Pass parameters.
-                    for param in send_params {
-                        // Updates next location.
-                        next_loc = self.send_param(
-                            pg_id, target_id, param, event_idx, next_loc, vars, origin, params,
-                            interner,
-                        )?;
+            }) => {
+                let event_idx = *self
+                    .event_indexes
+                    .get(event)
+                    .ok_or(anyhow!("event not found"))?;
+                if let Some(target) = target {
+                    let done_loc = self.cs.new_location(pg_id)?;
+                    let targets;
+                    let target_expr;
+                    match target {
+                        Target::Id(target) => {
+                            let target_builder = self
+                                .fsm_builders
+                                .get(target)
+                                .ok_or(anyhow!(format!("target {target} not found")))?;
+                            targets = vec![target_builder.pg_id];
+                            target_expr = Some(CsExpression::from(
+                                usize::from(target_builder.pg_id) as Integer,
+                            ));
+                        }
+                        Target::Expr(targetexpr) => {
+                            target_expr =
+                                Some(self.expression(targetexpr, interner, vars, origin, params)?);
+                            targets = self.events[event_idx].receivers.iter().cloned().collect();
+                        }
                     }
-
-                    Ok(next_loc)
-                }
-                Target::Expr(targetexpr) => {
-                    let targetexpr = self.expression(targetexpr, interner, vars, origin, params)?;
-                    let event_idx = *self
-                        .event_indexes
-                        .get(event)
-                        .ok_or(anyhow!("event not found"))?;
-                    // Location representing having sent the event to the correct target after evaluating expression.
-                    let done_loc = self.cs.new_location(pg_id).expect("PG exists");
-                    for target_id in self.events[event_idx].receivers.clone() {
+                    for target_id in targets {
                         let target_name = self.fsm_names.get(&target_id).unwrap();
                         let target_builder =
                             self.fsm_builders.get(target_name).expect("it must exist");
@@ -1568,10 +1679,12 @@ impl ModelBuilder {
                                 loc,
                                 send_event,
                                 next_loc,
-                                Some(CsExpression::Equal(Box::new((
-                                    CsExpression::from(usize::from(target_id) as Integer),
-                                    targetexpr.to_owned(),
-                                )))),
+                                target_expr.as_ref().map(|target_expr| {
+                                    CsExpression::Equal(Box::new((
+                                        CsExpression::from(usize::from(target_id) as Integer),
+                                        target_expr.to_owned(),
+                                    )))
+                                }),
                             )
                             .expect("params are right");
 
@@ -1585,14 +1698,40 @@ impl ModelBuilder {
                         }
                         // Once sending event and args done, get to exit-point
                         self.cs
-                            .add_transition(pg_id, next_loc, step, done_loc, None)
+                            .add_autonomous_transition(pg_id, next_loc, done_loc, None)
                             .expect("hand-made args");
                     }
-
                     // Return exit point
                     Ok(done_loc)
+                } else {
+                    // WARN: This behavior is non-compliant with the SCXML specification
+                    // An event sent without specifiying the target is sent to all FSMs that can process it
+                    let targets = self.events[event_idx]
+                        .receivers
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let mut next_loc = loc;
+                    for target in targets {
+                        let target_name = self.fsm_names.get(&target).cloned();
+                        next_loc = self.add_executable(
+                            &Executable::Send(Send {
+                                event: event.to_owned(),
+                                target: target_name.map(Target::Id),
+                                params: send_params.to_owned(),
+                            }),
+                            pg_id,
+                            int_queue,
+                            next_loc,
+                            vars,
+                            origin,
+                            params,
+                            interner,
+                        )?;
+                    }
+                    Ok(next_loc)
                 }
-            },
+            }
             Executable::Assign { location, expr } => {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
                 let expr = self.expression(expr, interner, vars, origin, params)?;
@@ -1603,26 +1742,48 @@ impl ModelBuilder {
                 self.cs.add_transition(pg_id, loc, assign, next_loc, None)?;
                 Ok(next_loc)
             }
-            Executable::If(If { cond, execs }) => {
-                let mut next_loc = self.cs.new_location(pg_id).unwrap();
-                let cond = self.expression(cond, interner, vars, origin, params)?;
-                self.cs
-                    .add_transition(pg_id, loc, step, next_loc, Some(cond.to_owned()))?;
-                for exec in execs {
-                    next_loc = self.add_executable(
-                        exec, pg_id, int_queue, step, next_loc, vars, origin, params, interner,
+            Executable::If(If { r#elif, r#else, .. }) => {
+                // We go to this location after the if/elif/else block
+                let end_loc = self.cs.new_location(pg_id).unwrap();
+                let mut curr_loc = loc;
+                for (cond, execs) in r#elif {
+                    let mut next_loc = self.cs.new_location(pg_id).unwrap();
+                    let cond = self.expression(cond, interner, vars, origin, params)?;
+                    self.cs.add_autonomous_transition(
+                        pg_id,
+                        curr_loc,
+                        next_loc,
+                        Some(cond.to_owned()),
+                    )?;
+                    for exec in execs {
+                        next_loc = self.add_executable(
+                            exec, pg_id, int_queue, next_loc, vars, origin, params, interner,
+                        )?;
+                    }
+                    // end of `if` branch, go to end_loc
+                    self.cs
+                        .add_autonomous_transition(pg_id, next_loc, end_loc, None)?;
+                    // `elif/else` branch
+                    let old_loc = curr_loc;
+                    curr_loc = self.cs.new_location(pg_id).unwrap();
+                    self.cs
+                        .add_autonomous_transition(
+                            pg_id,
+                            old_loc,
+                            curr_loc,
+                            Some(Expression::Not(Box::new(cond))),
+                        )
+                        .unwrap();
+                }
+                // Add executables for `else` (if any)
+                for exec in r#else {
+                    curr_loc = self.add_executable(
+                        exec, pg_id, int_queue, curr_loc, vars, origin, params, interner,
                     )?;
                 }
                 self.cs
-                    .add_transition(
-                        pg_id,
-                        loc,
-                        step,
-                        next_loc,
-                        Some(Expression::Not(Box::new(cond))),
-                    )
-                    .unwrap();
-                Ok(next_loc)
+                    .add_autonomous_transition(pg_id, curr_loc, end_loc, None)?;
+                Ok(end_loc)
             }
         }
     }
@@ -1643,7 +1804,7 @@ impl ModelBuilder {
         // Get param type.
         let scan_type = self
             .types
-            .get(param.omg_type.as_str())
+            .get(param.omg_type.as_ref().expect("type name annotation"))
             .cloned()
             .ok_or(anyhow!("undefined type"))?
             .1;
@@ -1675,25 +1836,25 @@ impl ModelBuilder {
         let expr = match expr {
             boa_ast::Expression::This => todo!(),
             boa_ast::Expression::Identifier(ident) => {
-                let ident: &str = interner
-                    .resolve(ident.sym())
-                    .ok_or(anyhow!("unknown identifier"))?
-                    .utf8()
-                    .ok_or(anyhow!("not utf8"))?;
-                match ident {
-                    ident => self
-                        .enums
-                        .get(ident)
-                        .map(|i| CsExpression::from(*i))
-                        .or_else(|| vars.get(ident).map(|(var, _)| CsExpression::Var(*var)))
-                        .ok_or(anyhow!("unknown identifier"))?,
-                }
+                let ident = ident.to_interned_string(interner);
+                self.enums
+                    .get(&ident)
+                    .map(|i| CsExpression::from(*i))
+                    .or_else(|| {
+                        vars.get(&ident).and_then(|(var, t)| {
+                            self.types
+                                .get(t)
+                                .map(|(_, t)| CsExpression::Var(*var, t.to_owned()))
+                            // .ok_or(anyhow!("missing type {t}"))
+                        })
+                    })
+                    .ok_or(anyhow!("unknown identifier: {ident}"))?
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
                 match lit {
                     Literal::String(_) => todo!(),
-                    Literal::Num(_) => todo!(),
+                    Literal::Num(f) => CsExpression::from(*f),
                     Literal::Int(i) => CsExpression::from(*i),
                     Literal::BigInt(_) => todo!(),
                     Literal::Bool(b) => CsExpression::from(*b),
@@ -1702,7 +1863,14 @@ impl ModelBuilder {
                 }
             }
             boa_ast::Expression::RegExpLiteral(_) => todo!(),
-            boa_ast::Expression::ArrayLiteral(_) => todo!(),
+            boa_ast::Expression::ArrayLiteral(arr) => {
+                todo!()
+                // arr
+                //             .to_pattern(true)
+                //             .ok_or(anyhow!("array syntax error"))?
+                //             .into_iter()
+                //             .map(|element| match element {})
+            }
             boa_ast::Expression::ObjectLiteral(_) => todo!(),
             boa_ast::Expression::Spread(_) => todo!(),
             boa_ast::Expression::Function(_) => todo!(),
@@ -1734,12 +1902,11 @@ impl ModelBuilder {
             boa_ast::Expression::Assign(_) => todo!(),
             boa_ast::Expression::Unary(unary) => {
                 use boa_ast::expression::operator::unary::UnaryOp;
+                let expr = self.expression(unary.target(), interner, vars, origin, params)?;
                 match unary.op() {
-                    UnaryOp::Minus => todo!(),
-                    UnaryOp::Plus => todo!(),
-                    UnaryOp::Not => self
-                        .expression(unary.target(), interner, vars, origin, params)
-                        .map(|expr| Expression::Not(Box::new(expr)))?,
+                    UnaryOp::Minus => Expression::Opposite(Box::new(expr)),
+                    UnaryOp::Plus => expr,
+                    UnaryOp::Not => Expression::Not(Box::new(expr)),
                     UnaryOp::Tilde => todo!(),
                     UnaryOp::TypeOf => todo!(),
                     UnaryOp::Delete => todo!(),
@@ -1748,47 +1915,44 @@ impl ModelBuilder {
             }
             boa_ast::Expression::Update(_) => todo!(),
             boa_ast::Expression::Binary(bin) => {
-                use boa_ast::expression::operator::binary::{ArithmeticOp, BinaryOp, RelationalOp};
+                use boa_ast::expression::operator::binary::{
+                    ArithmeticOp, BinaryOp, LogicalOp, RelationalOp,
+                };
+                let lhs = self.expression(bin.lhs(), interner, vars, origin, params)?;
+                let rhs = self.expression(bin.rhs(), interner, vars, origin, params)?;
                 match bin.op() {
-                    BinaryOp::Arithmetic(ar_bin) => {
-                        let lhs = self.expression(bin.lhs(), interner, vars, origin, params)?;
-                        let rhs = self.expression(bin.rhs(), interner, vars, origin, params)?;
-                        match ar_bin {
-                            ArithmeticOp::Add => CsExpression::Sum(vec![lhs, rhs]),
-                            ArithmeticOp::Sub => {
-                                CsExpression::Sum(vec![lhs, CsExpression::Opposite(Box::new(rhs))])
-                            }
-                            ArithmeticOp::Div => todo!(),
-                            ArithmeticOp::Mul => todo!(),
-                            ArithmeticOp::Exp => todo!(),
-                            ArithmeticOp::Mod => todo!(),
+                    BinaryOp::Arithmetic(ar_bin) => match ar_bin {
+                        ArithmeticOp::Add => CsExpression::Sum(vec![lhs, rhs]),
+                        ArithmeticOp::Sub => {
+                            CsExpression::Sum(vec![lhs, CsExpression::Opposite(Box::new(rhs))])
                         }
-                    }
+                        ArithmeticOp::Div => todo!(),
+                        ArithmeticOp::Mul => todo!(),
+                        ArithmeticOp::Exp => todo!(),
+                        ArithmeticOp::Mod => CsExpression::Mod(Box::new((lhs, rhs))),
+                    },
                     BinaryOp::Bitwise(_) => todo!(),
-                    BinaryOp::Relational(rel_bin) => {
-                        // WARN FIXME TODO: this assumes relations are between integers
-                        let lhs = self.expression(bin.lhs(), interner, vars, origin, params)?;
-                        let rhs = self.expression(bin.rhs(), interner, vars, origin, params)?;
-                        match rel_bin {
-                            RelationalOp::Equal => CsExpression::Equal(Box::new((lhs, rhs))),
-                            RelationalOp::NotEqual => todo!(),
-                            RelationalOp::StrictEqual => todo!(),
-                            RelationalOp::StrictNotEqual => todo!(),
-                            RelationalOp::GreaterThan => {
-                                CsExpression::Greater(Box::new((lhs, rhs)))
-                            }
-                            RelationalOp::GreaterThanOrEqual => {
-                                CsExpression::GreaterEq(Box::new((lhs, rhs)))
-                            }
-                            RelationalOp::LessThan => CsExpression::Less(Box::new((lhs, rhs))),
-                            RelationalOp::LessThanOrEqual => {
-                                CsExpression::LessEq(Box::new((lhs, rhs)))
-                            }
-                            RelationalOp::In => todo!(),
-                            RelationalOp::InstanceOf => todo!(),
+                    BinaryOp::Relational(rel_bin) => match rel_bin {
+                        RelationalOp::Equal => CsExpression::Equal(Box::new((lhs, rhs))),
+                        RelationalOp::NotEqual => {
+                            CsExpression::Not(Box::new(CsExpression::Equal(Box::new((lhs, rhs)))))
                         }
-                    }
-                    BinaryOp::Logical(_) => todo!(),
+                        RelationalOp::StrictEqual => todo!(),
+                        RelationalOp::StrictNotEqual => todo!(),
+                        RelationalOp::GreaterThan => CsExpression::Greater(Box::new((lhs, rhs))),
+                        RelationalOp::GreaterThanOrEqual => {
+                            CsExpression::GreaterEq(Box::new((lhs, rhs)))
+                        }
+                        RelationalOp::LessThan => CsExpression::Less(Box::new((lhs, rhs))),
+                        RelationalOp::LessThanOrEqual => CsExpression::LessEq(Box::new((lhs, rhs))),
+                        RelationalOp::In => todo!(),
+                        RelationalOp::InstanceOf => todo!(),
+                    },
+                    BinaryOp::Logical(op) => match op {
+                        LogicalOp::And => CsExpression::And(vec![lhs, rhs]),
+                        LogicalOp::Or => CsExpression::Or(vec![lhs, rhs]),
+                        LogicalOp::Coalesce => todo!(),
+                    },
                     BinaryOp::Comma => todo!(),
                 }
             }
@@ -1796,7 +1960,9 @@ impl ModelBuilder {
             boa_ast::Expression::Conditional(_) => todo!(),
             boa_ast::Expression::Await(_) => todo!(),
             boa_ast::Expression::Yield(_) => todo!(),
-            boa_ast::Expression::Parenthesized(_) => todo!(),
+            boa_ast::Expression::Parenthesized(par) => {
+                self.expression(par.expression(), interner, vars, origin, params)?
+            }
             _ => todo!(),
         };
         Ok(expr)
@@ -1810,18 +1976,11 @@ impl ModelBuilder {
         let expr = match expr {
             boa_ast::Expression::This => todo!(),
             boa_ast::Expression::Identifier(ident) => {
-                let ident: &str = interner
-                    .resolve(ident.sym())
-                    .ok_or(anyhow!("unknown identifier"))?
-                    .utf8()
-                    .ok_or(anyhow!("not utf8"))?;
-                match ident {
-                    ident => self
-                        .enums
-                        .get(ident)
-                        .map(|i| Val::Integer(*i))
-                        .ok_or(anyhow!("unknown identifier"))?,
-                }
+                let ident = ident.to_interned_string(interner);
+                self.enums
+                    .get(&ident)
+                    .map(|i| Val::Integer(*i))
+                    .ok_or(anyhow!("unknown identifier: {ident}"))?
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
@@ -1904,54 +2063,74 @@ impl ModelBuilder {
         match expr {
             boa_ast::Expression::This => todo!(),
             boa_ast::Expression::Identifier(ident) => {
-                let ident: &str = interner
-                    .resolve(ident.sym())
-                    .ok_or(anyhow!("unknown identifier"))?
-                    .utf8()
-                    .ok_or(anyhow!("not utf8"))?;
-                match ident {
-                    "_event" => Ok(EcmaObj::Properties(HashMap::from([
-                        (
-                            String::from("origin"),
-                            EcmaObj::PrimitiveData(
-                                Expression::Var(origin.ok_or(anyhow!("missing origin of _event"))?),
-                                String::from("int32"),
+                let ident = ident.to_interned_string(interner);
+                match ident.as_str() {
+                    "_event" => Ok(EcmaObj::Properties(HashMap::from_iter(
+                        [
+                            (
+                                String::from("origin"),
+                                EcmaObj::PrimitiveData(
+                                    Expression::Var(
+                                        origin.ok_or(anyhow!("missing origin of _event"))?,
+                                        Type::Integer,
+                                    ),
+                                    String::from("int32"),
+                                ),
                             ),
-                        ),
-                        (
-                            String::from("data"),
-                            EcmaObj::Properties(HashMap::from_iter(params.iter().map(
-                                |(n, (v, t))| {
-                                    (
-                                        n.to_owned(),
-                                        EcmaObj::PrimitiveData(CsExpression::Var(*v), t.to_owned()),
-                                    )
-                                },
-                            ))),
-                        ),
-                    ]))),
+                            (
+                                String::from("data"),
+                                EcmaObj::Properties(HashMap::from_iter(params.iter().map(
+                                    |(n, (v, t))| {
+                                        (
+                                            n.to_owned(),
+                                            EcmaObj::PrimitiveData(
+                                                CsExpression::Var(
+                                                    *v,
+                                                    self.types
+                                                        .get(t)
+                                                        .map(|(_, t)| t.to_owned())
+                                                        .expect("type of data parameter"),
+                                                ),
+                                                t.to_owned(),
+                                            ),
+                                        )
+                                    },
+                                ))),
+                            ),
+                        ]
+                        // WARN: This allows the non-conformant notation `_event.<PARAM>` in place of `_event.data.<PARAM>`
+                        // for compatibility with the format produced by AS2FM.
+                        // TODO: remove when not necessary anymore.
+                        .into_iter()
+                        .chain(params.iter().map(|(n, (v, t))| {
+                            (
+                                n.to_owned(),
+                                EcmaObj::PrimitiveData(
+                                    CsExpression::Var(
+                                        *v,
+                                        self.types
+                                            .get(t)
+                                            .map(|(_, t)| t.to_owned())
+                                            .expect("type of data parameter"),
+                                    ),
+                                    t.to_owned(),
+                                ),
+                            )
+                        })),
+                    ))),
                     ident => {
                         let (var, type_name) = vars
                             .get(ident)
                             .ok_or(anyhow!("location {} not found", ident))?
                             .to_owned();
-                        Ok(EcmaObj::PrimitiveData(Expression::Var(var), type_name))
+                        let (_, t) = self.types.get(&type_name).expect("var type");
+                        Ok(EcmaObj::PrimitiveData(
+                            Expression::Var(var, t.to_owned()),
+                            type_name,
+                        ))
                     }
                 }
             }
-            boa_ast::Expression::Literal(_) => todo!(),
-            boa_ast::Expression::RegExpLiteral(_) => todo!(),
-            boa_ast::Expression::ArrayLiteral(_) => todo!(),
-            boa_ast::Expression::ObjectLiteral(_) => todo!(),
-            boa_ast::Expression::Spread(_) => todo!(),
-            boa_ast::Expression::Function(_) => todo!(),
-            boa_ast::Expression::ArrowFunction(_) => todo!(),
-            boa_ast::Expression::AsyncArrowFunction(_) => todo!(),
-            boa_ast::Expression::Generator(_) => todo!(),
-            boa_ast::Expression::AsyncFunction(_) => todo!(),
-            boa_ast::Expression::AsyncGenerator(_) => todo!(),
-            boa_ast::Expression::Class(_) => todo!(),
-            boa_ast::Expression::TemplateLiteral(_) => todo!(),
             boa_ast::Expression::PropertyAccess(prop_acc) => {
                 use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
                 match prop_acc {
@@ -1967,7 +2146,7 @@ impl ModelBuilder {
                             PropertyAccessField::Const(sym) => {
                                 let ident: &str = interner
                                     .resolve(*sym)
-                                    .ok_or(anyhow!("unknown identifier"))?
+                                    .ok_or(anyhow!("unknown symbol {:?}", sym))?
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
                                 match prop_target {
@@ -1980,6 +2159,7 @@ impl ModelBuilder {
                                         {
                                             OmgType::Boolean => todo!(),
                                             OmgType::Int32 => todo!(),
+                                            OmgType::F64 => todo!(),
                                             OmgType::Uri => todo!(),
                                             OmgType::Structure(fields) => {
                                                 let index = *self
@@ -2010,23 +2190,6 @@ impl ModelBuilder {
                     PropertyAccess::Super(_) => todo!(),
                 }
             }
-            boa_ast::Expression::New(_) => todo!(),
-            boa_ast::Expression::Call(_) => todo!(),
-            boa_ast::Expression::SuperCall(_) => todo!(),
-            boa_ast::Expression::ImportCall(_) => todo!(),
-            boa_ast::Expression::Optional(_) => todo!(),
-            boa_ast::Expression::TaggedTemplate(_) => todo!(),
-            boa_ast::Expression::NewTarget => todo!(),
-            boa_ast::Expression::ImportMeta => todo!(),
-            boa_ast::Expression::Assign(_) => todo!(),
-            boa_ast::Expression::Unary(_) => todo!(),
-            boa_ast::Expression::Update(_) => todo!(),
-            boa_ast::Expression::Binary(_) => todo!(),
-            boa_ast::Expression::BinaryInPrivate(_) => todo!(),
-            boa_ast::Expression::Conditional(_) => todo!(),
-            boa_ast::Expression::Await(_) => todo!(),
-            boa_ast::Expression::Yield(_) => todo!(),
-            boa_ast::Expression::Parenthesized(_) => todo!(),
             _ => todo!(),
         }
     }
@@ -2053,37 +2216,20 @@ impl ModelBuilder {
                     .parameters
                     .get(&(origin, target, event_id, param.to_owned()))
                     .ok_or(anyhow!("param {param} not found"))?;
-                // let port_type = self
-                //     .types
-                //     .get(&port.r#type)
-                //     .ok_or(anyhow!("type {} not found", port.r#type))?;
-                self.ports
-                    .insert(port_id.to_owned(), (Port::Message(channel), init));
+                self.ports.insert(port_id.to_owned(), (channel, init));
             } else {
                 let channel = target_builder.ext_queue;
-                self.ports.insert(
-                    format!("{target:?}"),
-                    (
-                        Port::Message(channel),
-                        Val::Tuple(vec![Val::Integer(-1), Val::Integer(-1)]),
-                    ),
+                self.atoms.insert(
+                    port_id.to_owned(),
+                    Atom::Event(Event {
+                        pg_id: origin,
+                        channel,
+                        event_type: EventType::Send(Val::Tuple(vec![
+                            Val::Integer(event_id as Integer),
+                            Val::Integer(Into::<usize>::into(origin) as Integer),
+                        ])),
+                    }),
                 );
-                let expr = Expression::And(vec![
-                    Expression::Equal(Box::new((
-                        Expression::from(channel.0 as Integer),
-                        Expression::Var(Port::LastMessage),
-                    ))),
-                    Expression::Equal(Box::new((
-                        Expression::from(event_id as Integer),
-                        Expression::Component(0, Box::new(Expression::Var(Port::Message(channel)))),
-                    ))),
-                    Expression::Equal(Box::new((
-                        Expression::from(Into::<usize>::into(origin) as Integer),
-                        Expression::Component(1, Box::new(Expression::Var(Port::Message(channel)))),
-                    ))),
-                ]);
-                // A port for an event becomes a predicate.
-                self.predicates.insert(port_id.to_owned(), expr);
             }
         }
         for (predicate_id, predicate) in parser.properties.predicates.iter() {
@@ -2101,14 +2247,18 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_predicate(&self, predicate: &Expression<String>) -> anyhow::Result<Expression<Port>> {
+    fn build_predicate(
+        &self,
+        predicate: &Expression<String>,
+    ) -> anyhow::Result<Expression<Channel>> {
         match predicate {
             Expression::Const(val) => Ok(Expression::Const(val.to_owned())),
-            Expression::Var(port) => self
+            // WARN: The variable type is wrong, it cannot be used!
+            Expression::Var(port, _wrong_type_do_not_use) => self
                 .ports
                 .get(port)
                 .cloned()
-                .map(|(port, _)| Expression::Var(port))
+                .map(|(port, val)| Expression::Var(port, val.r#type()))
                 .or_else(|| self.predicates.get(port).map(|pred| pred.to_owned()))
                 .ok_or(anyhow!("missing port {port}")),
             Expression::Tuple(_) => todo!(),
@@ -2163,40 +2313,61 @@ impl ModelBuilder {
                 self.build_predicate(&exprs.0)?,
                 self.build_predicate(&exprs.1)?,
             )))),
+            Expression::Append(exprs) => Ok(Expression::Append(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
+            Expression::Truncate(expr) => Ok(Expression::Truncate(Box::new(
+                self.build_predicate(expr.as_ref())?,
+            ))),
+            Expression::Len(expr) => Ok(Expression::Len(Box::new(
+                self.build_predicate(expr.as_ref())?,
+            ))),
+            Expression::Mod(exprs) => Ok(Expression::Mod(Box::new((
+                self.build_predicate(&exprs.0)?,
+                self.build_predicate(&exprs.1)?,
+            )))),
         }
     }
 
-    fn build(self) -> ScxmlModel {
+    fn build_model(self) -> ScxmlModel {
         let mut model = CsModelBuilder::new(self.cs.build());
         let mut pred_names: HashMap<String, usize> = HashMap::new();
-        for (_port_name, (port, init)) in self.ports {
+        let mut predicates = Vec::new();
+        for (_port_name, (channel, init)) in self.ports {
             // TODO FIXME handle error.
-            if let Port::Message(channel) = port {
-                model.add_port(channel, init).unwrap();
-            }
+            model.add_port(channel, init).unwrap();
         }
         for (pred_name, pred_expr) in self.predicates {
             // TODO FIXME handle error.
             let id = model.add_predicate(pred_expr).unwrap();
-            pred_names.insert(pred_name, id);
+            pred_names.insert(pred_name.to_owned(), id);
+            assert_eq!(id, predicates.len());
+            predicates.push(pred_name);
         }
         ScxmlModel {
             model: model.build(),
             guarantees: self
                 .guarantees
-                .into_values()
-                .map(|prop| map_predicates_in_property(prop, &pred_names))
+                .values()
+                .map(|prop| {
+                    Self::build_property(&self.atoms, prop, &pred_names)
+                        .expect("hopefully a property")
+                })
                 .collect(),
             assumes: self
                 .assumes
-                .into_values()
-                .map(|prop| map_predicates_in_property(prop, &pred_names))
+                .values()
+                .map(|prop| {
+                    Self::build_property(&self.atoms, prop, &pred_names)
+                        .expect("hopefully a property")
+                })
                 .collect(),
             fsm_names: self.fsm_names,
             parameters: self
                 .parameters
                 .into_iter()
-                .map(|((src, trg, _, name), chn)| (chn, (src, trg, name)))
+                .map(|((src, trg, event, name), chn)| (chn, (src, trg, event, name)))
                 .collect(),
             ext_queues: self
                 .fsm_builders
@@ -2214,46 +2385,54 @@ impl ModelBuilder {
                 .into_iter()
                 .map(|(name, b)| (usize::from(b.pg_id), name))
                 .collect(),
+            predicates,
         }
     }
-}
 
-fn map_predicates_in_property(
-    property: Mtl<String>,
-    predicates: &HashMap<String, usize>,
-) -> Mtl<usize> {
-    match property {
-        Mtl::True => Mtl::True,
-        // FIXME TODO handle error
-        Mtl::Atom(pred) => Mtl::Atom(*predicates.get(&pred).unwrap()),
-        Mtl::And(formulae) => Mtl::And(
-            formulae
-                .into_iter()
-                .map(|f| map_predicates_in_property(f, predicates))
-                .collect(),
-        ),
-        // Mtl::Or(formulae) => Mtl::Or(
-        //     formulae
-        //         .into_iter()
-        //         .map(|f| map_predicates_in_property(f, predicates))
-        //         .collect(),
-        // ),
-        Mtl::Not(formula) => Mtl::Not(Box::new(map_predicates_in_property(*formula, predicates))),
-        // Mtl::Implies(_) => todo!(),
-        Mtl::Next(_) => todo!(),
-        Mtl::Until(formulae, range) => {
-            let (lhs, rhs) = *formulae;
-            Mtl::Until(
-                Box::new((
-                    map_predicates_in_property(lhs, predicates),
-                    map_predicates_in_property(rhs, predicates),
-                )),
-                range,
-            )
-        } // Mtl::WeakUntil(_, _) => todo!(),
-          // Mtl::Release(_, _) => todo!(),
-          // Mtl::WeakRelease(_, _) => todo!(),
-          // Mtl::Eventually(_, _) => todo!(),
-          // Mtl::Always(_, _) => todo!(),
+    fn build_property(
+        atoms: &HashMap<String, Atom<Event>>,
+        property: &Mtl<String>,
+        predicates: &HashMap<String, usize>,
+    ) -> anyhow::Result<Mtl<Atom<Event>>> {
+        match property {
+            Mtl::True => Ok(Mtl::True),
+            // FIXME TODO handle error
+            Mtl::Atom(pred) => {
+                if let Some(atom) = atoms.get(pred.as_str()) {
+                    Ok(Mtl::Atom(atom.to_owned()))
+                } else {
+                    Ok(Mtl::Atom(Atom::Predicate(
+                        *predicates.get(pred.as_str()).unwrap(),
+                    )))
+                }
+            }
+            Mtl::And(formulae) => Ok(Mtl::And(
+                formulae
+                    .iter()
+                    .map(|f| Self::build_property(atoms, f, predicates))
+                    .collect::<Result<_, _>>()?,
+            )),
+            // Mtl::Or(formulae) => Mtl::Or(
+            //     formulae
+            //         .into_iter()
+            //         .map(|f| map_predicates_in_property(f, predicates))
+            //         .collect(),
+            // ),
+            Mtl::Not(formula) => Ok(Mtl::Not(Box::new(Self::build_property(
+                atoms, formula, predicates,
+            )?))),
+            // Mtl::Implies(_) => todo!(),
+            Mtl::Next(_) => todo!(),
+            Mtl::Until(formulae, range) => {
+                let (ref lhs, ref rhs) = **formulae;
+                Ok(Mtl::Until(
+                    Box::new((
+                        Self::build_property(atoms, lhs, predicates)?,
+                        Self::build_property(atoms, rhs, predicates)?,
+                    )),
+                    range.to_owned(),
+                ))
+            }
+        }
     }
 }

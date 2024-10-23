@@ -21,7 +21,9 @@
       </if>
     </onentry>
     <transition target="running" cond="test_1">
-      <if cond="!test_2">
+      <if cond="test_2">
+        <assign location="test_2" expr="false"/>
+      <else/>
         <assign location="test_2" expr="true"/>
       </if>
     </transition>
@@ -32,8 +34,12 @@
     <transition target="finished" cond="test_1 &amp;&amp; test_2"/>
     <transition target="loop"/>
     <onexit>
-      <if cond="!test_3">
+      <if cond="test_3">
+        <assign location="test_3" expr="false"/>
+      <elseif cond="!test_3"/>
         <assign location="test_3" expr="true"/>
+      <else/>
+        <assign location="test_2" expr="false"/>
       </if>
     </onexit>
   </state>

@@ -17,3 +17,4 @@ clap = { version = "4.4.14", features = ["derive"] }
 env_logger = { workspace = true }
 log = { workspace = true }
 rand = "0.8.5"
+indicatif = { version = "0.17.8", features = ["improved_unicode"] }

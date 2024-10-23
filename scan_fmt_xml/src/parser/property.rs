@@ -10,7 +10,7 @@ use quick_xml::{
     },
     Reader,
 };
-use scan_core::{Expression, Mtl, Val};
+use scan_core::{Expression, Float, Mtl, Val};
 use std::{collections::HashMap, io::BufRead, str};
 
 const TAG_PORTS: &str = "ports";
@@ -108,7 +108,7 @@ impl PropertyTag {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParserPort {
-    pub(crate) r#type: String,
+    // pub(crate) r#type: String,
     pub(crate) origin: String,
     pub(crate) target: String,
     pub(crate) event: String,
@@ -118,17 +118,17 @@ pub(crate) struct ParserPort {
 impl ParserPort {
     fn parse(tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<(String, Self)> {
         let mut port_id: Option<String> = None;
-        let mut r#type: Option<String> = None;
+        // let mut r#type: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_ID => {
-                    port_id = Some(String::from_utf8(attr.value.into_owned())?);
+                    port_id = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_TYPE => {
-                    r#type = Some(String::from_utf8(attr.value.into_owned())?);
+                    // r#type = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -138,12 +138,12 @@ impl ParserPort {
         }
 
         let port_id = port_id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))?;
-        let r#type = r#type.ok_or(anyhow!(ParserError::MissingAttr(ATTR_TYPE.to_string())))?;
+        // let r#type = r#type.ok_or(anyhow!(ParserError::MissingAttr(ATTR_TYPE.to_string())))?;
 
         Ok((
             port_id,
             ParserPort {
-                r#type,
+                // r#type,
                 origin: String::new(),
                 target: String::new(),
                 event: String::new(),
@@ -162,13 +162,13 @@ impl ParserPort {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_EVENT => {
-                    event = Some(String::from_utf8(attr.value.into_owned())?);
+                    event = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_PARAM => {
-                    param = Some(String::from_utf8(attr.value.into_owned())?);
+                    param = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_EXPR => {
-                    expr = Some(String::from_utf8(attr.value.into_owned())?);
+                    expr = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -208,7 +208,7 @@ impl ParserPort {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_REFID => {
-                    origin = Some(String::from_utf8(attr.value.into_owned())?);
+                    origin = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -231,7 +231,7 @@ impl ParserPort {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_REFID => {
-                    target = Some(String::from_utf8(attr.value.into_owned())?);
+                    target = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -303,7 +303,6 @@ impl Properties {
         let mut predicates = HashMap::new();
         let mut guarantees = HashMap::new();
         let mut assumes = HashMap::new();
-        // let mut assumes = Vec::new();
         info!("parsing properties");
         loop {
             let event = reader.read_event_into(&mut buf)?;
@@ -667,7 +666,10 @@ impl Properties {
                         }
                         TAG_VAR if stack.last().is_some_and(PropertyTag::is_expression) => {
                             let id = Self::parse_refid(tag)?;
-                            let expr = Expression::Var(id);
+                            // NOTE: Use fake type because we don't know it.
+                            // WARN: Do not use the fake type when building the expression
+                            // FIXIT: Replace workaround with proper solution
+                            let expr = Expression::Var(id, scan_core::Type::Product(Vec::new()));
                             push_expr(&mut stack, expr)?;
                         }
                         TAG_VAR if stack.last().is_some_and(PropertyTag::is_mtl) => {
@@ -675,7 +677,7 @@ impl Properties {
                             let expr = Mtl::Atom(id);
                             push_mtl(&mut stack, expr)?;
                         }
-                        TAG_CONST => {
+                        TAG_CONST if stack.last().is_some_and(PropertyTag::is_expression) => {
                             let val = Self::parse_const(tag)?;
                             let expr = Expression::Const(val);
                             push_expr(&mut stack, expr)?;
@@ -691,12 +693,15 @@ impl Properties {
                         }
                     }
                 }
+                // Ignore text between tags
                 Event::Text(_) => continue,
-                Event::Comment(_) => {}
-                Event::CData(_) => todo!(),
-                Event::Decl(_) => todo!(), // parser.parse_xml_declaration(tag)?,
-                Event::PI(_) => todo!(),
-                Event::DocType(_) => todo!(),
+                // Ignore comments
+                Event::Comment(_) => continue,
+                Event::CData(_) => return Err(anyhow!("CData not supported")),
+                // Ignore XML declaration
+                Event::Decl(_) => continue,
+                Event::PI(_) => return Err(anyhow!("Processing Instructions not supported")),
+                Event::DocType(_) => return Err(anyhow!("DocType not supported")),
                 // exits the loop when reaching end of file
                 Event::Eof => {
                     // info!("parsing completed");
@@ -716,7 +721,7 @@ impl Properties {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -736,7 +741,7 @@ impl Properties {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_REFID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -757,10 +762,10 @@ impl Properties {
         {
             match str::from_utf8(attr.key.as_ref())? {
                 ATTR_TYPE => {
-                    r#type = Some(String::from_utf8(attr.value.into_owned())?);
+                    r#type = Some(attr.unescape_value()?.into_owned());
                 }
                 ATTR_EXPR => {
-                    val = Some(String::from_utf8(attr.value.into_owned())?);
+                    val = Some(attr.unescape_value()?.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -773,6 +778,7 @@ impl Properties {
 
         match r#type.ok_or(anyhow!("missing type"))?.as_str() {
             "int32" => Ok(val.parse::<i32>().map(Val::Integer)?),
+            "float64" => Ok(val.parse::<Float>().map(Val::from)?),
             "boolean" => Ok(val.parse::<bool>().map(Val::Boolean)?),
             unknown => Err(anyhow!("unwnown type {unknown}")),
         }

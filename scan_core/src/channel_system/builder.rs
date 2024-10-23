@@ -19,8 +19,8 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
     fn try_from((pg_id, expr): (PgId, CsExpression)) -> Result<Self, Self::Error> {
         match expr {
             Expression::Const(val) => Ok(Expression::Const(val)),
-            Expression::Var(cs_var) if cs_var.0 == pg_id => Ok(Expression::Var(cs_var.1)),
-            Expression::Var(cs_var) => Err(CsError::VarNotInPg(cs_var, pg_id)),
+            Expression::Var(cs_var, t) if cs_var.0 == pg_id => Ok(Expression::Var(cs_var.1, t)),
+            Expression::Var(cs_var, _t) => Err(CsError::VarNotInPg(cs_var, pg_id)),
             Expression::Tuple(comps) => Ok(Expression::Tuple(
                 comps
                     .into_iter()
@@ -80,6 +80,18 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
                 (pg_id, comps.1).try_into()?,
             )))),
             Expression::LessEq(comps) => Ok(Expression::LessEq(Box::new((
+                (pg_id, comps.0).try_into()?,
+                (pg_id, comps.1).try_into()?,
+            )))),
+            Expression::Append(comps) => Ok(Expression::Append(Box::new((
+                (pg_id, comps.0).try_into()?,
+                (pg_id, comps.1).try_into()?,
+            )))),
+            Expression::Truncate(comp) => {
+                Ok(Expression::Truncate(Box::new((pg_id, *comp).try_into()?)))
+            }
+            Expression::Len(comp) => Ok(Expression::Len(Box::new((pg_id, *comp).try_into()?))),
+            Expression::Mod(comps) => Ok(Expression::Mod(Box::new((
                 (pg_id, comps.0).try_into()?,
                 (pg_id, comps.1).try_into()?,
             )))),
@@ -259,6 +271,37 @@ impl ChannelSystemBuilder {
         }
     }
 
+    /// Adds an autonomous transition to the PG.
+    ///
+    /// Fails if the CS contains no such PG, or if the given variable or locations do not belong to it.
+    ///
+    /// See also [`ProgramGraphBuilder::add_transition`].
+    pub fn add_autonomous_transition(
+        &mut self,
+        pg_id: PgId,
+        pre: Location,
+        post: Location,
+        guard: Option<CsExpression>,
+    ) -> Result<(), CsError> {
+        if pre.0 != pg_id {
+            Err(CsError::LocationNotInPg(pre, pg_id))
+        } else if post.0 != pg_id {
+            Err(CsError::LocationNotInPg(post, pg_id))
+        } else {
+            // Turn CsExpression into a PgExpression for Program Graph pg_id
+            let guard = guard
+                .map(|guard| PgExpression::try_from((pg_id, guard)))
+                .transpose()?;
+            self.program_graphs
+                .get_mut(pg_id.0)
+                .ok_or(CsError::MissingPg(pg_id))
+                .and_then(|pg| {
+                    pg.add_autonomous_transition(pre.1, post.1, guard)
+                        .map_err(|err| CsError::ProgramGraph(pg_id, err))
+                })
+        }
+    }
+
     /// Adds a new channel of the given type and capacity to the CS.
     ///
     /// - [`None`] capacity means that the channel's capacity is unlimited.
@@ -285,12 +328,7 @@ impl ChannelSystemBuilder {
             .0
             .to_owned();
         let msg = PgExpression::try_from((pg_id, msg))?;
-        let message_type = self
-            .program_graphs
-            .get(pg_id.0)
-            .ok_or(CsError::MissingPg(pg_id))?
-            .r#type(&msg)
-            .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
+        let message_type = msg.r#type().map_err(CsError::Type)?;
         if channel_type != message_type {
             Err(CsError::ProgramGraph(pg_id, PgError::TypeMismatch))
         } else {
