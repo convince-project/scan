@@ -3,9 +3,11 @@ mod cli;
 use clap::Parser;
 use cli::Cli;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     env_logger::init();
     let cli = Cli::parse();
-    cli.run()?;
-    Ok(())
+    let result = cli.run();
+    if let Err(err) = result {
+        println!("ERROR: {err}");
+    }
 }

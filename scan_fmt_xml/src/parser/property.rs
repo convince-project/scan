@@ -38,6 +38,8 @@ const TAG_SUM: &str = "sum";
 const TAG_MULT: &str = "mult";
 const TAG_OPPOSITE: &str = "opposite";
 const TAG_UNTIL: &str = "until";
+const TAG_ALWAYS: &str = "always";
+const TAG_EVENTUALLY: &str = "eventually";
 const TAG_TRUE: &str = "true";
 
 #[derive(Debug, Clone)]
@@ -66,10 +68,12 @@ enum PropertyTag {
     GreaterEq(Option<Expression<String>>, Option<Expression<String>>),
     // === MTL Tags ===
     MtlNot(Option<Mtl<String>>),
-    // MtlImplies(Option<Mtl<String>>, Option<Mtl<String>>),
+    MtlImplies(Option<Mtl<String>>, Option<Mtl<String>>),
     MtlAnd(Vec<Mtl<String>>),
-    // MtlOr(Vec<Mtl<String>>),
+    MtlOr(Vec<Mtl<String>>),
     MtlUntil(Option<Mtl<String>>, Option<Mtl<String>>),
+    MtlAlways(Option<Mtl<String>>),
+    MtlEventually(Option<Mtl<String>>),
 }
 
 impl PropertyTag {
@@ -98,10 +102,12 @@ impl PropertyTag {
             PropertyTag::Guarantee(_, _)
                 | PropertyTag::Assume(_, _)
                 | PropertyTag::MtlAnd(_)
-                // | PropertyTag::MtlOr(_)
-                // | PropertyTag::MtlImplies(_, _)
+                | PropertyTag::MtlOr(_)
+                | PropertyTag::MtlImplies(_, _)
                 | PropertyTag::MtlUntil(_, _)
                 | PropertyTag::MtlNot(_)
+                | PropertyTag::MtlAlways(_)
+                | PropertyTag::MtlEventually(_)
         )
     }
 }
@@ -265,12 +271,12 @@ impl From<&PropertyTag> for &'static str {
             PropertyTag::Greater(_, _) => TAG_GREATER,
             PropertyTag::GreaterEq(_, _) => TAG_GEQ,
             PropertyTag::And(_) | PropertyTag::MtlAnd(_) => TAG_AND,
-            PropertyTag::Or(_) => TAG_OR,
-            // PropertyTag::Or(_) | PropertyTag::MtlOr(_) => TAG_OR,
+            PropertyTag::Or(_) | PropertyTag::MtlOr(_) => TAG_OR,
             PropertyTag::Not(_) | PropertyTag::MtlNot(_) => TAG_NOT,
-            PropertyTag::Implies(_, _) => TAG_IMPLIES,
-            // PropertyTag::Implies(_, _) | PropertyTag::MtlImplies(_, _) => TAG_IMPLIES,
+            PropertyTag::Implies(_, _) | PropertyTag::MtlImplies(_, _) => TAG_IMPLIES,
             PropertyTag::MtlUntil(_, _) => TAG_UNTIL,
+            PropertyTag::MtlAlways(_) => TAG_ALWAYS,
+            PropertyTag::MtlEventually(_) => TAG_EVENTUALLY,
             PropertyTag::Sum(_) => TAG_SUM,
             PropertyTag::Mult(_) => TAG_MULT,
             PropertyTag::Opposite(_) => TAG_OPPOSITE,
@@ -414,17 +420,23 @@ impl Properties {
                         TAG_AND if stack.last().is_some_and(PropertyTag::is_mtl) => {
                             stack.push(PropertyTag::MtlAnd(Vec::new()))
                         }
-                        // TAG_OR if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                        //     stack.push(PropertyTag::MtlOr(Vec::new()))
-                        // }
+                        TAG_OR if stack.last().is_some_and(PropertyTag::is_mtl) => {
+                            stack.push(PropertyTag::MtlOr(Vec::new()))
+                        }
                         TAG_NOT if stack.last().is_some_and(PropertyTag::is_mtl) => {
                             stack.push(PropertyTag::MtlNot(None))
                         }
-                        // TAG_IMPLIES if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                        //     stack.push(PropertyTag::MtlImplies(None, None))
-                        // }
+                        TAG_IMPLIES if stack.last().is_some_and(PropertyTag::is_mtl) => {
+                            stack.push(PropertyTag::MtlImplies(None, None))
+                        }
                         TAG_UNTIL if stack.last().is_some_and(PropertyTag::is_mtl) => {
                             stack.push(PropertyTag::MtlUntil(None, None))
+                        }
+                        TAG_ALWAYS if stack.last().is_some_and(PropertyTag::is_mtl) => {
+                            stack.push(PropertyTag::MtlAlways(None))
+                        }
+                        TAG_EVENTUALLY if stack.last().is_some_and(PropertyTag::is_mtl) => {
+                            stack.push(PropertyTag::MtlEventually(None))
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
@@ -585,30 +597,42 @@ impl Properties {
                                 {
                                     push_mtl(&mut stack, Mtl::And(exprs))?;
                                 }
-                                // PropertyTag::MtlOr(exprs)
-                                //     if stack.last().is_some_and(PropertyTag::is_mtl) =>
-                                // {
-                                //     push_mtl(&mut stack, Mtl::Or(exprs))?;
-                                // }
+                                PropertyTag::MtlOr(exprs)
+                                    if stack.last().is_some_and(PropertyTag::is_mtl) =>
+                                {
+                                    push_mtl(&mut stack, Mtl::Or(exprs))?;
+                                }
                                 PropertyTag::MtlNot(expr)
                                     if stack.last().is_some_and(PropertyTag::is_mtl) =>
                                 {
                                     let expr = expr.ok_or(anyhow!("missing expr in not"))?;
                                     push_mtl(&mut stack, Mtl::Not(Box::new(expr)))?;
                                 }
-                                // PropertyTag::MtlImplies(lhs, rhs)
-                                //     if stack.last().is_some_and(PropertyTag::is_mtl) =>
-                                // {
-                                //     let lhs = lhs.ok_or(anyhow!("missing lhs in implies"))?;
-                                //     let rhs = rhs.ok_or(anyhow!("missing rhs in implies"))?;
-                                //     push_mtl(&mut stack, Mtl::Implies(Box::new((lhs, rhs))))?;
-                                // }
+                                PropertyTag::MtlImplies(lhs, rhs)
+                                    if stack.last().is_some_and(PropertyTag::is_mtl) =>
+                                {
+                                    let lhs = lhs.ok_or(anyhow!("missing lhs in implies"))?;
+                                    let rhs = rhs.ok_or(anyhow!("missing rhs in implies"))?;
+                                    push_mtl(&mut stack, Mtl::Implies(Box::new((lhs, rhs))))?;
+                                }
                                 PropertyTag::MtlUntil(lhs, rhs)
                                     if stack.last().is_some_and(PropertyTag::is_mtl) =>
                                 {
                                     let lhs = lhs.ok_or(anyhow!("missing lhs in implies"))?;
                                     let rhs = rhs.ok_or(anyhow!("missing rhs in implies"))?;
                                     push_mtl(&mut stack, Mtl::Until(Box::new((lhs, rhs)), None))?;
+                                }
+                                PropertyTag::MtlAlways(formula)
+                                    if stack.last().is_some_and(|tag| tag.is_mtl()) =>
+                                {
+                                    let formula = formula.ok_or(anyhow!("missing expr in not"))?;
+                                    push_mtl(&mut stack, Mtl::Always(Box::new(formula), None))?;
+                                }
+                                PropertyTag::MtlEventually(formula)
+                                    if stack.last().is_some_and(|tag| tag.is_mtl()) =>
+                                {
+                                    let formula = formula.ok_or(anyhow!("missing expr in not"))?;
+                                    push_mtl(&mut stack, Mtl::Eventually(Box::new(formula), None))?;
                                 }
                                 PropertyTag::Ports
                                 | PropertyTag::Predicates
@@ -834,14 +858,18 @@ fn push_mtl(stack: &mut [PropertyTag], expr: Mtl<String>) -> anyhow::Result<()> 
         .last_mut()
         .ok_or(anyhow!("MTL formula not contained inside proper tag"))?
     {
-        PropertyTag::Guarantee(_, formula) => {
+        PropertyTag::Guarantee(_, formula)
+        | PropertyTag::Assume(_, formula)
+        | PropertyTag::MtlAlways(formula)
+        | PropertyTag::MtlEventually(formula)
+        | PropertyTag::MtlNot(formula) => {
             if formula.is_none() {
                 *formula = Some(expr);
             } else {
                 return Err(anyhow!("multiple expressions in guarantee"));
             }
         }
-        PropertyTag::MtlUntil(lhs, rhs) => {
+        PropertyTag::MtlUntil(lhs, rhs) | PropertyTag::MtlImplies(lhs, rhs) => {
             if lhs.is_none() {
                 *lhs = Some(expr);
             } else if rhs.is_none() {
@@ -850,16 +878,8 @@ fn push_mtl(stack: &mut [PropertyTag], expr: Mtl<String>) -> anyhow::Result<()> 
                 return Err(anyhow!("too many arguments in binary operator"));
             }
         }
-        // PropertyTag::MtlAnd(exprs) | PropertyTag::MtlOr(exprs) => {
-        PropertyTag::MtlAnd(exprs) => {
+        PropertyTag::MtlAnd(exprs) | PropertyTag::MtlOr(exprs) => {
             exprs.push(expr);
-        }
-        PropertyTag::MtlNot(arg) => {
-            if arg.is_none() {
-                *arg = Some(expr);
-            } else {
-                return Err(anyhow!("multiple expressions in opposite"));
-            }
         }
         other_tag => return Err(anyhow!("{other_tag:?} is not an MTL tag")),
     }

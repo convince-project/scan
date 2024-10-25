@@ -1,3 +1,4 @@
+use channel_system::EventType;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use scan::*;
@@ -23,22 +24,28 @@ pub struct Cli {
     /// Precision or half-width parameter
     #[arg(short, long, default_value = "0.01")]
     precision: f64,
-    /// Search for a counterexample
+    // /// Search for a counterexample
+    // #[arg(long, default_value = "false")]
+    // counterexample: bool,
+    /// Print execution trace
     #[arg(long, default_value = "false")]
-    counterexample: bool,
+    trace: bool,
+    /// Max length of execution trace before it is stopped
+    #[arg(long, default_value = "10000")]
+    length: usize,
 }
 
 impl Cli {
     pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let scxml_model = scan_fmt_xml::load(&self.model)?;
-        if self.counterexample {
-            self.counterexample(scxml_model)
+        if self.trace {
+            self.trace(scxml_model)
         } else {
             self.verify(scxml_model)
         }
     }
 
-    fn counterexample(&self, scxml_model: ScxmlModel) -> Result<(), Box<dyn std::error::Error>> {
+    fn _counterexample(&self, scxml_model: ScxmlModel) -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "Searching for counterexample with confidence={}, precision={}",
             self.confidence, self.precision
@@ -52,11 +59,39 @@ impl Cli {
             println!("Counterexample trace:");
             scan::print_state(&scxml_model, scxml_model.model.labels());
             for (event, state) in trace {
-                print_event(&scxml_model, event);
-                print_state(&scxml_model, state);
+                if matches!(event.event_type, EventType::Receive(_) | EventType::Send(_)) {
+                    print_event(&scxml_model, event);
+                    print_state(&scxml_model, state);
+                }
             }
         } else {
             println!("No counter-example found");
+        }
+        Ok(())
+    }
+
+    fn trace(&self, scxml_model: ScxmlModel) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Execution trace");
+        let (trace, result) = scxml_model.model.clone().example(
+            &scxml_model.guarantees,
+            &scxml_model.assumes,
+            self.length,
+        );
+        scan::print_state(&scxml_model, scxml_model.model.labels());
+        for (event, state) in trace {
+            if matches!(event.event_type, EventType::Receive(_) | EventType::Send(_)) {
+                print_event(&scxml_model, event);
+                print_state(&scxml_model, state);
+            }
+        }
+        if let Some(result) = result {
+            if result {
+                println!("Execution successful");
+            } else {
+                println!("Execution unsuccessful");
+            }
+        } else {
+            println!("Execution inconclusive");
         }
         Ok(())
     }
@@ -66,7 +101,7 @@ impl Cli {
             .model
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("???");
+            .unwrap_or("model");
         let confidence = self.confidence;
         let precision = self.precision;
         println!("SCANning '{model_name}' (confidence {confidence}; precision {precision})");
@@ -80,6 +115,7 @@ impl Cli {
             &scxml_model.assumes,
             confidence,
             precision,
+            self.length,
             s.to_owned(),
             f.to_owned(),
         );

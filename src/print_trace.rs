@@ -1,33 +1,48 @@
+use crossterm::style::Stylize;
 use scan_fmt_xml::{
     scan_core::{channel_system, Val},
     ScxmlModel,
 };
 
 pub fn print_state(scxml_model: &ScxmlModel, state: Vec<bool>) {
-    let mut first = true;
-    for (pred, val) in scxml_model.predicates.iter().zip(&state) {
-        if first {
-            print!("[{pred}: {val:5}");
-            first = false;
-        } else {
-            print!(" | {pred}: {val:5}");
+    if !state.is_empty() {
+        let mut first = true;
+        for (pred, val) in scxml_model.predicates.iter().zip(&state) {
+            if first {
+                print!("[{pred}: {val:5}");
+                first = false;
+            } else {
+                print!(" | {pred}: {val:5}");
+            }
         }
+        println!("]");
     }
-    println!("]");
 }
 
 pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event) {
-    print!("{}", scxml_model.fsm_names.get(&event.pg_id).unwrap());
+    print!(
+        "{}",
+        scxml_model
+            .fsm_names
+            .get(&event.pg_id)
+            .unwrap()
+            .as_str()
+            .bold()
+    );
     if let Some((src, trg, event_idx, param)) = scxml_model.parameters.get(&event.channel) {
         let event_name = scxml_model.events.get(event_idx).unwrap();
         match event.event_type {
             channel_system::EventType::Send(val) => println!(
-                " sends param {param}={val:?} of event {event_name} to {}",
-                scxml_model.fsm_names.get(trg).unwrap()
+                " sends param {}={val:?} of event {} to {}",
+                param.as_str().bold().blue(),
+                event_name.as_str().bold().red(),
+                scxml_model.fsm_names.get(trg).unwrap().as_str().bold()
             ),
             channel_system::EventType::Receive(val) => println!(
-                " receives param {param}={val:?} from {}",
-                scxml_model.fsm_names.get(src).unwrap()
+                " receives param {}={val:?} of event {} from {}",
+                param.as_str().bold().blue(),
+                event_name.as_str().bold().red(),
+                scxml_model.fsm_names.get(src).unwrap().as_str().bold()
             ),
             _ => unreachable!(),
         }
@@ -38,8 +53,14 @@ pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event) {
                     if let (Val::Integer(sent_event), Val::Integer(_origin)) = (&e[0], &e[1]) {
                         println!(
                             " sends event {} to {}",
-                            scxml_model.events.get(&(*sent_event as usize)).unwrap(),
-                            scxml_model.fsm_names.get(pg_id).unwrap()
+                            scxml_model
+                                .events
+                                .get(&(*sent_event as usize))
+                                .unwrap()
+                                .as_str()
+                                .bold()
+                                .red(),
+                            scxml_model.fsm_names.get(pg_id).unwrap().as_str().bold()
                         );
                     } else {
                         panic!("events should be pairs");
@@ -53,8 +74,19 @@ pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event) {
                     if let (Val::Integer(sent_event), Val::Integer(origin)) = (&e[0], &e[1]) {
                         println!(
                             " receives event {} from {}",
-                            scxml_model.events.get(&(*sent_event as usize)).unwrap(),
-                            scxml_model.fsm_indexes.get(&(*origin as usize)).unwrap(),
+                            scxml_model
+                                .events
+                                .get(&(*sent_event as usize))
+                                .unwrap()
+                                .as_str()
+                                .bold()
+                                .red(),
+                            scxml_model
+                                .fsm_indexes
+                                .get(&(*origin as usize))
+                                .unwrap()
+                                .as_str()
+                                .bold(),
                         );
                     } else {
                         panic!("events should be pairs");

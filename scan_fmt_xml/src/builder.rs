@@ -1867,8 +1867,7 @@ impl ModelBuilder {
                     Literal::Undefined => todo!(),
                 }
             }
-            boa_ast::Expression::RegExpLiteral(_) => todo!(),
-            boa_ast::Expression::ArrayLiteral(arr) => {
+            boa_ast::Expression::ArrayLiteral(_arr) => {
                 todo!()
                 // arr
                 //             .to_pattern(true)
@@ -1876,16 +1875,6 @@ impl ModelBuilder {
                 //             .into_iter()
                 //             .map(|element| match element {})
             }
-            boa_ast::Expression::ObjectLiteral(_) => todo!(),
-            boa_ast::Expression::Spread(_) => todo!(),
-            boa_ast::Expression::Function(_) => todo!(),
-            boa_ast::Expression::ArrowFunction(_) => todo!(),
-            boa_ast::Expression::AsyncArrowFunction(_) => todo!(),
-            boa_ast::Expression::Generator(_) => todo!(),
-            boa_ast::Expression::AsyncFunction(_) => todo!(),
-            boa_ast::Expression::AsyncGenerator(_) => todo!(),
-            boa_ast::Expression::Class(_) => todo!(),
-            boa_ast::Expression::TemplateLiteral(_) => todo!(),
             boa_ast::Expression::PropertyAccess(prop_acc) => {
                 let expr = &boa_ast::Expression::PropertyAccess(prop_acc.to_owned());
                 let ecma_obj = self.expression_prop_access(expr, interner, vars, origin, params)?;
@@ -1896,15 +1885,6 @@ impl ModelBuilder {
                     EcmaObj::Properties(_) => todo!(),
                 }
             }
-            boa_ast::Expression::New(_) => todo!(),
-            boa_ast::Expression::Call(_) => todo!(),
-            boa_ast::Expression::SuperCall(_) => todo!(),
-            boa_ast::Expression::ImportCall(_) => todo!(),
-            boa_ast::Expression::Optional(_) => todo!(),
-            boa_ast::Expression::TaggedTemplate(_) => todo!(),
-            boa_ast::Expression::NewTarget => todo!(),
-            boa_ast::Expression::ImportMeta => todo!(),
-            boa_ast::Expression::Assign(_) => todo!(),
             boa_ast::Expression::Unary(unary) => {
                 use boa_ast::expression::operator::unary::UnaryOp;
                 let expr = self.expression(unary.target(), interner, vars, origin, params)?;
@@ -1912,13 +1892,9 @@ impl ModelBuilder {
                     UnaryOp::Minus => Expression::Opposite(Box::new(expr)),
                     UnaryOp::Plus => expr,
                     UnaryOp::Not => Expression::Not(Box::new(expr)),
-                    UnaryOp::Tilde => todo!(),
-                    UnaryOp::TypeOf => todo!(),
-                    UnaryOp::Delete => todo!(),
-                    UnaryOp::Void => todo!(),
+                    _ => return Err(anyhow!("unimplemented operator")),
                 }
             }
-            boa_ast::Expression::Update(_) => todo!(),
             boa_ast::Expression::Binary(bin) => {
                 use boa_ast::expression::operator::binary::{
                     ArithmeticOp, BinaryOp, LogicalOp, RelationalOp,
@@ -1932,43 +1908,37 @@ impl ModelBuilder {
                             CsExpression::Sum(vec![lhs, CsExpression::Opposite(Box::new(rhs))])
                         }
                         ArithmeticOp::Div => todo!(),
-                        ArithmeticOp::Mul => todo!(),
+                        ArithmeticOp::Mul => CsExpression::Mult(vec![lhs, rhs]),
                         ArithmeticOp::Exp => todo!(),
                         ArithmeticOp::Mod => CsExpression::Mod(Box::new((lhs, rhs))),
                     },
-                    BinaryOp::Bitwise(_) => todo!(),
                     BinaryOp::Relational(rel_bin) => match rel_bin {
                         RelationalOp::Equal => CsExpression::Equal(Box::new((lhs, rhs))),
                         RelationalOp::NotEqual => {
                             CsExpression::Not(Box::new(CsExpression::Equal(Box::new((lhs, rhs)))))
                         }
-                        RelationalOp::StrictEqual => todo!(),
-                        RelationalOp::StrictNotEqual => todo!(),
                         RelationalOp::GreaterThan => CsExpression::Greater(Box::new((lhs, rhs))),
                         RelationalOp::GreaterThanOrEqual => {
                             CsExpression::GreaterEq(Box::new((lhs, rhs)))
                         }
                         RelationalOp::LessThan => CsExpression::Less(Box::new((lhs, rhs))),
                         RelationalOp::LessThanOrEqual => CsExpression::LessEq(Box::new((lhs, rhs))),
-                        RelationalOp::In => todo!(),
-                        RelationalOp::InstanceOf => todo!(),
+                        _ => return Err(anyhow!("unimplemented operator")),
                     },
                     BinaryOp::Logical(op) => match op {
                         LogicalOp::And => CsExpression::And(vec![lhs, rhs]),
                         LogicalOp::Or => CsExpression::Or(vec![lhs, rhs]),
-                        LogicalOp::Coalesce => todo!(),
+                        _ => return Err(anyhow!("unimplemented operator")),
                     },
                     BinaryOp::Comma => todo!(),
+                    _ => return Err(anyhow!("unimplemented operator")),
                 }
             }
-            boa_ast::Expression::BinaryInPrivate(_) => todo!(),
             boa_ast::Expression::Conditional(_) => todo!(),
-            boa_ast::Expression::Await(_) => todo!(),
-            boa_ast::Expression::Yield(_) => todo!(),
             boa_ast::Expression::Parenthesized(par) => {
                 self.expression(par.expression(), interner, vars, origin, params)?
             }
-            _ => todo!(),
+            _ => return Err(anyhow!("unimplemented expression")),
         };
         Ok(expr)
     }
@@ -1990,13 +1960,10 @@ impl ModelBuilder {
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
                 match lit {
-                    Literal::String(_) => todo!(),
-                    Literal::Num(_) => todo!(),
+                    Literal::Num(f) => Val::from(*f),
                     Literal::Int(i) => Val::Integer(*i),
-                    Literal::BigInt(_) => todo!(),
                     Literal::Bool(b) => Val::Boolean(*b),
-                    Literal::Null => todo!(),
-                    Literal::Undefined => todo!(),
+                    _ => return Err(anyhow!("unsupported type")),
                 }
             }
             boa_ast::Expression::PropertyAccess(_prop_acc) => {
@@ -2004,25 +1971,34 @@ impl ModelBuilder {
             }
             boa_ast::Expression::Unary(unary) => {
                 use boa_ast::expression::operator::unary::UnaryOp;
+                let val = self.value(unary.target(), interner)?;
                 match unary.op() {
-                    UnaryOp::Minus => todo!(),
-                    UnaryOp::Plus => todo!(),
-                    UnaryOp::Not => self.value(unary.target(), interner).map(|val| {
+                    UnaryOp::Minus => match val {
+                        Val::Integer(v) => Val::Integer(-v),
+                        Val::Float(v) => Val::Float(-v),
+                        _ => return Err(anyhow!("non-numeric type")),
+                    },
+                    UnaryOp::Plus => {
+                        if matches!(val, Val::Integer(_) | Val::Float(_)) {
+                            val
+                        } else {
+                            todo!()
+                        }
+                    }
+                    UnaryOp::Not => {
                         if let Val::Boolean(b) = val {
                             Val::Boolean(!b)
                         } else {
                             todo!()
                         }
-                    })?,
-                    UnaryOp::Tilde => todo!(),
-                    UnaryOp::TypeOf => todo!(),
-                    UnaryOp::Delete => todo!(),
-                    UnaryOp::Void => todo!(),
+                    }
+                    _ => return Err(anyhow!("unimplemented operator")),
                 }
             }
             boa_ast::Expression::Binary(bin) => {
                 use boa_ast::expression::operator::binary::{ArithmeticOp, BinaryOp};
                 match bin.op() {
+                    // TODO: Float arithmetics
                     BinaryOp::Arithmetic(ar_bin) => {
                         let lhs = self.value(bin.lhs(), interner)?;
                         let rhs = self.value(bin.rhs(), interner)?;
@@ -2039,10 +2015,13 @@ impl ModelBuilder {
                         match ar_bin {
                             ArithmeticOp::Add => Val::Integer(lhs + rhs),
                             ArithmeticOp::Sub => Val::Integer(lhs - rhs),
-                            ArithmeticOp::Div => todo!(),
-                            ArithmeticOp::Mul => todo!(),
-                            ArithmeticOp::Exp => todo!(),
-                            ArithmeticOp::Mod => todo!(),
+                            ArithmeticOp::Div if rhs != 0 => Val::Integer(lhs / rhs),
+                            ArithmeticOp::Mul => Val::Integer(lhs * rhs),
+                            ArithmeticOp::Exp if !rhs.is_negative() => {
+                                Val::Integer(lhs.pow(rhs as u32))
+                            }
+                            ArithmeticOp::Mod if rhs != 0 => Val::Integer(lhs % rhs),
+                            _ => return Err(anyhow!("unimplemented expression")),
                         }
                     }
                     BinaryOp::Relational(_rel_bin) => {
@@ -2052,7 +2031,7 @@ impl ModelBuilder {
                     _ => unimplemented!(),
                 }
             }
-            _ => unimplemented!(),
+            _ => return Err(anyhow!("unimplemented expression")),
         };
         Ok(expr)
     }
@@ -2417,17 +2396,25 @@ impl ModelBuilder {
                     .map(|f| Self::build_property(atoms, f, predicates))
                     .collect::<Result<_, _>>()?,
             )),
-            // Mtl::Or(formulae) => Mtl::Or(
-            //     formulae
-            //         .into_iter()
-            //         .map(|f| map_predicates_in_property(f, predicates))
-            //         .collect(),
-            // ),
+            Mtl::Or(formulae) => Ok(Mtl::Or(
+                formulae
+                    .iter()
+                    .map(|f| Self::build_property(atoms, f, predicates))
+                    .collect::<Result<_, _>>()?,
+            )),
             Mtl::Not(formula) => Ok(Mtl::Not(Box::new(Self::build_property(
                 atoms, formula, predicates,
             )?))),
-            // Mtl::Implies(_) => todo!(),
-            Mtl::Next(_) => todo!(),
+            Mtl::Implies(formulae) => {
+                let (ref lhs, ref rhs) = **formulae;
+                Ok(Mtl::Implies(Box::new((
+                    Self::build_property(atoms, lhs, predicates)?,
+                    Self::build_property(atoms, rhs, predicates)?,
+                ))))
+            }
+            Mtl::Next(formula) => Self::build_property(atoms, formula, predicates)
+                .map(Box::new)
+                .map(Mtl::Next),
             Mtl::Until(formulae, range) => {
                 let (ref lhs, ref rhs) = **formulae;
                 Ok(Mtl::Until(
@@ -2438,6 +2425,14 @@ impl ModelBuilder {
                     range.to_owned(),
                 ))
             }
+            Mtl::Always(formula, range) => Ok(Mtl::Always(
+                Box::new(Self::build_property(atoms, formula, predicates)?),
+                range.to_owned(),
+            )),
+            Mtl::Eventually(formula, range) => Ok(Mtl::Eventually(
+                Box::new(Self::build_property(atoms, formula, predicates)?),
+                range.to_owned(),
+            )),
         }
     }
 }

@@ -11,6 +11,9 @@ pub enum Atom<A: Clone + PartialEq> {
     Event(A),
 }
 
+// WARN: Representing a trace as a Vec of Vecs may be expensive.
+pub type Trace<A> = Vec<(A, Vec<bool>)>;
+
 /// Trait implementing a Transition System (TS), as defined in [^1].
 /// As such, it is possible to verify it against MTL specifications.
 ///
@@ -18,8 +21,6 @@ pub enum Atom<A: Clone + PartialEq> {
 pub trait TransitionSystem: Clone + Send + Sync {
     /// The type of the actions that trigger transitions between states in the TS.
     type Action: Clone + PartialEq + Send + Sync;
-
-    const TIMEOUT: usize = usize::MAX;
 
     /// The label function of the TS valuates the propositions of its set of propositions for the current state.
     // TODO FIXME: bitset instead of Vec<bool>?
@@ -95,12 +96,44 @@ pub trait TransitionSystem: Clone + Send + Sync {
         })
     }
 
+    fn example(
+        mut self,
+        guarantees: &[Mtl<Atom<Self::Action>>],
+        assumes: &[Mtl<Atom<Self::Action>>],
+        length: usize,
+    ) -> (Trace<Self::Action>, Option<bool>) {
+        let mut rng = rand::thread_rng();
+        // Preallocate maximum possible space to avoid reallocations.
+        // For large lengths, this might take plenty of memory.
+        let mut trace = Vec::with_capacity(length);
+        while let Some((action, new_ts)) = self.transitions().choose(&mut rng) {
+            trace.push((action.to_owned(), new_ts.labels()));
+            if trace.len() >= length {
+                break;
+            }
+            self = new_ts.to_owned();
+        }
+        // Free unused memory
+        trace.shrink_to_fit();
+        if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
+            // If some assume is not satisfied,
+            // disregard state and move on.
+            (trace, None)
+        } else if guarantees.iter().all(|p| p.eval(trace.as_slice())) {
+            // If all guarantees are satisfied,
+            (trace, Some(true))
+        } else {
+            // If guarantee is violated, we have found a counter-example!
+            (trace, Some(false))
+        }
+    }
+
     fn trace_counterexample<R: Rng>(
         mut self,
         guarantees: &[Mtl<Atom<Self::Action>>],
         assumes: &[Mtl<Atom<Self::Action>>],
         rng: &mut R,
-    ) -> Option<Vec<(Self::Action, Vec<bool>)>> {
+    ) -> Option<Trace<Self::Action>> {
         let mut trace = Vec::new();
         while let Some((action, new_ts)) = self.transitions().choose(rng) {
             trace.push((action.to_owned(), new_ts.labels()));
@@ -123,16 +156,21 @@ pub trait TransitionSystem: Clone + Send + Sync {
         mut self,
         guarantees: &[Mtl<Atom<Self::Action>>],
         assumes: &[Mtl<Atom<Self::Action>>],
+        length: usize,
         rng: &mut R,
     ) -> Option<bool> {
-        let mut trace = Vec::new();
+        // Preallocate maximum possible space to avoid reallocations.
+        // For large lengths, this might take plenty of memory.
+        let mut trace = Vec::with_capacity(length);
         while let Some((action, new_ts)) = self.transitions().choose(rng) {
             trace.push((action.to_owned(), new_ts.labels()));
             self = new_ts.to_owned();
-            if trace.len() > Self::TIMEOUT {
+            if trace.len() >= length {
                 break;
             }
         }
+        // Free unused memory
+        trace.shrink_to_fit();
         if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
             // If some assume is not satisfied,
             // disregard state and move on.
@@ -152,6 +190,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
         assumes: &[Mtl<Atom<Self::Action>>],
         confidence: f64,
         precision: f64,
+        length: usize,
         s: Arc<AtomicU32>,
         f: Arc<AtomicU32>,
     ) {
@@ -162,7 +201,10 @@ pub trait TransitionSystem: Clone + Send + Sync {
                 let mut rng = rand::thread_rng();
                 let local_s;
                 let local_f;
-                if let Some(result) = self.clone().experiment(guarantees, assumes, &mut rng) {
+                if let Some(result) = self
+                    .clone()
+                    .experiment(guarantees, assumes, length, &mut rng)
+                {
                     if result {
                         // If all guarantees are satisfied, the execution is successful
                         local_s = s.fetch_add(1, Ordering::Relaxed) + 1;
