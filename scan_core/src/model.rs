@@ -101,6 +101,9 @@ impl TransitionSystem for CsModel {
         // Perform all transitions that are deterministic and do not interact with channels.
         // The order in which these are performed does not matter.
         self.cs.resolve_deterministic_transitions();
+        if self.cs.possible_transitions().next().is_none() {
+            self.cs.wait(1).ok();
+        }
         self.cs
             .possible_transitions()
             .flat_map(|(pg_id, action, post)| {

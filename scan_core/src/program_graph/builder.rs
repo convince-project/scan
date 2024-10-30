@@ -1,7 +1,11 @@
 use super::{
-    Action, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph, Var, EPSILON,
+    Action, Clock, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph,
+    TimeConstraint, Var, EPSILON, TIME, WAIT,
 };
-use crate::grammar::{Type, Val};
+use crate::{
+    grammar::{Type, Val},
+    Integer,
+};
 use log::info;
 use std::{collections::HashMap, sync::Arc};
 
@@ -49,7 +53,7 @@ impl Default for ProgramGraphBuilder {
 }
 
 impl ProgramGraphBuilder {
-    const INITIAL_LOCATION: Location = Location(0);
+    const INITIAL: Location = Location(0);
 
     /// Creates a new [`ProgramGraphBuilder`].
     /// At creation, this will only have the inital location with no variables, no actions and no transitions.
@@ -63,14 +67,18 @@ impl ProgramGraphBuilder {
         // Create an initial location and make sure it is equal to the constant `Self::INITIAL_LOCATION`
         // This is the simplest way to make sure the state of the builder is always consistent
         let initial_location = pgb.new_location();
-        assert_eq!(initial_location, Self::INITIAL_LOCATION);
+        assert_eq!(initial_location, Self::INITIAL);
+
+        let time = pgb.new_clock();
+        assert_eq!(time, TIME);
+
         pgb
     }
 
     /// Gets the initial location of the PG.
     /// This is created toghether with the [`ProgramGraphBuilder`] by default.
     pub fn initial_location(&self) -> Location {
-        Self::INITIAL_LOCATION
+        Self::INITIAL
     }
 
     // Gets the type of a variable.
@@ -83,7 +91,7 @@ impl ProgramGraphBuilder {
 
     /// Adds a new variable with the given initial value (and the inferred type) to the PG.
     ///
-    /// It fails if the expression giving the initial value of the variable is well-typed.
+    /// It fails if the expression giving the initial value of the variable is not well-typed.
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
@@ -103,10 +111,14 @@ impl ProgramGraphBuilder {
         init.context(&|var| self.vars.get(var.0).map(Val::r#type))
             .map_err(PgError::Type)?;
         let val = FnExpression::from(init).eval(&|var| self.vars[var.0].clone());
-        // .eval(&|var| self.vars.get(var.0).cloned())
-        // .map_err(|err| PgError::Type(err))?;
         self.vars.push(val);
         Ok(Var(idx))
+    }
+
+    pub fn new_clock(&mut self) -> Clock {
+        let idx = self.vars.len();
+        self.vars.push(Val::Integer(0));
+        Clock(idx)
     }
 
     /// Adds a new action to the PG.
@@ -142,8 +154,8 @@ impl ProgramGraphBuilder {
         var: Var,
         effect: PgExpression,
     ) -> Result<(), PgError> {
-        if action == EPSILON {
-            return Err(PgError::EpsilonEffects);
+        if action == EPSILON || action == WAIT {
+            return Err(PgError::NoEffects);
         }
         effect
             .context(&|var| self.vars.get(var.0).map(Val::r#type))
@@ -171,11 +183,25 @@ impl ProgramGraphBuilder {
         }
     }
 
+    pub fn reset_clock(&mut self, action: Action, clock: Clock) -> Result<(), PgError> {
+        if clock == TIME {
+            // return an error
+            Err(PgError::TimeClock)
+        } else {
+            self.add_effect(
+                action,
+                Var(clock.0),
+                PgExpression::Var(Var(TIME.0), Type::Integer),
+            )
+        }
+    }
+
     pub(crate) fn new_send(&mut self, msg: PgExpression) -> Result<Action, PgError> {
-        // Actions are indexed progressively
+        // Check message is well-typed
         msg.context(&|var| self.vars.get(var.0).map(Val::r#type))
             .map_err(PgError::Type)?;
         let _ = msg.r#type().map_err(PgError::Type)?;
+        // Actions are indexed progressively
         let idx = self.effects.len();
         self.effects.push(Effect::Send(msg));
         Ok(Action(idx))
@@ -197,7 +223,21 @@ impl ProgramGraphBuilder {
         // Locations are indexed progressively
         let idx = self.transitions.len();
         self.transitions.push(HashMap::new());
-        Location(idx)
+        let loc = Location(idx);
+        self.add_transition(loc, WAIT, loc, None)
+            .expect("add wait transition");
+        loc
+    }
+
+    /// TODO
+    pub fn new_timed_location(&mut self, invariants: &[TimeConstraint]) -> Location {
+        // Locations are indexed progressively
+        let idx = self.transitions.len();
+        self.transitions.push(HashMap::new());
+        let loc = Location(idx);
+        self.add_timed_transition(loc, WAIT, loc, None, invariants)
+            .expect("add wait transition");
+        loc
     }
 
     /// Adds a transition to the PG.
@@ -239,7 +279,7 @@ impl ProgramGraphBuilder {
             Err(PgError::MissingLocation(pre))
         } else if self.transitions.len() <= post.0 {
             Err(PgError::MissingLocation(post))
-        } else if action != EPSILON && self.effects.len() <= action.0 {
+        } else if action != EPSILON && action != WAIT && self.effects.len() <= action.0 {
             // Check 'action' exists
             Err(PgError::MissingAction(action))
         } else if guard
@@ -276,6 +316,50 @@ impl ProgramGraphBuilder {
         }
     }
 
+    /// TODO
+    pub fn add_timed_transition(
+        &mut self,
+        pre: Location,
+        action: Action,
+        post: Location,
+        guard: Option<PgExpression>,
+        constraints: &[TimeConstraint],
+    ) -> Result<(), PgError> {
+        let time_constraints = constraints
+            .iter()
+            .flat_map(|(clock, lower_bound, upper_bound)| {
+                let lower_bound = lower_bound.map(|lower_bound| {
+                    PgExpression::LessEq(Box::new((
+                        PgExpression::Const(Val::Integer(lower_bound as Integer)),
+                        PgExpression::Sum(vec![
+                            PgExpression::Var(Var(TIME.0), Type::Integer),
+                            PgExpression::Opposite(Box::new(PgExpression::Var(
+                                Var(clock.0),
+                                Type::Integer,
+                            ))),
+                        ]),
+                    )))
+                });
+                let upper_bound = upper_bound.map(|upper_bound| {
+                    PgExpression::LessEq(Box::new((
+                        PgExpression::Sum(vec![
+                            PgExpression::Var(Var(TIME.0), Type::Integer),
+                            PgExpression::Opposite(Box::new(PgExpression::Var(
+                                Var(clock.0),
+                                Type::Integer,
+                            ))),
+                        ]),
+                        PgExpression::Const(Val::Integer(upper_bound as Integer)),
+                    )))
+                });
+                lower_bound.into_iter().chain(upper_bound)
+            });
+
+        let guard = PgExpression::And(time_constraints.chain(guard).collect());
+
+        self.add_transition(pre, action, post, Some(guard))
+    }
+
     /// Adds an autonomous transition to the PG, i.e., a transition enabled by the epsilon action.
     /// Requires specifying:
     ///
@@ -308,6 +392,16 @@ impl ProgramGraphBuilder {
         self.add_transition(pre, EPSILON, post, guard)
     }
 
+    pub fn add_autonomous_timed_transition(
+        &mut self,
+        pre: Location,
+        post: Location,
+        guard: Option<PgExpression>,
+        constraints: &[TimeConstraint],
+    ) -> Result<(), PgError> {
+        self.add_timed_transition(pre, EPSILON, post, guard, constraints)
+    }
+
     /// Produces a [`ProgramGraph`] defined by the [`ProgramGraphBuilder`]'s data and consuming it.
     ///
     /// Since the construction of the builder is already checked ad every step,
@@ -328,7 +422,7 @@ impl ProgramGraphBuilder {
             self.vars.len()
         );
         ProgramGraph {
-            current_location: Self::INITIAL_LOCATION,
+            current_location: Self::INITIAL,
             vars: self.vars,
             effects: Arc::new(self.effects.into_iter().map(FnEffect::from).collect()),
             transitions: Arc::new(

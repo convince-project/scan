@@ -54,6 +54,7 @@ pub const TAG_ELSE: &str = "else";
 pub const TAG_TRANSITION: &str = "transition";
 pub const ATTR_TARGET: &str = "target";
 pub const ATTR_TARGETEXPR: &str = "targetexpr";
+pub const ATTR_DELAY: &str = "delay";
 pub const ATTR_EVENT: &str = "event";
 pub const ATTR_COND: &str = "cond";
 pub const TAG_ONENTRY: &str = "onentry";

@@ -5,6 +5,7 @@ use boa_ast::{Expression as BoaExpression, StatementListItem};
 use log::{error, info, trace, warn};
 use quick_xml::events::attributes::{AttrError, Attribute};
 use quick_xml::{events, events::Event, Reader};
+use scan_core::Time;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{BufRead, Read};
@@ -361,6 +362,7 @@ impl Executable {
 pub struct Send {
     pub(crate) event: String,
     pub(crate) target: Option<Target>,
+    pub(crate) delay: Option<Time>,
     pub(crate) params: Vec<Param>,
 }
 
@@ -372,6 +374,7 @@ impl Send {
         let mut event: Option<String> = None;
         let mut target: Option<String> = None;
         let mut targetexpr: Option<String> = None;
+        let mut delay: Option<Time> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
@@ -385,6 +388,9 @@ impl Send {
                 }
                 ATTR_TARGETEXPR => {
                     targetexpr = Some(attr.unescape_value()?.into_owned());
+                }
+                ATTR_DELAY => {
+                    delay = Some(attr.unescape_value()?.into_owned().parse::<Time>()?);
                 }
                 key => {
                     error!("found unknown attribute {key} in {TAG_TRANSITION}");
@@ -415,6 +421,7 @@ impl Send {
         Ok(Send {
             event,
             target,
+            delay,
             params: Vec::new(),
         })
     }

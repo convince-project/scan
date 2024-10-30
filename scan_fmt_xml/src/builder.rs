@@ -269,6 +269,7 @@ impl ModelBuilder {
             Executable::Send(Send {
                 event,
                 target: _,
+                delay: _,
                 params,
             }) => {
                 let event_index = self.event_index(event);
@@ -1632,12 +1633,41 @@ impl ModelBuilder {
             Executable::Send(Send {
                 event,
                 target,
+                delay,
                 params: send_params,
             }) => {
                 let event_idx = *self
                     .event_indexes
                     .get(event)
                     .ok_or(anyhow!("event not found"))?;
+                let mut loc = loc;
+                if let Some(delay) = delay {
+                    // WARN NOTE FIXME: here we could reuse some other clock instead of creating a new one every time.
+                    let reset = self.cs.new_action(pg_id).expect("action");
+                    let clock = self.cs.new_clock(pg_id).expect("new clock");
+                    self.cs
+                        .reset_clock(pg_id, reset, clock)
+                        .expect("reset clock");
+                    let next_loc = self
+                        .cs
+                        .new_timed_location(pg_id, &[(clock, None, Some(*delay))])
+                        .expect("PG exists");
+                    self.cs
+                        .add_transition(pg_id, loc, reset, next_loc, None)
+                        .expect("params are right");
+                    loc = next_loc;
+                    let next_loc = self.cs.new_location(pg_id).expect("PG exists");
+                    self.cs
+                        .add_autonomous_timed_transition(
+                            pg_id,
+                            loc,
+                            next_loc,
+                            None,
+                            &[(clock, Some(*delay), None)],
+                        )
+                        .expect("autonomous timed transition");
+                    loc = next_loc;
+                }
                 if let Some(target) = target {
                     let done_loc = self.cs.new_location(pg_id)?;
                     let targets;
@@ -1723,6 +1753,7 @@ impl ModelBuilder {
                             &Executable::Send(Send {
                                 event: event.to_owned(),
                                 target: target_name.map(Target::Id),
+                                delay: *delay,
                                 params: send_params.to_owned(),
                             }),
                             pg_id,

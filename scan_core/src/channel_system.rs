@@ -95,8 +95,10 @@
 mod builder;
 pub use builder::*;
 
-use crate::grammar::*;
-use crate::program_graph::{Action as PgAction, Location as PgLocation, Var as PgVar, *};
+use crate::program_graph::{
+    Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
+};
+use crate::{grammar::*, Time};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use thiserror::Error;
@@ -141,6 +143,11 @@ pub struct Action(PgId, PgAction);
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Var(PgId, PgVar);
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct Clock(PgId, PgClock);
+
+pub type TimeConstraint = (Clock, Option<Time>, Option<Time>);
 
 /// A message to be sent through a CS's channel.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -246,6 +253,7 @@ pub enum EventType {
 /// and thus the CS will always be in a consistent state.
 #[derive(Debug, Clone)]
 pub struct ChannelSystem {
+    time: Time,
     program_graphs: Vec<ProgramGraph>,
     channels: Arc<Vec<(Type, Option<usize>)>>,
     communications: Arc<HashMap<Action, (Channel, Message)>>,
@@ -253,6 +261,11 @@ pub struct ChannelSystem {
 }
 
 impl ChannelSystem {
+    #[inline(always)]
+    pub fn time(&self) -> Time {
+        self.time
+    }
+
     /// Iterates over all transitions that can be admitted in the current state.
     ///
     /// An admittable transition is characterized by the PG it executes on, the required action and the post-state
@@ -401,6 +414,27 @@ impl ChannelSystem {
                 .map_err(|err| CsError::ProgramGraph(pg_id, err))
                 .map(|()| None)
         }
+    }
+
+    /// Tries waiting for the given delta of time.
+    /// Returns error if any of the PG cannot wait due to some time invariant.
+    pub fn wait(&mut self, delta: Time) -> Result<(), CsError> {
+        let res = self
+            .program_graphs
+            .iter_mut()
+            .enumerate()
+            .try_for_each(|(idx, pg)| {
+                pg.wait(delta)
+                    .map_err(|err| CsError::ProgramGraph(PgId(idx), err))
+            });
+        if res.is_ok() {
+            self.time += delta;
+        } else {
+            self.program_graphs
+                .iter_mut()
+                .for_each(|pg| pg.set_time(self.time));
+        }
+        res
     }
 }
 

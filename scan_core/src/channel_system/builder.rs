@@ -1,6 +1,6 @@
 use super::{
-    Action, Channel, ChannelSystem, CsError, Location, Message, PgError, PgExpression, PgId,
-    ProgramGraph, ProgramGraphBuilder, Var,
+    Action, Channel, ChannelSystem, Clock, CsError, Location, Message, PgError, PgExpression, PgId,
+    ProgramGraph, ProgramGraphBuilder, TimeConstraint, Var,
 };
 use crate::grammar::Type;
 use crate::Expression;
@@ -151,6 +151,13 @@ impl ChannelSystemBuilder {
         Ok(Var(pg_id, var))
     }
 
+    pub fn new_clock(&mut self, pg_id: PgId) -> Result<Clock, CsError> {
+        self.program_graphs
+            .get_mut(pg_id.0)
+            .ok_or(CsError::MissingPg(pg_id))
+            .map(|pg| Clock(pg_id, pg.new_clock()))
+    }
+
     /// Adds a new action to the given PG.
     ///
     /// It fails if the CS contains no such PG.
@@ -225,6 +232,27 @@ impl ChannelSystemBuilder {
         }
     }
 
+    pub fn reset_clock(
+        &mut self,
+        pg_id: PgId,
+        action: Action,
+        clock: Clock,
+    ) -> Result<(), CsError> {
+        if action.0 != pg_id {
+            Err(CsError::ActionNotInPg(action, pg_id))
+        } else if clock.0 != pg_id {
+            Err(CsError::DifferentPgs(pg_id, clock.0))
+        } else {
+            self.program_graphs
+                .get_mut(pg_id.0)
+                .ok_or(CsError::MissingPg(pg_id))
+                .and_then(|pg| {
+                    pg.reset_clock(action.1, clock.1)
+                        .map_err(|err| CsError::ProgramGraph(pg_id, err))
+                })
+        }
+    }
+
     /// Adds a new location to the given PG.
     ///
     /// It fails if the CS contains no such PG.
@@ -235,6 +263,28 @@ impl ChannelSystemBuilder {
             .get_mut(pg_id.0)
             .ok_or(CsError::MissingPg(pg_id))
             .map(|pg| Location(pg_id, pg.new_location()))
+    }
+
+    /// TODO
+    pub fn new_timed_location(
+        &mut self,
+        pg_id: PgId,
+        invariants: &[TimeConstraint],
+    ) -> Result<Location, CsError> {
+        let invariants = invariants
+            .iter()
+            .map(|(c, l, u)| {
+                if c.0 == pg_id {
+                    Ok((c.1, *l, *u))
+                } else {
+                    Err(CsError::DifferentPgs(pg_id, c.0))
+                }
+            })
+            .collect::<Result<Vec<_>, CsError>>()?;
+        self.program_graphs
+            .get_mut(pg_id.0)
+            .ok_or(CsError::MissingPg(pg_id))
+            .map(|pg| Location(pg_id, pg.new_timed_location(&invariants)))
     }
 
     /// Adds a transition to the PG.
@@ -271,6 +321,46 @@ impl ChannelSystemBuilder {
         }
     }
 
+    pub fn add_timed_transition(
+        &mut self,
+        pg_id: PgId,
+        pre: Location,
+        action: Action,
+        post: Location,
+        guard: Option<CsExpression>,
+        constraints: &[TimeConstraint],
+    ) -> Result<(), CsError> {
+        if action.0 != pg_id {
+            Err(CsError::ActionNotInPg(action, pg_id))
+        } else if pre.0 != pg_id {
+            Err(CsError::LocationNotInPg(pre, pg_id))
+        } else if post.0 != pg_id {
+            Err(CsError::LocationNotInPg(post, pg_id))
+        } else {
+            // Turn CsExpression into a PgExpression for Program Graph pg_id
+            let guard = guard
+                .map(|guard| PgExpression::try_from((pg_id, guard)))
+                .transpose()?;
+            let constraints = constraints
+                .iter()
+                .map(|(c, l, u)| {
+                    if c.0 == pg_id {
+                        Ok((c.1, *l, *u))
+                    } else {
+                        Err(CsError::DifferentPgs(pg_id, c.0))
+                    }
+                })
+                .collect::<Result<Vec<_>, CsError>>()?;
+            self.program_graphs
+                .get_mut(pg_id.0)
+                .ok_or(CsError::MissingPg(pg_id))
+                .and_then(|pg| {
+                    pg.add_timed_transition(pre.1, action.1, post.1, guard, &constraints)
+                        .map_err(|err| CsError::ProgramGraph(pg_id, err))
+                })
+        }
+    }
+
     /// Adds an autonomous transition to the PG.
     ///
     /// Fails if the CS contains no such PG, or if the given variable or locations do not belong to it.
@@ -297,6 +387,43 @@ impl ChannelSystemBuilder {
                 .ok_or(CsError::MissingPg(pg_id))
                 .and_then(|pg| {
                     pg.add_autonomous_transition(pre.1, post.1, guard)
+                        .map_err(|err| CsError::ProgramGraph(pg_id, err))
+                })
+        }
+    }
+
+    pub fn add_autonomous_timed_transition(
+        &mut self,
+        pg_id: PgId,
+        pre: Location,
+        post: Location,
+        guard: Option<CsExpression>,
+        constraints: &[TimeConstraint],
+    ) -> Result<(), CsError> {
+        if pre.0 != pg_id {
+            Err(CsError::LocationNotInPg(pre, pg_id))
+        } else if post.0 != pg_id {
+            Err(CsError::LocationNotInPg(post, pg_id))
+        } else {
+            // Turn CsExpression into a PgExpression for Program Graph pg_id
+            let guard = guard
+                .map(|guard| PgExpression::try_from((pg_id, guard)))
+                .transpose()?;
+            let constraints = constraints
+                .iter()
+                .map(|(c, l, u)| {
+                    if c.0 == pg_id {
+                        Ok((c.1, *l, *u))
+                    } else {
+                        Err(CsError::DifferentPgs(pg_id, c.0))
+                    }
+                })
+                .collect::<Result<Vec<_>, CsError>>()?;
+            self.program_graphs
+                .get_mut(pg_id.0)
+                .ok_or(CsError::MissingPg(pg_id))
+                .and_then(|pg| {
+                    pg.add_autonomous_timed_transition(pre.1, post.1, guard, &constraints)
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))
                 })
         }
@@ -456,11 +583,23 @@ impl ChannelSystemBuilder {
         program_graphs.shrink_to_fit();
         self.channels.shrink_to_fit();
         self.communications.shrink_to_fit();
+        let message_queue = self
+            .channels
+            .iter()
+            .map(|(_, cap)| {
+                if let Some(cap) = cap {
+                    VecDeque::with_capacity(*cap)
+                } else {
+                    VecDeque::default()
+                }
+            })
+            .collect();
 
         ChannelSystem {
+            time: 0,
             program_graphs,
             communications: Arc::new(self.communications),
-            message_queue: vec![VecDeque::default(); self.channels.len()],
+            message_queue,
             channels: Arc::new(self.channels),
         }
     }
