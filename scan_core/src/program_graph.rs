@@ -74,7 +74,10 @@ use crate::Time;
 // TODO: use fast hasher (?)
 use super::grammar::*;
 use core::panic;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use thiserror::Error;
 
 /// An indexing object for locations in a PG.
@@ -185,8 +188,13 @@ enum FnEffect {
     Receive(Var),
 }
 
-// QUESTION: is there a better/more efficient representation?
-type Transitions = HashMap<(Action, Location), Option<FnExpression<Var>>>;
+#[derive(Debug)]
+pub struct ProgramGraphDef {
+    effects: Vec<FnEffect>,
+    guards: HashMap<(Location, Action, Location), FnExpression<Var>>,
+    transitions: HashSet<(Location, Action, Location)>,
+    indexed_transitions: Vec<Vec<(Action, Location)>>,
+}
 
 /// Representation of a PG that can be executed transition-by-transition.
 ///
@@ -202,8 +210,7 @@ type Transitions = HashMap<(Action, Location), Option<FnExpression<Var>>>;
 pub struct ProgramGraph {
     current_location: Location,
     vars: Vec<Val>,
-    effects: Arc<Vec<FnEffect>>,
-    transitions: Arc<Vec<Transitions>>,
+    def: Arc<ProgramGraphDef>,
 }
 
 impl ProgramGraph {
@@ -235,9 +242,9 @@ impl ProgramGraph {
     /// (the pre-state being necessarily the current state of the machine).
     /// The guard (if any) is guaranteed to be satisfied.
     pub fn possible_transitions(&self) -> impl Iterator<Item = (Action, Location)> + '_ {
-        self.transitions[self.current_location.0]
+        self.def.indexed_transitions[self.current_location.0]
             .iter()
-            .filter_map(|((action, post), guard)| {
+            .filter_map(|(action, post)| {
                 // WAIT should not be called directly!
                 if *action == WAIT {
                     None
@@ -250,10 +257,11 @@ impl ProgramGraph {
     }
 
     fn satisfies_guard(&self, action: Action, post_state: Location) -> Result<(), PgError> {
-        let guard = self.transitions[self.current_location.0]
-            .get(&(action, post_state))
-            .ok_or(PgError::MissingTransition)?;
-        if guard.as_ref().map_or(true, |guard| {
+        let guard = self
+            .def
+            .guards
+            .get(&(self.current_location, action, post_state));
+        if guard.map_or(true, |guard| {
             if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0].clone()) {
                 pass
             } else {
@@ -270,20 +278,23 @@ impl ProgramGraph {
     fn is_transition_active(&self, action: Action, post_state: Location) -> Result<bool, PgError> {
         if action == WAIT {
             return Err(PgError::Wait);
+        } else if !self
+            .def
+            .transitions
+            .contains(&(self.current_location, action, post_state))
+        {
+            return Err(PgError::MissingTransition);
         }
         self.satisfies_guard(action, post_state)?;
-        let mut vars = self.vars.clone();
-        if action != EPSILON && action != WAIT {
-            if let FnEffect::Effects(ref effects) = self.effects[action.0] {
-                for (var, effect) in effects {
-                    vars[var.0] = effect.eval(&|var| vars[var.0].clone());
+        if let Some(guard) = self.def.guards.get(&(post_state, WAIT, post_state)) {
+            let mut vars = self.vars.clone();
+            if action != EPSILON && action != WAIT {
+                if let FnEffect::Effects(ref effects) = self.def.effects[action.0] {
+                    for (var, effect) in effects {
+                        vars[var.0] = effect.eval(&|var| vars[var.0].clone());
+                    }
                 }
             }
-        }
-        let guard = self.transitions[post_state.0]
-            .get(&(WAIT, post_state))
-            .ok_or(PgError::MissingTransition)?;
-        if let Some(guard) = guard.as_ref() {
             if let Val::Boolean(pass) = guard.eval(&move |var| vars[var.0].clone()) {
                 Ok(pass)
             } else {
@@ -301,31 +312,47 @@ impl ProgramGraph {
     pub fn transition(&mut self, action: Action, post_state: Location) -> Result<(), PgError> {
         if action == WAIT {
             return Err(PgError::Wait);
+        } else if !self
+            .def
+            .transitions
+            .contains(&(self.current_location, action, post_state))
+        {
+            return Err(PgError::MissingTransition);
         }
         self.satisfies_guard(action, post_state)?;
-        let mut backup = Vec::new();
-        if action != EPSILON && action != WAIT {
-            if let FnEffect::Effects(ref effects) = self.effects[action.0] {
-                backup.reserve(effects.len());
+        if let Some(guard) = self.def.guards.get(&(post_state, WAIT, post_state)) {
+            let backup = self.vars.clone();
+            if action != EPSILON && action != WAIT {
+                if let FnEffect::Effects(ref effects) = self.def.effects[action.0] {
+                    for (var, effect) in effects {
+                        self.vars[var.0] = effect.eval(&|var| self.vars[var.0].clone());
+                    }
+                } else {
+                    return Err(PgError::Communication(action));
+                }
+            }
+            // Self::satisfies_guard should only be called after setting the post-location!
+            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0].clone()) {
+                if !pass {
+                    if action != EPSILON && action != WAIT {
+                        self.vars = backup;
+                    }
+                    return Err(PgError::UnsatisfiedGuard);
+                }
+            } else {
+                panic!("guard is not a boolean");
+            }
+        } else if action != EPSILON && action != WAIT {
+            if let FnEffect::Effects(ref effects) = self.def.effects[action.0] {
                 for (var, effect) in effects {
-                    backup.push((*var, self.vars[var.0].clone()));
                     self.vars[var.0] = effect.eval(&|var| self.vars[var.0].clone());
                 }
             } else {
                 return Err(PgError::Communication(action));
             }
         }
-        let pre_location = self.current_location;
-        // Self::satisfies_guard should only be called after setting the post-location!
         self.current_location = post_state;
-        let res = self.satisfies_guard(WAIT, post_state);
-        if res.is_err() {
-            for (var, val) in backup {
-                self.vars[var.0] = val;
-            }
-            self.current_location = pre_location;
-        }
-        res
+        Ok(())
     }
 
     /// Returns the current time of the Program Graph.
@@ -366,7 +393,7 @@ impl ProgramGraph {
 
     pub(crate) fn send(&mut self, action: Action, post_state: Location) -> Result<Val, PgError> {
         self.satisfies_guard(action, post_state)?;
-        if let FnEffect::Send(effect) = &self.effects[action.0] {
+        if let FnEffect::Send(effect) = &self.def.effects[action.0] {
             let val = effect.eval(&|var| self.vars[var.0].clone());
             self.current_location = post_state;
             Ok(val)
@@ -382,7 +409,7 @@ impl ProgramGraph {
         val: Val,
     ) -> Result<Val, PgError> {
         self.satisfies_guard(action, post_state)?;
-        if let FnEffect::Receive(var) = &self.effects[action.0] {
+        if let FnEffect::Receive(var) = &self.def.effects[action.0] {
             let var_content = self.vars.get_mut(var.0).expect("variable exists");
             if var_content.r#type() == val.r#type() {
                 let previous_val = var_content.clone();
@@ -476,15 +503,15 @@ mod tests {
         // Execution
         let mut pg = builder.build();
         assert_eq!(pg.possible_transitions().count(), 1);
-        pg.transition(initialize, center)?;
+        pg.transition(initialize, center).expect("initialize");
         assert_eq!(pg.possible_transitions().count(), 2);
-        pg.transition(move_right, right)?;
+        pg.transition(move_right, right).expect("move right");
         assert_eq!(pg.possible_transitions().count(), 1);
         pg.transition(move_right, right).expect_err("already right");
         assert_eq!(pg.possible_transitions().count(), 1);
-        pg.transition(move_left, center)?;
+        pg.transition(move_left, center).expect("move left");
         assert_eq!(pg.possible_transitions().count(), 2);
-        pg.transition(move_left, left)?;
+        pg.transition(move_left, left).expect("move left");
         assert_eq!(pg.possible_transitions().count(), 0);
         pg.transition(move_left, left).expect_err("battery = 0");
         Ok(())
