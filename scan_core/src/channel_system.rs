@@ -93,8 +93,9 @@
 //! ```
 
 mod builder;
-use ahash::AHashMap;
+// use ahash::AHashMap as HashMap;
 pub use builder::*;
+use hashbrown::HashMap;
 
 use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
@@ -257,7 +258,7 @@ pub struct ChannelSystem {
     time: Time,
     program_graphs: Vec<ProgramGraph>,
     channels: Arc<Vec<(Type, Option<usize>)>>,
-    communications: Arc<AHashMap<Action, (Channel, Message)>>,
+    communications: Arc<HashMap<Action, (Channel, Message)>>,
     message_queue: Vec<VecDeque<Val>>,
 }
 

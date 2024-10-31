@@ -4,7 +4,8 @@ use super::{
 };
 use crate::grammar::Type;
 use crate::Expression;
-use ahash::AHashMap;
+// use ahash::AHashMap as HashMap;
+use hashbrown::HashMap;
 use log::info;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -105,7 +106,7 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
 pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
     channels: Vec<(Type, Option<usize>)>,
-    communications: AHashMap<Action, (Channel, Message)>,
+    communications: HashMap<Action, (Channel, Message)>,
 }
 
 impl ChannelSystemBuilder {

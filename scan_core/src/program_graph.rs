@@ -67,8 +67,9 @@
 
 mod builder;
 
-use ahash::{AHashMap, AHashSet};
+// use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 pub use builder::*;
+use hashbrown::{HashMap, HashSet};
 
 use crate::Time;
 
@@ -187,8 +188,8 @@ enum FnEffect {
 #[derive(Debug)]
 pub struct ProgramGraphDef {
     effects: Vec<FnEffect>,
-    guards: AHashMap<(Location, Action, Location), FnExpression<Var>>,
-    transitions: AHashSet<(Location, Action, Location)>,
+    guards: HashMap<(Location, Action, Location), FnExpression<Var>>,
+    transitions: HashSet<(Location, Action, Location)>,
     indexed_transitions: Vec<Vec<(Action, Location)>>,
 }
 
