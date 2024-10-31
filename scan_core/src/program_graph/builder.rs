@@ -7,11 +7,9 @@ use crate::{
     program_graph::ProgramGraphDef,
     Integer,
 };
+use ahash::{AHashMap, AHashSet};
 use log::info;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 enum Effect {
@@ -44,10 +42,10 @@ impl From<Effect> for FnEffect {
 pub struct ProgramGraphBuilder {
     // Effects are indexed by actions
     effects: Vec<Effect>,
-    guards: HashMap<(Location, Action, Location), PgExpression>,
+    guards: AHashMap<(Location, Action, Location), PgExpression>,
     // Transitions are indexed by locations
     // We can assume there is at most one condition by logical disjunction
-    transitions: HashSet<(Location, Action, Location)>,
+    transitions: AHashSet<(Location, Action, Location)>,
     indexed_transitions: Vec<Vec<(Action, Location)>>,
     vars: Vec<Val>,
 }
@@ -67,8 +65,8 @@ impl ProgramGraphBuilder {
     pub fn new() -> Self {
         let mut pgb = Self {
             effects: Vec::new(),
-            guards: HashMap::new(),
-            transitions: HashSet::new(),
+            guards: AHashMap::new(),
+            transitions: AHashSet::new(),
             vars: Vec::new(),
             indexed_transitions: Vec::new(),
         };

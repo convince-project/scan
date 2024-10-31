@@ -93,13 +93,14 @@
 //! ```
 
 mod builder;
+use ahash::AHashMap;
 pub use builder::*;
 
 use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
 };
 use crate::{grammar::*, Time};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -256,7 +257,7 @@ pub struct ChannelSystem {
     time: Time,
     program_graphs: Vec<ProgramGraph>,
     channels: Arc<Vec<(Type, Option<usize>)>>,
-    communications: Arc<HashMap<Action, (Channel, Message)>>,
+    communications: Arc<AHashMap<Action, (Channel, Message)>>,
     message_queue: Vec<VecDeque<Val>>,
 }
 
@@ -322,7 +323,7 @@ impl ChannelSystem {
             // Channel capacity must never be exeeded!
             assert!(capacity.is_none() || capacity.is_some_and(|cap| queue.len() <= cap));
             match message {
-                Message::Send if capacity.is_some_and(|cap| queue.len() == cap) => {
+                Message::Send if capacity.is_some_and(|cap| queue.len() >= cap) => {
                     Err(CsError::OutOfCapacity(*channel))
                 }
                 Message::Receive if queue.is_empty() => Err(CsError::Empty(*channel)),

@@ -4,8 +4,9 @@ use super::{
 };
 use crate::grammar::Type;
 use crate::Expression;
+use ahash::AHashMap;
 use log::info;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// An expression using CS's [`Var`] as variables.
@@ -104,7 +105,7 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
 pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
     channels: Vec<(Type, Option<usize>)>,
-    communications: HashMap<Action, (Channel, Message)>,
+    communications: AHashMap<Action, (Channel, Message)>,
 }
 
 impl ChannelSystemBuilder {
