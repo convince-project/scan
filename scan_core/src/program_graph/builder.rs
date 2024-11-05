@@ -239,7 +239,7 @@ impl ProgramGraphBuilder {
     /// TODO
     pub fn new_timed_location(&mut self, invariants: &[TimeConstraint]) -> Location {
         // Locations are indexed progressively
-        let idx = self.transitions.len();
+        let idx = self.indexed_transitions.len();
         self.indexed_transitions.push(Vec::new());
         let loc = Location(idx);
         self.add_timed_transition(loc, WAIT, loc, None, invariants)
