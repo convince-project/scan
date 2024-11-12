@@ -45,42 +45,54 @@ impl Cli {
         }
     }
 
-    fn _counterexample(&self, scxml_model: ScxmlModel) -> Result<(), Box<dyn std::error::Error>> {
-        println!(
-            "Searching for counterexample with confidence={}, precision={}",
-            self.confidence, self.precision
-        );
-        if let Some(trace) = scxml_model.model.find_counterexample(
-            &scxml_model.guarantees,
-            &scxml_model.assumes,
-            self.confidence,
-            self.precision,
-        ) {
-            println!("Counterexample trace:");
-            scan::print_state(&scxml_model, scxml_model.model.labels());
-            for (event, state) in trace {
-                if matches!(event.event_type, EventType::Receive(_) | EventType::Send(_)) {
-                    print_event(&scxml_model, event);
-                    print_state(&scxml_model, state);
-                }
-            }
-        } else {
-            println!("No counter-example found");
-        }
-        Ok(())
-    }
+    // fn _counterexample(&self, scxml_model: ScxmlModel) -> Result<(), Box<dyn std::error::Error>> {
+    //     println!(
+    //         "Searching for counterexample with confidence={}, precision={}",
+    //         self.confidence, self.precision
+    //     );
+    //     if let Some(trace) = scxml_model.model.find_counterexample(
+    //         &scxml_model.guarantees,
+    //         &scxml_model.assumes,
+    //         self.confidence,
+    //         self.precision,
+    //     ) {
+    //         println!("Counterexample trace:");
+    //         scan::print_state(&scxml_model, scxml_model.model.labels());
+    //         for (event, state) in trace {
+    //             if matches!(event.event_type, EventType::Receive(_) | EventType::Send(_)) {
+    //                 print_event(&scxml_model, event);
+    //                 print_state(&scxml_model, state);
+    //             }
+    //         }
+    //     } else {
+    //         println!("No counter-example found");
+    //     }
+    //     Ok(())
+    // }
 
     fn trace(&self, scxml_model: ScxmlModel) -> Result<(), Box<dyn std::error::Error>> {
         println!("Execution trace");
         let (trace, result) = scxml_model.model.clone().example(
-            &scxml_model.guarantees,
-            &scxml_model.assumes,
+            Vec::from_iter(
+                scxml_model
+                    .guarantees
+                    .iter()
+                    .cloned()
+                    .map(StateValuationVector::new),
+            ),
+            Vec::from_iter(
+                scxml_model
+                    .assumes
+                    .iter()
+                    .cloned()
+                    .map(StateValuationVector::new),
+            ),
             self.length,
         );
         scan::print_state(&scxml_model, scxml_model.model.labels());
-        for (event, state) in trace {
+        for (time, event, state) in trace {
             if matches!(event.event_type, EventType::Receive(_) | EventType::Send(_)) {
-                print_event(&scxml_model, event);
+                print_event(&scxml_model, event, time);
                 print_state(&scxml_model, state);
             }
         }
@@ -111,8 +123,18 @@ impl Cli {
         let bar_f = f.to_owned();
         std::thread::spawn(move || print_progress_bar(bar_s, bar_f, confidence, precision));
         scxml_model.model.par_adaptive(
-            &scxml_model.guarantees,
-            &scxml_model.assumes,
+            &Vec::from_iter(
+                scxml_model
+                    .guarantees
+                    .into_iter()
+                    .map(StateValuationVector::new),
+            ),
+            &Vec::from_iter(
+                scxml_model
+                    .assumes
+                    .into_iter()
+                    .map(StateValuationVector::new),
+            ),
             confidence,
             precision,
             self.length,

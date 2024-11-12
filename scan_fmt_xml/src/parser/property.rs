@@ -1,4 +1,4 @@
-use super::{ATTR_EVENT, ATTR_EXPR, ATTR_PARAM};
+use super::{ATTR_EVENT, ATTR_EXPR, ATTR_LOWER_BOUND, ATTR_PARAM, ATTR_UPPER_BOUND};
 use crate::parser::{ParserError, ATTR_ID, ATTR_REFID, ATTR_TYPE, TAG_CONST, TAG_VAR};
 use anyhow::{anyhow, Context};
 use boa_ast::StatementListItem;
@@ -10,7 +10,7 @@ use quick_xml::{
     },
     Reader,
 };
-use scan_core::{Expression, Float, Mtl, Val};
+use scan_core::{Expression, Float, Pmtl, Time, Val};
 use std::{collections::HashMap, io::BufRead, str};
 
 const TAG_PORTS: &str = "ports";
@@ -37,10 +37,11 @@ const TAG_IMPLIES: &str = "implies";
 const TAG_SUM: &str = "sum";
 const TAG_MULT: &str = "mult";
 const TAG_OPPOSITE: &str = "opposite";
-const TAG_UNTIL: &str = "until";
-const TAG_ALWAYS: &str = "always";
-const TAG_EVENTUALLY: &str = "eventually";
+const TAG_SINCE: &str = "since";
+const TAG_HISTORICALLY: &str = "historically";
+const TAG_PREVIOUSLY: &str = "previously";
 const TAG_TRUE: &str = "true";
+const TAG_FALSE: &str = "false";
 
 #[derive(Debug, Clone)]
 enum PropertyTag {
@@ -50,9 +51,9 @@ enum PropertyTag {
     Predicates,
     Predicate(String, Option<Expression<String>>),
     Guarantees,
-    Guarantee(String, Option<Mtl<String>>),
+    Guarantee(String, Option<Pmtl<String>>),
     Assumes,
-    Assume(String, Option<Mtl<String>>),
+    Assume(String, Option<Pmtl<String>>),
     // === Expression Tags ===
     Not(Option<Expression<String>>),
     Implies(Option<Expression<String>>, Option<Expression<String>>),
@@ -66,14 +67,14 @@ enum PropertyTag {
     LessEq(Option<Expression<String>>, Option<Expression<String>>),
     Greater(Option<Expression<String>>, Option<Expression<String>>),
     GreaterEq(Option<Expression<String>>, Option<Expression<String>>),
-    // === MTL Tags ===
-    MtlNot(Option<Mtl<String>>),
-    MtlImplies(Option<Mtl<String>>, Option<Mtl<String>>),
-    MtlAnd(Vec<Mtl<String>>),
-    MtlOr(Vec<Mtl<String>>),
-    MtlUntil(Option<Mtl<String>>, Option<Mtl<String>>),
-    MtlAlways(Option<Mtl<String>>),
-    MtlEventually(Option<Mtl<String>>),
+    // === PMTL Tags ===
+    PmtlNot(Option<Pmtl<String>>),
+    PmtlImplies(Option<Pmtl<String>>, Option<Pmtl<String>>),
+    PmtlAnd(Vec<Pmtl<String>>),
+    PmtlOr(Vec<Pmtl<String>>),
+    PmtlSince(Option<Pmtl<String>>, Option<Pmtl<String>>, Time, Time),
+    PmtlHistorically(Option<Pmtl<String>>, Time, Time),
+    PmtlPreviously(Option<Pmtl<String>>, Time, Time),
 }
 
 impl PropertyTag {
@@ -96,18 +97,18 @@ impl PropertyTag {
         )
     }
 
-    fn is_mtl(&self) -> bool {
+    fn is_pmtl(&self) -> bool {
         matches!(
             self,
             PropertyTag::Guarantee(_, _)
                 | PropertyTag::Assume(_, _)
-                | PropertyTag::MtlAnd(_)
-                | PropertyTag::MtlOr(_)
-                | PropertyTag::MtlImplies(_, _)
-                | PropertyTag::MtlUntil(_, _)
-                | PropertyTag::MtlNot(_)
-                | PropertyTag::MtlAlways(_)
-                | PropertyTag::MtlEventually(_)
+                | PropertyTag::PmtlAnd(_)
+                | PropertyTag::PmtlOr(_)
+                | PropertyTag::PmtlImplies(_, _)
+                | PropertyTag::PmtlSince(_, _, _, _)
+                | PropertyTag::PmtlNot(_)
+                | PropertyTag::PmtlPreviously(_, _, _)
+                | PropertyTag::PmtlHistorically(_, _, _)
         )
     }
 }
@@ -270,13 +271,13 @@ impl From<&PropertyTag> for &'static str {
             PropertyTag::LessEq(_, _) => TAG_LEQ,
             PropertyTag::Greater(_, _) => TAG_GREATER,
             PropertyTag::GreaterEq(_, _) => TAG_GEQ,
-            PropertyTag::And(_) | PropertyTag::MtlAnd(_) => TAG_AND,
-            PropertyTag::Or(_) | PropertyTag::MtlOr(_) => TAG_OR,
-            PropertyTag::Not(_) | PropertyTag::MtlNot(_) => TAG_NOT,
-            PropertyTag::Implies(_, _) | PropertyTag::MtlImplies(_, _) => TAG_IMPLIES,
-            PropertyTag::MtlUntil(_, _) => TAG_UNTIL,
-            PropertyTag::MtlAlways(_) => TAG_ALWAYS,
-            PropertyTag::MtlEventually(_) => TAG_EVENTUALLY,
+            PropertyTag::Or(_) | PropertyTag::PmtlOr(_) => TAG_OR,
+            PropertyTag::Implies(_, _) | PropertyTag::PmtlImplies(_, _) => TAG_IMPLIES,
+            PropertyTag::And(_) | PropertyTag::PmtlAnd(_) => TAG_AND,
+            PropertyTag::Not(_) | PropertyTag::PmtlNot(_) => TAG_NOT,
+            PropertyTag::PmtlSince(_, _, _, _) => TAG_SINCE,
+            PropertyTag::PmtlPreviously(_, _, _) => TAG_PREVIOUSLY,
+            PropertyTag::PmtlHistorically(_, _, _) => TAG_HISTORICALLY,
             PropertyTag::Sum(_) => TAG_SUM,
             PropertyTag::Mult(_) => TAG_MULT,
             PropertyTag::Opposite(_) => TAG_OPPOSITE,
@@ -288,8 +289,8 @@ impl From<&PropertyTag> for &'static str {
 pub struct Properties {
     pub(crate) ports: HashMap<String, ParserPort>,
     pub(crate) predicates: HashMap<String, Expression<String>>,
-    pub(crate) guarantees: HashMap<String, Mtl<String>>,
-    pub(crate) assumes: HashMap<String, Mtl<String>>,
+    pub(crate) guarantees: HashMap<String, Pmtl<String>>,
+    pub(crate) assumes: HashMap<String, Pmtl<String>>,
 }
 
 impl Properties {
@@ -417,26 +418,33 @@ impl Properties {
                         TAG_OPPOSITE if stack.last().is_some_and(PropertyTag::is_expression) => {
                             stack.push(PropertyTag::Opposite(None))
                         }
-                        TAG_AND if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                            stack.push(PropertyTag::MtlAnd(Vec::new()))
+                        TAG_AND if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                            stack.push(PropertyTag::PmtlAnd(Vec::new()))
                         }
-                        TAG_OR if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                            stack.push(PropertyTag::MtlOr(Vec::new()))
+                        TAG_OR if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                            stack.push(PropertyTag::PmtlOr(Vec::new()))
                         }
-                        TAG_NOT if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                            stack.push(PropertyTag::MtlNot(None))
+                        TAG_NOT if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                            stack.push(PropertyTag::PmtlNot(None))
                         }
-                        TAG_IMPLIES if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                            stack.push(PropertyTag::MtlImplies(None, None))
+                        TAG_IMPLIES if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                            stack.push(PropertyTag::PmtlImplies(None, None))
                         }
-                        TAG_UNTIL if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                            stack.push(PropertyTag::MtlUntil(None, None))
+                        TAG_SINCE if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                            let (lower_bound, upper_bound) = Self::parse_bounds(tag)?;
+                            stack.push(PropertyTag::PmtlSince(None, None, lower_bound, upper_bound))
                         }
-                        TAG_ALWAYS if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                            stack.push(PropertyTag::MtlAlways(None))
+                        TAG_HISTORICALLY if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                            let (lower_bound, upper_bound) = Self::parse_bounds(tag)?;
+                            stack.push(PropertyTag::PmtlHistorically(
+                                None,
+                                lower_bound,
+                                upper_bound,
+                            ))
                         }
-                        TAG_EVENTUALLY if stack.last().is_some_and(PropertyTag::is_mtl) => {
-                            stack.push(PropertyTag::MtlEventually(None))
+                        TAG_PREVIOUSLY if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                            let (lower_bound, upper_bound) = Self::parse_bounds(tag)?;
+                            stack.push(PropertyTag::PmtlPreviously(None, lower_bound, upper_bound))
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
@@ -592,47 +600,68 @@ impl Properties {
                                     let expr = expr.ok_or(anyhow!("missing expr in not"))?;
                                     push_expr(&mut stack, Expression::Opposite(Box::new(expr)))?;
                                 }
-                                PropertyTag::MtlAnd(exprs)
-                                    if stack.last().is_some_and(PropertyTag::is_mtl) =>
+                                PropertyTag::PmtlAnd(exprs)
+                                    if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
-                                    push_mtl(&mut stack, Mtl::And(exprs))?;
+                                    push_pmtl(&mut stack, Pmtl::And(exprs))?;
                                 }
-                                PropertyTag::MtlOr(exprs)
-                                    if stack.last().is_some_and(PropertyTag::is_mtl) =>
+                                PropertyTag::PmtlOr(exprs)
+                                    if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
-                                    push_mtl(&mut stack, Mtl::Or(exprs))?;
+                                    push_pmtl(&mut stack, Pmtl::Or(exprs))?;
                                 }
-                                PropertyTag::MtlNot(expr)
-                                    if stack.last().is_some_and(PropertyTag::is_mtl) =>
+                                PropertyTag::PmtlNot(expr)
+                                    if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
                                     let expr = expr.ok_or(anyhow!("missing expr in not"))?;
-                                    push_mtl(&mut stack, Mtl::Not(Box::new(expr)))?;
+                                    push_pmtl(&mut stack, Pmtl::Not(Box::new(expr)))?;
                                 }
-                                PropertyTag::MtlImplies(lhs, rhs)
-                                    if stack.last().is_some_and(PropertyTag::is_mtl) =>
+                                PropertyTag::PmtlImplies(lhs, rhs)
+                                    if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
                                     let lhs = lhs.ok_or(anyhow!("missing lhs in implies"))?;
                                     let rhs = rhs.ok_or(anyhow!("missing rhs in implies"))?;
-                                    push_mtl(&mut stack, Mtl::Implies(Box::new((lhs, rhs))))?;
+                                    push_pmtl(&mut stack, Pmtl::Implies(Box::new((lhs, rhs))))?;
                                 }
-                                PropertyTag::MtlUntil(lhs, rhs)
-                                    if stack.last().is_some_and(PropertyTag::is_mtl) =>
+                                PropertyTag::PmtlSince(lhs, rhs, lower_bound, upper_bound)
+                                    if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
                                     let lhs = lhs.ok_or(anyhow!("missing lhs in implies"))?;
                                     let rhs = rhs.ok_or(anyhow!("missing rhs in implies"))?;
-                                    push_mtl(&mut stack, Mtl::Until(Box::new((lhs, rhs)), None))?;
+                                    push_pmtl(
+                                        &mut stack,
+                                        Pmtl::Since(Box::new((lhs, rhs)), lower_bound, upper_bound),
+                                    )?;
                                 }
-                                PropertyTag::MtlAlways(formula)
-                                    if stack.last().is_some_and(|tag| tag.is_mtl()) =>
-                                {
-                                    let formula = formula.ok_or(anyhow!("missing expr in not"))?;
-                                    push_mtl(&mut stack, Mtl::Always(Box::new(formula), None))?;
+                                PropertyTag::PmtlHistorically(
+                                    formula,
+                                    lower_bound,
+                                    upper_bound,
+                                ) if stack.last().is_some_and(PropertyTag::is_pmtl) => {
+                                    let formula =
+                                        formula.ok_or(anyhow!("missing rhs in implies"))?;
+                                    push_pmtl(
+                                        &mut stack,
+                                        Pmtl::Historically(
+                                            Box::new(formula),
+                                            lower_bound,
+                                            upper_bound,
+                                        ),
+                                    )?;
                                 }
-                                PropertyTag::MtlEventually(formula)
-                                    if stack.last().is_some_and(|tag| tag.is_mtl()) =>
+                                PropertyTag::PmtlPreviously(formula, lower_bound, upper_bound)
+                                    if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
-                                    let formula = formula.ok_or(anyhow!("missing expr in not"))?;
-                                    push_mtl(&mut stack, Mtl::Eventually(Box::new(formula), None))?;
+                                    let formula =
+                                        formula.ok_or(anyhow!("missing rhs in implies"))?;
+                                    push_pmtl(
+                                        &mut stack,
+                                        Pmtl::Previously(
+                                            Box::new(formula),
+                                            lower_bound,
+                                            upper_bound,
+                                        ),
+                                    )?;
                                 }
                                 PropertyTag::Ports
                                 | PropertyTag::Predicates
@@ -696,10 +725,10 @@ impl Properties {
                             let expr = Expression::Var(id, scan_core::Type::Product(Vec::new()));
                             push_expr(&mut stack, expr)?;
                         }
-                        TAG_VAR if stack.last().is_some_and(PropertyTag::is_mtl) => {
+                        TAG_VAR if stack.last().is_some_and(PropertyTag::is_pmtl) => {
                             let id = Self::parse_refid(tag)?;
-                            let expr = Mtl::Atom(id);
-                            push_mtl(&mut stack, expr)?;
+                            let expr = Pmtl::Atom(id);
+                            push_pmtl(&mut stack, expr)?;
                         }
                         TAG_CONST if stack.last().is_some_and(PropertyTag::is_expression) => {
                             let val = Self::parse_const(tag)?;
@@ -707,8 +736,12 @@ impl Properties {
                             push_expr(&mut stack, expr)?;
                         }
                         TAG_TRUE => {
-                            let expr = Mtl::True;
-                            push_mtl(&mut stack, expr)?;
+                            let expr = Pmtl::True;
+                            push_pmtl(&mut stack, expr)?;
+                        }
+                        TAG_FALSE => {
+                            let expr = Pmtl::False;
+                            push_pmtl(&mut stack, expr)?;
                         }
                         // Unknown tag: skip till maching end tag
                         _ => {
@@ -807,6 +840,29 @@ impl Properties {
             unknown => Err(anyhow!("unwnown type {unknown}")),
         }
     }
+
+    fn parse_bounds(tag: quick_xml::events::BytesStart<'_>) -> anyhow::Result<(Time, Time)> {
+        let mut lower_bound = 0;
+        let mut upper_bound = Time::MAX;
+        for attr in tag
+            .attributes()
+            .collect::<Result<Vec<Attribute>, AttrError>>()?
+        {
+            match str::from_utf8(attr.key.as_ref())? {
+                ATTR_LOWER_BOUND => {
+                    lower_bound = attr.unescape_value()?.parse::<Time>()?;
+                }
+                ATTR_UPPER_BOUND => {
+                    upper_bound = attr.unescape_value()?.parse::<Time>()?;
+                }
+                key => {
+                    error!("found unknown attribute {key}");
+                    return Err(anyhow::Error::new(ParserError::UnknownKey(key.to_owned())));
+                }
+            }
+        }
+        Ok((lower_bound, upper_bound))
+    }
 }
 
 fn push_expr(stack: &mut [PropertyTag], expr: Expression<String>) -> anyhow::Result<()> {
@@ -853,23 +909,23 @@ fn push_expr(stack: &mut [PropertyTag], expr: Expression<String>) -> anyhow::Res
     Ok(())
 }
 
-fn push_mtl(stack: &mut [PropertyTag], expr: Mtl<String>) -> anyhow::Result<()> {
+fn push_pmtl(stack: &mut [PropertyTag], expr: Pmtl<String>) -> anyhow::Result<()> {
     match stack
         .last_mut()
-        .ok_or(anyhow!("MTL formula not contained inside proper tag"))?
+        .ok_or(anyhow!("PMTL formula not contained inside proper tag"))?
     {
         PropertyTag::Guarantee(_, formula)
         | PropertyTag::Assume(_, formula)
-        | PropertyTag::MtlAlways(formula)
-        | PropertyTag::MtlEventually(formula)
-        | PropertyTag::MtlNot(formula) => {
+        | PropertyTag::PmtlNot(formula)
+        | PropertyTag::PmtlHistorically(formula, _, _)
+        | PropertyTag::PmtlPreviously(formula, _, _) => {
             if formula.is_none() {
                 *formula = Some(expr);
             } else {
                 return Err(anyhow!("multiple expressions in guarantee"));
             }
         }
-        PropertyTag::MtlUntil(lhs, rhs) | PropertyTag::MtlImplies(lhs, rhs) => {
+        PropertyTag::PmtlSince(lhs, rhs, _, _) | PropertyTag::PmtlImplies(lhs, rhs) => {
             if lhs.is_none() {
                 *lhs = Some(expr);
             } else if rhs.is_none() {
@@ -878,10 +934,43 @@ fn push_mtl(stack: &mut [PropertyTag], expr: Mtl<String>) -> anyhow::Result<()> 
                 return Err(anyhow!("too many arguments in binary operator"));
             }
         }
-        PropertyTag::MtlAnd(exprs) | PropertyTag::MtlOr(exprs) => {
+        PropertyTag::PmtlAnd(exprs) | PropertyTag::PmtlOr(exprs) => {
             exprs.push(expr);
         }
-        other_tag => return Err(anyhow!("{other_tag:?} is not an MTL tag")),
+        other_tag => return Err(anyhow!("{other_tag:?} is not an PMTL tag")),
     }
     Ok(())
 }
+
+// fn push_mtl(stack: &mut [PropertyTag], expr: Mtl<String>) -> anyhow::Result<()> {
+//     match stack
+//         .last_mut()
+//         .ok_or(anyhow!("MTL formula not contained inside proper tag"))?
+//     {
+//         PropertyTag::Guarantee(_, formula)
+//         | PropertyTag::Assume(_, formula)
+//         | PropertyTag::MtlAlways(formula)
+//         | PropertyTag::MtlEventually(formula)
+//         | PropertyTag::MtlNot(formula) => {
+//             if formula.is_none() {
+//                 *formula = Some(expr);
+//             } else {
+//                 return Err(anyhow!("multiple expressions in guarantee"));
+//             }
+//         }
+//         PropertyTag::MtlUntil(lhs, rhs) | PropertyTag::MtlImplies(lhs, rhs) => {
+//             if lhs.is_none() {
+//                 *lhs = Some(expr);
+//             } else if rhs.is_none() {
+//                 *rhs = Some(expr);
+//             } else {
+//                 return Err(anyhow!("too many arguments in binary operator"));
+//             }
+//         }
+//         PropertyTag::MtlAnd(exprs) | PropertyTag::MtlOr(exprs) => {
+//             exprs.push(expr);
+//         }
+//         other_tag => return Err(anyhow!("{other_tag:?} is not an MTL tag")),
+//     }
+//     Ok(())
+// }

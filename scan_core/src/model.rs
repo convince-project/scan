@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::channel_system::{Channel, ChannelSystem, Event, EventType};
 use crate::transition_system::TransitionSystem;
-use crate::{Expression, FnExpression, Val};
+use crate::{Expression, FnExpression, Time, Val};
 
 type FnMdExpression = FnExpression<Channel>;
 
@@ -123,5 +123,9 @@ impl TransitionSystem for CsModel {
                 }
             })
             .collect::<Vec<_>>()
+    }
+
+    fn time(&self) -> Time {
+        self.cs.time()
     }
 }

@@ -1,6 +1,6 @@
 use crossterm::style::Stylize;
 use scan_fmt_xml::{
-    scan_core::{channel_system, Val},
+    scan_core::{channel_system, Time, Val},
     ScxmlModel,
 };
 
@@ -19,9 +19,9 @@ pub fn print_state(scxml_model: &ScxmlModel, state: Vec<bool>) {
     }
 }
 
-pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event) {
+pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event, time: Time) {
     print!(
-        "{}",
+        "{time}: {}",
         scxml_model
             .fsm_names
             .get(&event.pg_id)

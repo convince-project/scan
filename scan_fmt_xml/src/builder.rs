@@ -19,8 +19,8 @@ use std::collections::{HashMap, HashSet};
 pub struct ScxmlModel {
     pub model: CsModel,
     pub predicates: Vec<String>,
-    pub guarantees: Vec<Mtl<Atom<Event>>>,
-    pub assumes: Vec<Mtl<Atom<Event>>>,
+    pub guarantees: Vec<Pmtl<Atom<Event>>>,
+    pub assumes: Vec<Pmtl<Atom<Event>>>,
     pub fsm_names: HashMap<PgId, String>,
     pub fsm_indexes: HashMap<usize, String>,
     pub parameters: HashMap<Channel, (PgId, PgId, usize, String)>,
@@ -86,8 +86,8 @@ pub struct ModelBuilder {
     // that is needed
     parameters: HashMap<(PgId, PgId, usize, String), Channel>,
     // Properties
-    guarantees: HashMap<String, Mtl<String>>,
-    assumes: HashMap<String, Mtl<String>>,
+    guarantees: HashMap<String, Pmtl<String>>,
+    assumes: HashMap<String, Pmtl<String>>,
     predicates: HashMap<String, Expression<Channel>>,
     atoms: HashMap<String, Atom<Event>>,
     ports: HashMap<String, (Channel, Val)>,
@@ -370,9 +370,48 @@ impl ModelBuilder {
             boa_ast::Expression::NewTarget => todo!(),
             boa_ast::Expression::ImportMeta => todo!(),
             boa_ast::Expression::Assign(_) => todo!(),
-            boa_ast::Expression::Unary(_) => todo!(),
+            boa_ast::Expression::Unary(unary) => {
+                let type_name = self.infer_type(unary.target(), types, interner)?;
+                match unary.op() {
+                    boa_ast::expression::operator::unary::UnaryOp::Minus
+                    | boa_ast::expression::operator::unary::UnaryOp::Plus => Ok(type_name),
+                    boa_ast::expression::operator::unary::UnaryOp::Not => Ok(String::from("bool")),
+                    boa_ast::expression::operator::unary::UnaryOp::Tilde => todo!(),
+                    boa_ast::expression::operator::unary::UnaryOp::TypeOf => todo!(),
+                    boa_ast::expression::operator::unary::UnaryOp::Delete => todo!(),
+                    boa_ast::expression::operator::unary::UnaryOp::Void => todo!(),
+                }
+            }
             boa_ast::Expression::Update(_) => todo!(),
-            boa_ast::Expression::Binary(_) => todo!(),
+            boa_ast::Expression::Binary(bin) => {
+                let type_name = self.infer_type(bin.lhs(), types, interner)?;
+                let lhs = self
+                    .types
+                    .get(&type_name)
+                    .ok_or(anyhow!("unknown type {type_name}"))?
+                    .1
+                    .clone();
+                let rhs = self
+                    .infer_type(bin.lhs(), types, interner)
+                    .and_then(|t| self.types.get(&t).ok_or(anyhow!("unknown type {t}")))?
+                    .1
+                    .clone();
+                match bin.op() {
+                    boa_ast::expression::operator::binary::BinaryOp::Arithmetic(_) => {
+                        if lhs == rhs {
+                            Ok(type_name)
+                        } else {
+                            todo!()
+                        }
+                    }
+                    boa_ast::expression::operator::binary::BinaryOp::Bitwise(_) => todo!(),
+                    boa_ast::expression::operator::binary::BinaryOp::Relational(_)
+                    | boa_ast::expression::operator::binary::BinaryOp::Logical(_) => {
+                        Ok(String::from("bool"))
+                    }
+                    boa_ast::expression::operator::binary::BinaryOp::Comma => todo!(),
+                }
+            }
             boa_ast::Expression::BinaryInPrivate(_) => todo!(),
             boa_ast::Expression::Conditional(_) => todo!(),
             boa_ast::Expression::Await(_) => todo!(),
@@ -2366,7 +2405,7 @@ impl ModelBuilder {
                 .guarantees
                 .values()
                 .map(|prop| {
-                    Self::build_property(&self.atoms, prop, &pred_names)
+                    Self::build_pmtl_property(&self.atoms, prop, &pred_names)
                         .expect("hopefully a property")
                 })
                 .collect(),
@@ -2374,7 +2413,7 @@ impl ModelBuilder {
                 .assumes
                 .values()
                 .map(|prop| {
-                    Self::build_property(&self.atoms, prop, &pred_names)
+                    Self::build_pmtl_property(&self.atoms, prop, &pred_names)
                         .expect("hopefully a property")
                 })
                 .collect(),
@@ -2464,6 +2503,76 @@ impl ModelBuilder {
                 Box::new(Self::build_property(atoms, formula, predicates)?),
                 range.to_owned(),
             )),
+        }
+    }
+
+    fn build_pmtl_property(
+        atoms: &HashMap<String, Atom<Event>>,
+        property: &Pmtl<String>,
+        predicates: &HashMap<String, usize>,
+    ) -> anyhow::Result<Pmtl<Atom<Event>>> {
+        match property {
+            Pmtl::True => Ok(Pmtl::True),
+            Pmtl::False => Ok(Pmtl::False),
+            // FIXME TODO handle error
+            Pmtl::Atom(pred) => {
+                if let Some(atom) = atoms.get(pred.as_str()) {
+                    Ok(Pmtl::Atom(atom.to_owned()))
+                } else {
+                    Ok(Pmtl::Atom(Atom::Predicate(
+                        *predicates.get(pred.as_str()).unwrap(),
+                    )))
+                }
+            }
+            Pmtl::And(formulae) => Ok(Pmtl::And(
+                formulae
+                    .iter()
+                    .map(|f| Self::build_pmtl_property(atoms, f, predicates))
+                    .collect::<Result<_, _>>()?,
+            )),
+            Pmtl::Or(formulae) => Ok(Pmtl::Or(
+                formulae
+                    .iter()
+                    .map(|f| Self::build_pmtl_property(atoms, f, predicates))
+                    .collect::<Result<_, _>>()?,
+            )),
+            Pmtl::Not(formula) => Ok(Pmtl::Not(Box::new(Self::build_pmtl_property(
+                atoms, formula, predicates,
+            )?))),
+            Pmtl::Implies(formulae) => {
+                let (ref lhs, ref rhs) = **formulae;
+                Ok(Pmtl::Implies(Box::new((
+                    Self::build_pmtl_property(atoms, lhs, predicates)?,
+                    Self::build_pmtl_property(atoms, rhs, predicates)?,
+                ))))
+            }
+            Pmtl::Since(formulae, lower_bound, upper_bound) => {
+                let (ref lhs, ref rhs) = **formulae;
+                Ok(Pmtl::Since(
+                    Box::new((
+                        Self::build_pmtl_property(atoms, lhs, predicates)?,
+                        Self::build_pmtl_property(atoms, rhs, predicates)?,
+                    )),
+                    *lower_bound,
+                    *upper_bound,
+                ))
+            }
+            Pmtl::Historically(formula, lower_bound, upper_bound) => {
+                let formula = formula.as_ref();
+                Ok(Pmtl::Historically(
+                    Box::new(Self::build_pmtl_property(atoms, formula, predicates)?),
+                    *lower_bound,
+                    *upper_bound,
+                ))
+            }
+            Pmtl::Previously(formula, lower_bound, upper_bound) => {
+                let formula = formula.as_ref();
+                Ok(Pmtl::Previously(
+                    Box::new(Self::build_pmtl_property(atoms, formula, predicates)?),
+                    *lower_bound,
+                    *upper_bound,
+                ))
+            }
         }
     }
 }

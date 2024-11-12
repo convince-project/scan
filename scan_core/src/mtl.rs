@@ -39,7 +39,7 @@ where
     }
 }
 
-impl<A: Clone + PartialEq> Mtl<Atom<A>> {
+impl<A: Clone + Eq> Mtl<Atom<A>> {
     pub fn eval(&self, trace: &[(A, Vec<bool>)]) -> bool {
         match self {
             Mtl::True => true,

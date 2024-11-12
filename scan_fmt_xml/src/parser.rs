@@ -124,6 +124,13 @@ impl Parser {
                             moc: MoC::Fsm(Box::new(fsm)),
                         },
                     );
+                }
+            }
+            for entry in std::fs::read_dir(path)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    // visit_dirs(&path, cb)?;
                 } else if path
                     .extension()
                     .is_some_and(|ext| ext.to_str().unwrap() == "xml")
