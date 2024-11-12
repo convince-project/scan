@@ -9,13 +9,13 @@
 pub mod channel_system;
 mod grammar;
 mod model;
-mod mtl;
 mod pmtl;
 pub mod program_graph;
 mod transition_system;
 
 pub use grammar::*;
 pub use model::*;
-pub use mtl::*;
 pub use pmtl::*;
 pub use transition_system::*;
+
+pub type Time = usize;

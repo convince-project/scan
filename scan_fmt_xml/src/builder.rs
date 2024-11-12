@@ -2443,69 +2443,6 @@ impl ModelBuilder {
         }
     }
 
-    fn build_property(
-        atoms: &HashMap<String, Atom<Event>>,
-        property: &Mtl<String>,
-        predicates: &HashMap<String, usize>,
-    ) -> anyhow::Result<Mtl<Atom<Event>>> {
-        match property {
-            Mtl::True => Ok(Mtl::True),
-            // FIXME TODO handle error
-            Mtl::Atom(pred) => {
-                if let Some(atom) = atoms.get(pred.as_str()) {
-                    Ok(Mtl::Atom(atom.to_owned()))
-                } else {
-                    Ok(Mtl::Atom(Atom::Predicate(
-                        *predicates.get(pred.as_str()).unwrap(),
-                    )))
-                }
-            }
-            Mtl::And(formulae) => Ok(Mtl::And(
-                formulae
-                    .iter()
-                    .map(|f| Self::build_property(atoms, f, predicates))
-                    .collect::<Result<_, _>>()?,
-            )),
-            Mtl::Or(formulae) => Ok(Mtl::Or(
-                formulae
-                    .iter()
-                    .map(|f| Self::build_property(atoms, f, predicates))
-                    .collect::<Result<_, _>>()?,
-            )),
-            Mtl::Not(formula) => Ok(Mtl::Not(Box::new(Self::build_property(
-                atoms, formula, predicates,
-            )?))),
-            Mtl::Implies(formulae) => {
-                let (ref lhs, ref rhs) = **formulae;
-                Ok(Mtl::Implies(Box::new((
-                    Self::build_property(atoms, lhs, predicates)?,
-                    Self::build_property(atoms, rhs, predicates)?,
-                ))))
-            }
-            Mtl::Next(formula) => Self::build_property(atoms, formula, predicates)
-                .map(Box::new)
-                .map(Mtl::Next),
-            Mtl::Until(formulae, range) => {
-                let (ref lhs, ref rhs) = **formulae;
-                Ok(Mtl::Until(
-                    Box::new((
-                        Self::build_property(atoms, lhs, predicates)?,
-                        Self::build_property(atoms, rhs, predicates)?,
-                    )),
-                    range.to_owned(),
-                ))
-            }
-            Mtl::Always(formula, range) => Ok(Mtl::Always(
-                Box::new(Self::build_property(atoms, formula, predicates)?),
-                range.to_owned(),
-            )),
-            Mtl::Eventually(formula, range) => Ok(Mtl::Eventually(
-                Box::new(Self::build_property(atoms, formula, predicates)?),
-                range.to_owned(),
-            )),
-        }
-    }
-
     fn build_pmtl_property(
         atoms: &HashMap<String, Atom<Event>>,
         property: &Pmtl<String>,
