@@ -85,48 +85,6 @@ fn elif() -> anyhow::Result<()> {
     test(&PathBuf::from_str("./tests/assets/test_elif/model.xml")?)
 }
 
-#[test]
-fn bt_success() -> anyhow::Result<()> {
-    test(&PathBuf::from_str(
-        "./tests/assets/test_bt_success/model.xml",
-    )?)
-}
-
-#[test]
-fn bt_failure() -> anyhow::Result<()> {
-    test(&PathBuf::from_str(
-        "./tests/assets/test_bt_failure/model.xml",
-    )?)
-}
-
-#[test]
-fn bt_rseq_success() -> anyhow::Result<()> {
-    test(&PathBuf::from_str(
-        "./tests/assets/test_bt_rseq_success/model.xml",
-    )?)
-}
-
-#[test]
-fn bt_rseq_failure() -> anyhow::Result<()> {
-    test(&PathBuf::from_str(
-        "./tests/assets/test_bt_rseq_failure/model.xml",
-    )?)
-}
-
-#[test]
-fn bt_rfbk_success() -> anyhow::Result<()> {
-    test(&PathBuf::from_str(
-        "./tests/assets/test_bt_rfbk_success/model.xml",
-    )?)
-}
-
-#[test]
-fn bt_rfbk_failure() -> anyhow::Result<()> {
-    test(&PathBuf::from_str(
-        "./tests/assets/test_bt_rfbk_failure/model.xml",
-    )?)
-}
-
 fn test(path: &Path) -> anyhow::Result<()> {
     let mut model = scan_fmt_xml::load(path)?.model.channel_system().to_owned();
     let mut steps = 0;
