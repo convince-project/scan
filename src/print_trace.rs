@@ -1,4 +1,3 @@
-use crossterm::style::Stylize;
 use scan_fmt_xml::{
     scan_core::{channel_system, Time, Val},
     ScxmlModel,
@@ -22,27 +21,22 @@ pub fn print_state(scxml_model: &ScxmlModel, state: Vec<bool>) {
 pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event, time: Time) {
     print!(
         "{time}: {}",
-        scxml_model
-            .fsm_names
-            .get(&event.pg_id)
-            .unwrap()
-            .as_str()
-            .bold()
+        scxml_model.fsm_names.get(&event.pg_id).unwrap().as_str()
     );
     if let Some((src, trg, event_idx, param)) = scxml_model.parameters.get(&event.channel) {
         let event_name = scxml_model.events.get(event_idx).unwrap();
         match event.event_type {
             channel_system::EventType::Send(val) => println!(
                 " sends param {}={val:?} of event {} to {}",
-                param.as_str().bold().blue(),
-                event_name.as_str().bold().red(),
-                scxml_model.fsm_names.get(trg).unwrap().as_str().bold()
+                param.as_str(),
+                event_name.as_str(),
+                scxml_model.fsm_names.get(trg).unwrap().as_str()
             ),
             channel_system::EventType::Receive(val) => println!(
                 " receives param {}={val:?} of event {} from {}",
-                param.as_str().bold().blue(),
-                event_name.as_str().bold().red(),
-                scxml_model.fsm_names.get(src).unwrap().as_str().bold()
+                param.as_str(),
+                event_name.as_str(),
+                scxml_model.fsm_names.get(src).unwrap().as_str()
             ),
             _ => unreachable!(),
         }
@@ -57,10 +51,8 @@ pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event, time:
                                 .events
                                 .get(&(*sent_event as usize))
                                 .unwrap()
-                                .as_str()
-                                .bold()
-                                .red(),
-                            scxml_model.fsm_names.get(pg_id).unwrap().as_str().bold()
+                                .as_str(),
+                            scxml_model.fsm_names.get(pg_id).unwrap().as_str()
                         );
                     } else {
                         panic!("events should be pairs");
@@ -78,15 +70,12 @@ pub fn print_event(scxml_model: &ScxmlModel, event: channel_system::Event, time:
                                 .events
                                 .get(&(*sent_event as usize))
                                 .unwrap()
-                                .as_str()
-                                .bold()
-                                .red(),
+                                .as_str(),
                             scxml_model
                                 .fsm_indexes
                                 .get(&(*origin as usize))
                                 .unwrap()
-                                .as_str()
-                                .bold(),
+                                .as_str(),
                         );
                     } else {
                         panic!("events should be pairs");
