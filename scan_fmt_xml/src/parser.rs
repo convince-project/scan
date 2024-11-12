@@ -1,6 +1,5 @@
 //! Parser for SCAN's XML specification format.
 
-mod bt;
 mod fsm;
 mod omg_types;
 mod property;
@@ -17,7 +16,6 @@ use quick_xml::events::Event;
 use quick_xml::{Error as XmlError, Reader};
 use thiserror::Error;
 
-pub use self::bt::*;
 pub use self::fsm::*;
 pub use self::omg_types::*;
 pub use self::property::*;
@@ -48,8 +46,6 @@ pub enum ParserError {
     AlreadyDeclared(String),
     #[error("unknown model of computation: `{0}`")]
     UnknownMoC(String),
-    #[error("behavior tree missing root node")]
-    MissingBtRootNode,
     #[error("error parsing EcmaScript code")]
     EcmaScriptParsing,
     #[error("type annotation missing")]
@@ -81,22 +77,11 @@ impl From<ConvinceTag> for &'static str {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum MoC {
-    Fsm(Box<Fsm>),
-    Bt(Bt),
-}
-
-#[derive(Debug)]
-pub(crate) struct Process {
-    pub(crate) moc: MoC,
-}
-
 /// Represents a model specified in the CONVINCE-XML format.
 #[derive(Debug)]
 pub struct Parser {
     root_folder: PathBuf,
-    pub(crate) process_list: HashMap<String, Process>,
+    pub(crate) process_list: HashMap<String, Fsm>,
     pub(crate) types: OmgTypes,
     pub(crate) properties: Properties,
 }
@@ -118,12 +103,7 @@ impl Parser {
                     info!("creating reader from file {0}", path.display());
                     let mut reader = Reader::from_file(path)?;
                     let fsm = Fsm::parse(&mut reader)?;
-                    process_list.insert(
-                        fsm.scxml.id.to_owned(),
-                        Process {
-                            moc: MoC::Fsm(Box::new(fsm)),
-                        },
-                    );
+                    process_list.insert(fsm.scxml.id.to_owned(), fsm);
                 }
             }
             for entry in std::fs::read_dir(path)? {
@@ -320,28 +300,20 @@ impl Parser {
         let mut root_path = self.root_folder.clone();
         root_path.extend(&PathBuf::from(path));
         let moc = moc.ok_or(anyhow!(ParserError::MissingAttr(ATTR_MOC.to_string())))?;
-        let moc = match moc.as_str() {
+        let fsm = match moc.as_str() {
             "fsm" => {
                 info!("creating reader from file {0}", root_path.display());
                 let mut reader = Reader::from_file(root_path)?;
-                let fsm = Fsm::parse(&mut reader)?;
-                MoC::Fsm(Box::new(fsm))
-            }
-            "bt" => {
-                info!("creating reader from file {0}", root_path.display());
-                let mut reader = Reader::from_file(root_path)?;
-                let bt = Bt::parse_skill(&mut reader)?.pop().unwrap();
-                MoC::Bt(bt)
+                Fsm::parse(&mut reader)?
             }
             moc => {
                 return Err(anyhow!(ParserError::UnknownMoC(moc.to_string())));
             }
         };
-        let process = Process { moc };
         // Add process to list and check that no process was already in the list under the same name
         if self
             .process_list
-            .insert(process_id.to_owned(), process)
+            .insert(process_id.to_owned(), fsm)
             .is_none()
         {
             Ok(())
