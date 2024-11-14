@@ -50,6 +50,7 @@ impl Cli {
         if self.trace {
             std::fs::remove_dir_all("./traces").ok();
             std::fs::create_dir("./traces").expect("create traces dir");
+            std::fs::create_dir("./traces/.temp").expect("create traces dir");
             std::fs::create_dir("./traces/success").expect("create success dir");
             std::fs::create_dir("./traces/failure").expect("create failure dir");
             std::fs::create_dir("./traces/undetermined").expect("create undetermined dir");

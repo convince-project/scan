@@ -80,7 +80,7 @@ impl Publisher<Event> for PrintTrace {
             .index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.path =
-            PathBuf::from_str(format!("traces/{idx:04}.csv.gz").as_str()).expect("file path");
+            PathBuf::from_str(format!("traces/.temp/{idx:04}.csv.gz").as_str()).expect("file path");
         let file = File::create_new(&self.path).expect("create file");
         let enc = flate2::GzBuilder::new()
             .filename(format!("{idx:04}.csv"))
