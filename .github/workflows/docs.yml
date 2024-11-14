@@ -29,11 +29,19 @@ jobs:
       - name: Install and Build 🔧 
         run: |
           cargo doc --no-deps --workspace
-          echo "<meta http-equiv=\"refresh\" content=\"0; url=scan\">" > target/doc/index.html
+          mkdir scan_book/book/crates
+          mv target/doc/* scan_book/book/crates
+      - name: install-mdbook
+        run: |
+          cargo install mdbook --no-default-features --features search --vers "^0.4" --locked
+      - name: build-manual
+        run: |
+          mdbook build scan_book
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./target/doc
+          path: ./scan_book/book
+          
 
   docs-deploy:
     needs: docs-build
