@@ -29,7 +29,7 @@ jobs:
       - name: Install and Build 🔧 
         run: |
           cargo doc --no-deps --workspace
-          mkdir scan_book/book/crates
+          mkdir -p scan_book/book/crates
           mv target/doc/* scan_book/book/crates
       - name: install-mdbook
         run: |
