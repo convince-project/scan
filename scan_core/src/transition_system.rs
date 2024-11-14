@@ -23,7 +23,7 @@ pub trait Publisher<A> {
 
     fn publish(&mut self, action: &A, time: Time, state: &[bool]);
 
-    fn finalize(&mut self, success: Option<bool>);
+    fn finalize(self, success: Option<bool>);
 }
 
 /// Trait implementing a Transition System (TS), as defined in [^1].
@@ -80,25 +80,25 @@ pub trait TransitionSystem: Clone + Send + Sync {
                     .all(|b| b)
                 {
                     if current_len >= length {
-                        if let Some(publisher) = publisher.as_mut() {
+                        if let Some(publisher) = publisher {
                             publisher.finalize(None);
                         }
                         return None;
                     }
                 } else {
-                    if let Some(publisher) = publisher.as_mut() {
+                    if let Some(publisher) = publisher {
                         publisher.finalize(Some(false));
                     }
                     return Some(false);
                 }
             } else {
-                if let Some(publisher) = publisher.as_mut() {
+                if let Some(publisher) = publisher {
                     publisher.finalize(None);
                 }
                 return None;
             }
         }
-        if let Some(publisher) = publisher.as_mut() {
+        if let Some(publisher) = publisher {
             publisher.finalize(Some(true));
         }
         Some(true)

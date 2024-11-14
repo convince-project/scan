@@ -233,9 +233,14 @@ impl Publisher<Event> for PrintTrace {
         }
     }
 
-    fn finalize(&mut self, success: Option<bool>) {
-        if let Some(writer) = self.writer.as_mut() {
+    fn finalize(self, success: Option<bool>) {
+        if let Some(mut writer) = self.writer {
             writer.flush().expect("flush csv content");
+            writer
+                .into_inner()
+                .expect("encoder")
+                .try_finish()
+                .expect("finish");
         }
 
         let folder = match success {
