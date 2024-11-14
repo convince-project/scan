@@ -58,7 +58,6 @@ impl CsModelBuilder {
 /// Transition system model based on a [`ChannelSystem`].
 ///
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
-/// (i.e., of the [`Message`]s sent to and from [`Channel`]s)
 /// and determining a set of predicates.
 #[derive(Debug, Clone)]
 pub struct CsModel {

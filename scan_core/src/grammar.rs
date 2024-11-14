@@ -9,7 +9,7 @@ use ordered_float::OrderedFloat;
 use std::hash::Hash;
 use thiserror::Error;
 
-/// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
+/// The error type for operations with [`Type`].
 #[derive(Debug, Clone, Copy, Error)]
 pub enum TypeError {
     /// Types that should be matching are not,
