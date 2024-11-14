@@ -18,13 +18,21 @@ pub trait Oracle<A> {
     fn update(&mut self, action: &A, state: &[bool], time: Time) -> bool;
 }
 
+pub trait Publisher<A> {
+    fn init(&mut self);
+
+    fn publish(&mut self, action: &A, time: Time, state: &[bool]);
+
+    fn finalize(&mut self, success: Option<bool>);
+}
+
 /// Trait implementing a Transition System (TS), as defined in [^1].
 /// As such, it is possible to verify it against MTL specifications.
 ///
 /// [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
 pub trait TransitionSystem: Clone + Send + Sync {
     /// The type of the actions that trigger transitions between states in the TS.
-    type Action: Clone + PartialEq + Eq + Send + Sync;
+    type Action: Clone + Eq + Send + Sync;
 
     /// The label function of the TS valuates the propositions of its set of propositions for the current state.
     // TODO FIXME: bitset instead of Vec<bool>?
@@ -37,160 +45,30 @@ pub trait TransitionSystem: Clone + Send + Sync {
         0
     }
 
-    /// Verifies the TS against the provided [`Mtl`] specifications,
-    /// and, when it finds a counterexample, it returns iys execution trace.
-    ///
-    /// It uses a depth-first, exhaustive search algorithm.
-    /// Search is parallelized.
-    // fn check_exhaustive(self, props: Properties) -> Option<Vec<(Self::Action, Vec<bool>)>> {
-    //     // let oracle_guarantees: Vec<Box<dyn Oracle>> =
-    //     //     props.guarantees.into_iter().map(|_| todo!()).collect();
-    //     // let oracle_assumes: Vec<Box<dyn Oracle>> =
-    //     //     props.assumes.into_iter().map(|_| todo!()).collect();
-    //     self.transitions()
-    //         .into_par_iter()
-    //         .find_map_first(move |(action, ts)| {
-    //             let mut queue = Vec::from([(0, action, ts)]);
-    //             let mut trace = Vec::new();
-    //             while let Some((trace_len, action, ts)) = queue.pop() {
-    //                 assert!(trace_len <= trace.len());
-    //                 trace.truncate(trace_len);
-    //                 let labels = ts.labels();
-    //                 if !props.assumes.iter_mut().all(|p| p(&labels)) {
-    //                     // If some assume is not satisfied,
-    //                     // disregard state and move on.
-    //                     continue;
-    //                 } else if props.guarantees.iter_mut().all(|p| p(&labels)) {
-    //                     // If all guarantees are satisfied,
-    //                     // expand branching search for a counterexample along this trace.
-    //                     trace.push((action, labels));
-
-    //                     // pop from back and push back (stack): depth-first-search
-    //                     // Generate all possible transitions and resulting state.
-    //                     queue.extend(
-    //                         ts.transitions()
-    //                             .into_iter()
-    //                             .map(|(a, ts)| (trace_len + 1, a, ts)),
-    //                     );
-
-    //                     // pop from back and push in front (FIFO queue): width-first-search
-    //                     // WARN: requires memorizing all traces and uses too much memory.
-    //                 } else {
-    //                     // If guarantee is violated, we have found a counter-example!
-    //                     trace.push((action, labels));
-    //                     return Some(trace);
-    //                 }
-    //             }
-    //             None
-    //         })
-    // }
-
-    // fn find_counterexample(
-    //     &self,
-    //     guarantees: &[Mtl<Atom<Self::Action>>],
-    //     assumes: &[Mtl<Atom<Self::Action>>],
-    //     confidence: f64,
-    //     precision: f64,
-    // ) -> Option<Vec<(Self::Action, Vec<bool>)>> {
-    //     // WARN FIXME TODO: Account for inconclusive traces (e.g. where assumes are violated)
-    //     // Pass s=1, f=0 to adaptive criterion so that avarage success value v=1.
-    //     // In this case, the adaptive criterion is (much) lower than Okamoto criterion
-    //     // because v=1 is the furthest possible from v=0.5 where the two criteria coincide.
-    //     let runs = adaptive_bound(1f64, confidence, precision).ceil() as u32;
-    //     (0..runs).into_par_iter().find_map_any(|_| {
-    //         let mut rng = rand::thread_rng();
-    //         self.clone()
-    //             .trace_counterexample(guarantees, assumes, &mut rng)
-    //     })
-    // }
-
-    fn example<O>(
+    fn experiment<O, P, R: Rng>(
         mut self,
         mut guarantees: Vec<O>,
         mut assumes: Vec<O>,
-        length: usize,
-    ) -> (Trace<Self::Action>, Option<bool>)
-    where
-        O: Oracle<Self::Action> + Clone,
-    {
-        let rng = &mut rand::thread_rng();
-        // Preallocate maximum possible space to avoid reallocations.
-        // For large lengths, this might take plenty of memory.
-        let mut trace = Vec::with_capacity(length);
-
-        while let Some((action, new_ts)) = self.transitions().choose(rng) {
-            let state = new_ts.labels();
-            let time = new_ts.time();
-            trace.push((time, action.to_owned(), state.to_owned()));
-            self = new_ts.to_owned();
-            if assumes
-                .iter_mut()
-                .map(|o| o.update(action, &state, time))
-                .all(|b| b)
-            {
-                if guarantees
-                    .iter_mut()
-                    .map(|o| o.update(action, &state, time))
-                    .all(|b| b)
-                {
-                    if trace.len() >= length {
-                        break;
-                    } else {
-                        continue;
-                    }
-                } else {
-                    trace.shrink_to_fit();
-                    return (trace, Some(false));
-                }
-            } else {
-                trace.shrink_to_fit();
-                return (trace, None);
-            }
-        }
-        trace.shrink_to_fit();
-        (trace, Some(true))
-    }
-
-    // fn trace_counterexample<R: Rng>(
-    //     mut self,
-    //     guarantees: &[Mtl<Atom<Self::Action>>],
-    //     assumes: &[Mtl<Atom<Self::Action>>],
-    //     rng: &mut R,
-    // ) -> Option<Trace<Self::Action>> {
-    //     let mut trace = Vec::new();
-    //     while let Some((action, new_ts)) = self.transitions().choose(rng) {
-    //         trace.push((action.to_owned(), new_ts.labels()));
-    //         self = new_ts.to_owned();
-    //     }
-    //     if !assumes.iter().all(|p| p.eval(trace.as_slice())) {
-    //         // If some assume is not satisfied,
-    //         // disregard state and move on.
-    //         None
-    //     } else if guarantees.iter().all(|p| p.eval(trace.as_slice())) {
-    //         // If all guarantees are satisfied,
-    //         None
-    //     } else {
-    //         // If guarantee is violated, we have found a counter-example!
-    //         Some(trace)
-    //     }
-    // }
-
-    fn experiment<O, R: Rng>(
-        mut self,
-        mut guarantees: Vec<O>,
-        mut assumes: Vec<O>,
+        mut publisher: Option<P>,
         length: usize,
         rng: &mut R,
     ) -> Option<bool>
     where
         O: Oracle<Self::Action> + Clone,
+        P: Publisher<Self::Action>,
     {
         let mut current_len = 0;
+        if let Some(publisher) = publisher.as_mut() {
+            publisher.init();
+        }
         while let Some((action, new_ts)) = self.transitions().choose(rng) {
             current_len += 1;
             let state = new_ts.labels();
             let time = new_ts.time();
             self = new_ts.to_owned();
+            if let Some(publisher) = publisher.as_mut() {
+                publisher.publish(action, time, &state);
+            }
             if assumes
                 .iter_mut()
                 .map(|o| o.update(action, &state, time))
@@ -202,21 +80,31 @@ pub trait TransitionSystem: Clone + Send + Sync {
                     .all(|b| b)
                 {
                     if current_len >= length {
-                        break;
-                    } else {
-                        continue;
+                        if let Some(publisher) = publisher.as_mut() {
+                            publisher.finalize(None);
+                        }
+                        return None;
                     }
                 } else {
+                    if let Some(publisher) = publisher.as_mut() {
+                        publisher.finalize(Some(false));
+                    }
                     return Some(false);
                 }
             } else {
+                if let Some(publisher) = publisher.as_mut() {
+                    publisher.finalize(None);
+                }
                 return None;
             }
+        }
+        if let Some(publisher) = publisher.as_mut() {
+            publisher.finalize(Some(true));
         }
         Some(true)
     }
 
-    fn par_adaptive<O>(
+    fn par_adaptive<O, P>(
         &self,
         guarantees: &[O],
         assumes: &[O],
@@ -225,8 +113,10 @@ pub trait TransitionSystem: Clone + Send + Sync {
         length: usize,
         s: Arc<AtomicU32>,
         f: Arc<AtomicU32>,
+        publisher: Option<P>,
     ) where
         O: Oracle<Self::Action> + Clone + Send + Sync,
+        P: Publisher<Self::Action> + Clone + Send + Sync,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         (0..usize::MAX)
@@ -238,6 +128,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
                 if let Some(result) = self.clone().experiment(
                     Vec::from(guarantees),
                     Vec::from(assumes),
+                    publisher.clone(),
                     length,
                     &mut rng,
                 ) {

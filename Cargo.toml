@@ -17,3 +17,5 @@ clap = { version = "4.4.14", features = ["derive"] }
 env_logger = { workspace = true }
 log = { workspace = true }
 indicatif = { version = "0.17.8", features = ["improved_unicode"] }
+csv = "1.3.1"
+flate2 = "1.0.34"

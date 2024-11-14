@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 //
 // -[ ] WARN FIXME System is fragile if name/id/path do not coincide
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScxmlModel {
     pub model: CsModel,
     pub predicates: Vec<String>,
