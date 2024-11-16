@@ -29,6 +29,9 @@ pub struct Cli {
     /// Max length of execution trace before it is stopped
     #[arg(long, default_value = "1000000")]
     length: usize,
+    /// Max duration of execution before it is stopped (in model-time)
+    #[arg(long, default_value = "10000")]
+    duration: usize,
 }
 
 impl Cli {
@@ -73,6 +76,7 @@ impl Cli {
             confidence,
             precision,
             self.length,
+            self.duration,
             s.to_owned(),
             f.to_owned(),
             self.trace.then_some(PrintTrace::new(&scxml_model)),
