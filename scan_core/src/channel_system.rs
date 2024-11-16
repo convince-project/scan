@@ -96,6 +96,8 @@ mod builder;
 // use ahash::AHashMap as HashMap;
 pub use builder::*;
 use hashbrown::HashMap;
+use rand::seq::SliceRandom;
+use rand::Rng;
 
 use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
@@ -295,24 +297,49 @@ impl ChannelSystem {
             })
     }
 
-    pub(crate) fn resolve_deterministic_transitions(&mut self) {
-        for (pg_id, pg) in self.program_graphs.iter_mut().enumerate() {
-            let pg_id = PgId(pg_id);
-            loop {
-                // `take(2)` because we need no more to establish the transition is non-deterministic
-                let trans: Vec<_> = pg.possible_transitions().take(2).collect();
-                if trans.len() == 1 {
-                    let (action, post) = trans[0];
-                    if self.communications.contains_key(&Action(pg_id, action)) {
-                        break;
-                    } else {
-                        pg.transition(action, post).expect("transition is possible");
+    pub(crate) fn monaco_execution<R: Rng>(
+        &mut self,
+        rng: &mut R,
+        duration: Time,
+    ) -> Option<Event> {
+        let pg_list = Vec::from_iter((0..self.program_graphs.len()).map(PgId));
+        let mut shuffle = pg_list.to_owned();
+        while self.time <= duration {
+            while self.possible_transitions().any(|_| true) {
+                shuffle.shuffle(rng);
+                for &pg_id in &shuffle {
+                    let mut possible_transitions = self.program_graphs[pg_id.0]
+                        .possible_transitions()
+                        .collect::<Vec<_>>();
+                    possible_transitions.shuffle(rng);
+                    while let Some((action, post)) = possible_transitions.pop() {
+                        let cs_action = Action(pg_id, action);
+                        if self.communications.contains_key(&cs_action) {
+                            if self.check_communication(pg_id, cs_action).is_ok() {
+                                let cs_post = Location(pg_id, post);
+                                let event = self
+                                    .transition(pg_id, cs_action, cs_post)
+                                    .expect("successful transition");
+                                assert!(event.is_some(), "must be a communication event");
+                                return event;
+                            } else {
+                                continue;
+                            }
+                        } else {
+                            self.program_graphs[pg_id.0]
+                                .transition(action, post)
+                                .expect("success");
+                            possible_transitions = self.program_graphs[pg_id.0]
+                                .possible_transitions()
+                                .collect::<Vec<_>>();
+                            possible_transitions.shuffle(rng);
+                        }
                     }
-                } else {
-                    break;
                 }
             }
+            self.wait(1).ok()?;
         }
+        None
     }
 
     fn check_communication(&self, pg_id: PgId, action: Action) -> Result<(), CsError> {

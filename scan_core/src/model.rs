@@ -24,21 +24,19 @@ impl CsModelBuilder {
         }
     }
 
-    pub fn add_port(&mut self, channel: Channel, default: Val) -> Result<(), ()> {
+    pub fn add_port(&mut self, channel: Channel, default: Val) {
         if let std::collections::hash_map::Entry::Vacant(e) = self.vals.entry(channel) {
             e.insert(default);
-            Ok(())
         } else {
-            Err(())
+            panic!("entry is already taken");
         }
     }
 
-    pub fn add_predicate(&mut self, predicate: Expression<Channel>) -> Result<usize, ()> {
+    pub fn add_predicate(&mut self, predicate: Expression<Channel>) -> usize {
         let predicate = FnExpression::<Channel>::from(predicate);
         let _ = predicate.eval(&|port| self.vals.get(&port).unwrap().clone());
-        // let _ = predicate.eval(&|port| self.vals.get(&port).cloned());
         self.predicates.push(predicate);
-        Ok(self.predicates.len() - 1)
+        self.predicates.len() - 1
     }
 
     /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
@@ -69,6 +67,7 @@ pub struct CsModel {
 
 impl CsModel {
     /// Gets the underlying [`ChannelSystem`].
+    #[inline(always)]
     pub fn channel_system(&self) -> &ChannelSystem {
         &self.cs
     }
@@ -81,10 +80,7 @@ impl TransitionSystem for CsModel {
         self.predicates
             .iter()
             .map(|prop| {
-                if let Val::Boolean(b) = prop.eval(&|port| self.vals.get(&port).unwrap().clone())
-                // .eval(&|port| self.vals.get(&port).cloned())
-                // .expect("boolean value")
-                {
+                if let Val::Boolean(b) = prop.eval(&|port| self.vals.get(&port).unwrap().clone()) {
                     Some(b)
                 } else {
                     None
@@ -95,36 +91,22 @@ impl TransitionSystem for CsModel {
             .unwrap()
     }
 
-    fn transitions(mut self) -> Vec<(Event, CsModel)> {
-        // IntoIterator::into_iter(self.clone().list_transitions())
-        // Perform all transitions that are deterministic and do not interact with channels.
-        // The order in which these are performed does not matter.
-        self.cs.resolve_deterministic_transitions();
-        if self.cs.possible_transitions().next().is_none() {
-            self.cs.wait(1).ok();
-        }
-        self.cs
-            .possible_transitions()
-            .flat_map(|(pg_id, action, post)| {
-                let mut model = self.clone();
-                let event = model
-                    .cs
-                    .transition(pg_id, action, post)
-                    .expect("transition is possible");
-                model.last_event = event.clone();
-                if let Some(event) = event {
-                    if let EventType::Send(ref val) = event.event_type {
-                        model.vals.insert(event.channel, val.to_owned());
-                    }
-                    vec![(event, model)]
-                } else {
-                    model.transitions()
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
+    #[inline(always)]
     fn time(&self) -> Time {
         self.cs.time()
+    }
+
+    fn monaco_transition<R: rand::Rng>(
+        &mut self,
+        rng: &mut R,
+        duration: Time,
+    ) -> Option<Self::Action> {
+        self.last_event = self.cs.monaco_execution(rng, duration);
+        if let Some(event) = self.last_event.as_ref() {
+            if let EventType::Send(ref val) = event.event_type {
+                self.vals.insert(event.channel, val.to_owned());
+            }
+        }
+        self.last_event.to_owned()
     }
 }

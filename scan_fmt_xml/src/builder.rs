@@ -1637,11 +1637,11 @@ impl ModelBuilder {
         let mut predicates = Vec::new();
         for (_port_name, (channel, init)) in self.ports {
             // TODO FIXME handle error.
-            model.add_port(channel, init).unwrap();
+            model.add_port(channel, init);
         }
         for (pred_name, pred_expr) in self.predicates {
             // TODO FIXME handle error.
-            let id = model.add_predicate(pred_expr).unwrap();
+            let id = model.add_predicate(pred_expr);
             pred_names.insert(pred_name.to_owned(), id);
             assert_eq!(id, predicates.len());
             predicates.push(pred_name);

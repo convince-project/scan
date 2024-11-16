@@ -39,7 +39,9 @@ pub trait TransitionSystem: Clone + Send + Sync {
     fn labels(&self) -> Vec<bool>;
 
     /// The transition relation relates [`Self::Action`]s and post-states that constitutes possible transitions from the current state.
-    fn transitions(self) -> Vec<(Self::Action, Self)>;
+    // fn transitions(self) -> Vec<(Self::Action, Self)>;
+
+    fn monaco_transition<R: Rng>(&mut self, rng: &mut R, max_time: Time) -> Option<Self::Action>;
 
     fn time(&self) -> Time {
         0
@@ -51,6 +53,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
         mut assumes: Vec<O>,
         mut publisher: Option<P>,
         length: usize,
+        duration: Time,
         rng: &mut R,
     ) -> Option<bool>
     where
@@ -61,22 +64,21 @@ pub trait TransitionSystem: Clone + Send + Sync {
         if let Some(publisher) = publisher.as_mut() {
             publisher.init();
         }
-        while let Some((action, new_ts)) = self.transitions().choose(rng) {
+        while let Some(action) = self.monaco_transition(rng, duration) {
             current_len += 1;
-            let state = new_ts.labels();
-            let time = new_ts.time();
-            self = new_ts.to_owned();
+            let state = self.labels();
+            let time = self.time();
             if let Some(publisher) = publisher.as_mut() {
-                publisher.publish(action, time, &state);
+                publisher.publish(&action, time, &state);
             }
             if assumes
                 .iter_mut()
-                .map(|o| o.update(action, &state, time))
+                .map(|o| o.update(&action, &state, time))
                 .all(|b| b)
             {
                 if guarantees
                     .iter_mut()
-                    .map(|o| o.update(action, &state, time))
+                    .map(|o| o.update(&action, &state, time))
                     .all(|b| b)
                 {
                     if current_len >= length {
@@ -111,6 +113,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
         confidence: f64,
         precision: f64,
         length: usize,
+        max_time: Time,
         s: Arc<AtomicU32>,
         f: Arc<AtomicU32>,
         publisher: Option<P>,
@@ -130,6 +133,7 @@ pub trait TransitionSystem: Clone + Send + Sync {
                     Vec::from(assumes),
                     publisher.clone(),
                     length,
+                    max_time,
                     &mut rng,
                 ) {
                     if result {
