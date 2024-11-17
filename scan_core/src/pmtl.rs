@@ -118,7 +118,7 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
         assert!(self.time.0 <= time);
         let mut new_valuation = Self {
             time: (time, self.time.1 + 1),
-            subformulae: self.subformulae.clone(),
+            subformulae: Arc::clone(&self.subformulae),
             val_output: HashMap::with_capacity(self.subformulae.len()),
         };
         for formula in self.subformulae.iter() {
@@ -183,18 +183,16 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                         .val_output
                         .insert(formula.clone(), (nset.clone(), nset));
                 }
-                Pmtl::Not(f) => {
+                Pmtl::Not(subformula) => {
                     let mut nset = new_valuation
                         .val_output
-                        .get(f.as_ref())
+                        .get(subformula.as_ref())
                         .expect("nset")
                         .1
                         .clone();
                     nset.complement();
-                    let nset = NumSet::intersection([
-                        nset,
-                        NumSet::from_range(self.time, new_valuation.time),
-                    ]);
+                    nset.cut(self.time, new_valuation.time);
+                    nset.simplify();
                     new_valuation
                         .val_output
                         .insert(formula.clone(), (nset.clone(), nset));
@@ -205,10 +203,8 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                     let mut nset = out_lhs.clone();
                     nset.complement();
                     nset.union(out_rhs);
-                    let nset = NumSet::intersection([
-                        nset,
-                        NumSet::from_range(self.time, new_valuation.time),
-                    ]);
+                    nset.cut(self.time, new_valuation.time);
+                    nset.simplify();
                     new_valuation
                         .val_output
                         .insert(formula.clone(), (nset.clone(), nset));
@@ -244,23 +240,17 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                                 .unwrap_or((Time::MAX, Time::MAX));
                             valuation.add_interval(lower_bound, upper_bound);
                         }
-                        nset_output.union(&NumSet::intersection([
-                            valuation.clone(),
-                            NumSet::from_range(partial_lower_bound, *partial_upper_bound),
-                        ]));
+                        let mut to_add = valuation.clone();
+                        to_add.cut(partial_lower_bound, *partial_upper_bound);
+                        nset_output.union(&to_add);
                         partial_lower_bound = *partial_upper_bound;
                     }
                     nset_output.complement();
+                    nset_output.cut(self.time, new_valuation.time);
+                    valuation.cut(self.time, (Time::MAX, Time::MAX));
                     new_valuation.val_output.insert(
                         formula.clone(),
-                        (
-                            valuation.simplify(),
-                            NumSet::intersection([
-                                nset_output,
-                                NumSet::from_range(self.time, new_valuation.time),
-                            ])
-                            .simplify(),
-                        ),
+                        (valuation.simplify(), nset_output.simplify()),
                     );
                 }
                 Pmtl::Previously(sub, lower_bound, upper_bound) => {
@@ -295,12 +285,12 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                                 .unwrap_or((Time::MAX, Time::MAX));
                             valuation.add_interval(interval_lower_bound, interval_upper_bound);
                         }
-                        output.union(&NumSet::intersection([
-                            valuation.clone(),
-                            NumSet::from_range(partial_lower_bound, *partial_upper_bound),
-                        ]));
+                        let mut to_add = valuation.clone();
+                        to_add.cut(partial_lower_bound, *partial_upper_bound);
+                        output.union(&to_add);
                         partial_lower_bound = *partial_upper_bound;
                     }
+                    valuation.cut(self.time, (Time::MAX, Time::MAX));
                     new_valuation
                         .val_output
                         .insert(formula.clone(), (valuation.simplify(), output.simplify()));
@@ -318,8 +308,7 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                     nset_lhs.insert_bound(new_valuation.time);
                     nset_rhs.sync(&nset_lhs);
                     nset_lhs.sync(nset_rhs_orig);
-                    let mut partial_valuation =
-                        self.val_output.get(formula).expect("formula").0.clone();
+                    let mut valuation = self.val_output.get(formula).expect("formula").0.clone();
                     let mut partial_lower_bound = self.time;
                     let mut nset_output = NumSet::new();
                     for (idx, (partial_upper_bound, out_lhs)) in nset_lhs
@@ -333,7 +322,7 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                         assert!(partial_lower_bound < *partial_upper_bound);
                         assert!(self.time < *partial_upper_bound);
                         let out_rhs = nset_rhs.bounds()[idx].1;
-                        partial_valuation = match (out_lhs, out_rhs) {
+                        valuation = match (out_lhs, out_rhs) {
                             (true, true) => {
                                 let lower_bound = if *lower_bound > 0 {
                                     lower_bound
@@ -347,10 +336,10 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                                     .checked_add(partial_upper_bound.0)
                                     .map(|ub| (ub, Time::MAX))
                                     .unwrap_or((Time::MAX, Time::MAX));
-                                partial_valuation.add_interval(lower_bound, upper_bound);
-                                partial_valuation
+                                valuation.add_interval(lower_bound, upper_bound);
+                                valuation
                             }
-                            (true, false) => partial_valuation,
+                            (true, false) => valuation,
                             (false, true) => {
                                 let lower_bound = if *lower_bound > 0 {
                                     lower_bound
@@ -368,15 +357,15 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                             }
                             (false, false) => NumSet::new(),
                         };
-                        nset_output.union(&NumSet::intersection([
-                            partial_valuation.clone(),
-                            NumSet::from_range(partial_lower_bound, *partial_upper_bound),
-                        ]));
+                        let mut to_add = valuation.clone();
+                        to_add.cut(partial_lower_bound, *partial_upper_bound);
+                        nset_output.union(&to_add);
                         partial_lower_bound = *partial_upper_bound;
                     }
+                    valuation.cut(self.time, (Time::MAX, Time::MAX));
                     new_valuation.val_output.insert(
                         formula.clone(),
-                        (partial_valuation.simplify(), nset_output.simplify()),
+                        (valuation.simplify(), nset_output.simplify()),
                     );
                 }
             }
