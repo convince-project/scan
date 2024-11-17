@@ -6,10 +6,12 @@ use super::DenseTime;
 pub(super) struct NumSet(Vec<(DenseTime, bool)>);
 
 impl NumSet {
+    #[inline(always)]
     pub fn new() -> Self {
         Self(Vec::new())
     }
 
+    #[inline(always)]
     pub fn full() -> Self {
         Self(vec![((Time::MAX, Time::MAX), true)])
     }
@@ -17,6 +19,33 @@ impl NumSet {
     // pub fn is_empty(&self) -> bool {
     //     self.0.is_empty()
     // }
+
+    pub fn cut(&mut self, lower_bound: DenseTime, upper_bound: DenseTime) {
+        if lower_bound != (0, 0) {
+            match self.0.binary_search_by_key(&lower_bound, |(t, _)| *t) {
+                Ok(idx) => {
+                    self.0[idx].1 = false;
+                    self.0 = self.0.split_off(idx);
+                }
+                Err(idx) => {
+                    self.0.insert(idx, (lower_bound, false));
+                    self.0 = self.0.split_off(idx);
+                }
+            }
+        }
+        if upper_bound != (Time::MAX, Time::MAX) {
+            match self.0.binary_search_by_key(&upper_bound, |(t, _)| *t) {
+                Ok(idx) => {
+                    let _ = self.0.split_off(idx + 1);
+                }
+                Err(idx) => {
+                    let b = self.0.get(idx).map(|(_, b)| *b).unwrap_or(false);
+                    self.0.insert(idx, (upper_bound, b));
+                    let _ = self.0.split_off(idx + 1);
+                }
+            }
+        }
+    }
 
     pub fn from_range(lower_bound: DenseTime, upper_bound: DenseTime) -> Self {
         if lower_bound < upper_bound {
@@ -30,6 +59,7 @@ impl NumSet {
         }
     }
 
+    #[inline(always)]
     pub fn bounds(&self) -> &[(DenseTime, bool)] {
         &self.0
     }
