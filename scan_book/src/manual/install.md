@@ -19,3 +19,4 @@ cargo install --git https://github.com/convince-project/scan
 
 Cargo will build and install SCAN on your system,
 after which it can be used as a command-line tool.
+Successively, the same command updates SCAN to the latest version.
