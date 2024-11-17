@@ -11,7 +11,7 @@ use quick_xml::{
     Reader,
 };
 use scan_core::{Expression, Float, Pmtl, Time, Val};
-use std::{collections::HashMap, io::BufRead, str};
+use std::{collections::HashMap, io::BufRead, str, sync::Arc};
 
 const TAG_PORTS: &str = "ports";
 const TAG_PORT: &str = "port";
@@ -614,14 +614,14 @@ impl Properties {
                                     if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
                                     let expr = expr.ok_or(anyhow!("missing expr in not"))?;
-                                    push_pmtl(&mut stack, Pmtl::Not(Box::new(expr)))?;
+                                    push_pmtl(&mut stack, Pmtl::Not(Arc::new(expr)))?;
                                 }
                                 PropertyTag::PmtlImplies(lhs, rhs)
                                     if stack.last().is_some_and(PropertyTag::is_pmtl) =>
                                 {
                                     let lhs = lhs.ok_or(anyhow!("missing lhs in implies"))?;
                                     let rhs = rhs.ok_or(anyhow!("missing rhs in implies"))?;
-                                    push_pmtl(&mut stack, Pmtl::Implies(Box::new((lhs, rhs))))?;
+                                    push_pmtl(&mut stack, Pmtl::Implies(Arc::new((lhs, rhs))))?;
                                 }
                                 PropertyTag::PmtlSince(lhs, rhs, lower_bound, upper_bound)
                                     if stack.last().is_some_and(PropertyTag::is_pmtl) =>
@@ -630,7 +630,7 @@ impl Properties {
                                     let rhs = rhs.ok_or(anyhow!("missing rhs in implies"))?;
                                     push_pmtl(
                                         &mut stack,
-                                        Pmtl::Since(Box::new((lhs, rhs)), lower_bound, upper_bound),
+                                        Pmtl::Since(Arc::new((lhs, rhs)), lower_bound, upper_bound),
                                     )?;
                                 }
                                 PropertyTag::PmtlHistorically(
@@ -643,7 +643,7 @@ impl Properties {
                                     push_pmtl(
                                         &mut stack,
                                         Pmtl::Historically(
-                                            Box::new(formula),
+                                            Arc::new(formula),
                                             lower_bound,
                                             upper_bound,
                                         ),
@@ -657,7 +657,7 @@ impl Properties {
                                     push_pmtl(
                                         &mut stack,
                                         Pmtl::Previously(
-                                            Box::new(formula),
+                                            Arc::new(formula),
                                             lower_bound,
                                             upper_bound,
                                         ),

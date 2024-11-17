@@ -230,10 +230,7 @@ impl ProgramGraphBuilder {
         // Locations are indexed progressively
         let idx = self.indexed_transitions.len();
         self.indexed_transitions.push(Vec::new());
-        let loc = Location(idx);
-        self.add_transition(loc, WAIT, loc, None)
-            .expect("add wait transition");
-        loc
+        Location(idx)
     }
 
     /// TODO

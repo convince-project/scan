@@ -45,40 +45,25 @@ impl NumSet {
             }
     }
 
-    // pub fn lower_bound_for(&self, upper_bound: DenseTime) -> DenseTime {
-    //     assert!(
-    //         self.0.is_sorted_by_key(|(bound, _)| *bound),
-    //         "binary search on unsorted list"
-    //     );
-    //     assert_ne!(upper_bound, (0, 0));
-    //     match self
-    //         .0
-    //         .binary_search_by_key(&upper_bound, |(bound, _)| *bound)
-    //     {
-    //         Ok(idx) | Err(idx) => {
-    //             if idx > 0 {
-    //                 assert!(self.0[idx - 1].0 < upper_bound);
-    //                 self.0[idx - 1].0
-    //             } else {
-    //                 (0, 0)
-    //             }
-    //         }
-    //     }
-    // }
-
-    pub fn insert_bound(&mut self, bound: DenseTime) -> usize {
-        match self.0.binary_search_by_key(&bound, |(bound, _)| *bound) {
-            Ok(idx) => idx,
+    fn hinted_insert_bound(&mut self, bound: DenseTime, hint: usize) -> usize {
+        match self.0[hint..].binary_search_by_key(&bound, |(bound, _)| *bound) {
+            Ok(idx) => idx + hint,
             Err(idx) => {
-                let b = self.0.get(idx).map(|(_, b)| *b).unwrap_or(false);
-                self.0.insert(idx, (bound, b));
-                idx
+                let b = self.0.get(idx + hint).map(|(_, b)| *b).unwrap_or(false);
+                self.0.insert(idx + hint, (bound, b));
+                idx + hint
             }
         }
     }
 
+    #[inline(always)]
+    pub fn insert_bound(&mut self, bound: DenseTime) -> usize {
+        self.hinted_insert_bound(bound, 0)
+    }
+
     pub fn add_interval(&mut self, lower_bound: DenseTime, upper_bound: DenseTime) {
         if lower_bound >= upper_bound {
+            // Nothing to do
         } else if self.0.is_empty() {
             *self = Self::from_range(lower_bound, upper_bound);
         } else if lower_bound == (0, 0) {
@@ -86,7 +71,7 @@ impl NumSet {
             self.0[..=u_idx].iter_mut().for_each(|(_, b)| *b = true);
         } else {
             let l_idx = self.insert_bound(lower_bound);
-            let u_idx = self.insert_bound(upper_bound);
+            let u_idx = self.hinted_insert_bound(upper_bound, l_idx + 1);
             assert!(l_idx < u_idx);
             self.0[l_idx + 1..=u_idx]
                 .iter_mut()
@@ -129,37 +114,39 @@ impl NumSet {
     }
 
     pub fn sync(&mut self, other: &Self) {
+        let mut hint = 0;
         other.0.iter().for_each(|(bound, _)| {
-            let _ = self.insert_bound(*bound);
+            hint = self.hinted_insert_bound(*bound, hint) + 1;
         });
     }
 
     pub fn simplify(&self) -> Self {
         let mut prev_b = false;
         let mut prev_t = (0, 0);
-        let vec = self
-            .0
-            .iter()
-            .filter(|(t, _)| {
-                if prev_t == *t {
-                    false
-                } else {
-                    prev_t = *t;
-                    true
-                }
-            })
-            .rev()
-            .filter(|(_, b)| {
-                if prev_b == *b {
-                    false
-                } else {
-                    prev_b = *b;
-                    true
-                }
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        Self(Vec::from_iter(vec.into_iter().rev()))
+        let mut vec = Vec::from_iter(
+            self.0
+                .iter()
+                .filter(|(t, _)| {
+                    if prev_t == *t {
+                        false
+                    } else {
+                        prev_t = *t;
+                        true
+                    }
+                })
+                .rev()
+                .filter(|(_, b)| {
+                    if prev_b == *b {
+                        false
+                    } else {
+                        prev_b = *b;
+                        true
+                    }
+                })
+                .copied(),
+        );
+        vec.reverse();
+        Self(vec)
     }
 }
 
