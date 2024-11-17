@@ -8,12 +8,11 @@ name = "scan_fmt_xml"  # The name of the target.
 crate-type = ["lib"]   # The crate types to generate.
 
 [dependencies]
-scan_core = { path="../scan_core" }
+scan_core = { version = "0.1.0", path="../scan_core" }
 anyhow = "1.0.79"
 boa_ast = "0.19.0"
 boa_interner = "0.19.0"
 boa_parser = "0.19.0"
-env_logger = { workspace = true }
 log = { workspace = true }
 quick-xml = "0.37.0"
 thiserror = "2.0.0"

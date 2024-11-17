@@ -1,7 +1,5 @@
-mod cli;
-
 use clap::Parser;
-use cli::Cli;
+use scan::Cli;
 
 fn main() {
     env_logger::init();
