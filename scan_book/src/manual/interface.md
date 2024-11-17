@@ -1,46 +1,50 @@
 # The User Interface
 
 SCAN provides a command line interface.
-To print the help screen, use
+To start with, print the help screen with:
 
 ```
 scan --help
 ```
 
-which will show the available functionalities and commands' syntax:
-
-```
-A statistical model checker for large concurrent systems
-                                                                                                        
-Usage: scan [OPTIONS] <MODEL>
-                                                                                                        
-Arguments:
-  <MODEL>  Path of model's main XML file
-                                                                                                        
-Options:
-  -c, --confidence <CONFIDENCE>  Confidence [default: 0.95]
-  -p, --precision <PRECISION>    Precision or half-width parameter [default: 0.01]
-      --trace                    Print execution trace
-      --length <LENGTH>          Max length of execution trace before it is stopped [default: 10000]
-  -h, --help                     Print help
-  -V, --version                  Print version
-```
+which will show the available functionalities and commands' syntax.
 
 The general syntax to run SCAN is
 
 ```
-scan [OPTIONS] <MODEL>
+scan [OPTIONS] [MODEL]
 ```
 
-where `MODEL` is the path to the folder containing the model's `scxml` files.
-SCAN will try to correctly interpret all files inside the folder.
-
+where `MODEL` is the path to the directory containing the model's `scxml` files.
+As the default directory is the current one,
+just invoking `scan` inside a model's directory starts the verification with default settings.
 If the model has a main `xml` file, passing its path instead of the folder's allows for finer control over which processes the model is using and where their definition can be found.
 
-The `confidence` and `precision` parameters control the statistical confidence that the produced result is accurate up to the given precision,
-but also determine how many executions are required to be performed.
+## Settings and Options
 
-The `length` parameter set the maximum length a trace can reach before the execution is considered complete.
+SCAN accepts the following parameters:
+
+- `--confidence` sets the statistical confidence that the produced result is accurate
+- `--precision` sets the target precision of the result
+
+Toghether, these settings also determine how many executions are required to be performed.
+
+The following parameters are to be set by the developer according to the use case:
+
+- `--length` sets the maximum length a trace can reach before the execution is stopped
+- `--duration` sets the maximum duration (in model time) that the execution can take before being stopped
+
+As these settings may vary depending on the use case,
+SCAN sets reasonably large default values,
+but they can be changed if necessity arises.
+
+The following option are available:
+
+- `--save-traces` has all the traces produced during verification saved in a `./traces/` folder,
+and further classified into `success/`, `failure/` and `undetermined/` sub-folders based on the outcome of the execution.
+Traces are saved into `gz`-compressed `csv` format.
+Since traces can take up a large amount of disk space,
+the option is disabled by default and care is reccommended when enabling it.
 
 ## Logging
 
@@ -48,7 +52,7 @@ It can be helpful to run SCAN with logging activated.
 Use
 
 ```
-RUST_LOG=<LOG_LEVEL> scan <MODEL> <COMMAND>
+RUST_LOG=<LOG_LEVEL> scan [OPTIONS] [MODEL]
 ```
 
 where `LOG_LEVEL=[error|warn|info|debug|trace]`
