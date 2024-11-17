@@ -17,11 +17,11 @@ where
     Atom(V),
     And(Vec<Pmtl<V>>),
     Or(Vec<Pmtl<V>>),
-    Not(Box<Pmtl<V>>),
-    Implies(Box<(Pmtl<V>, Pmtl<V>)>),
-    Historically(Box<Pmtl<V>>, Time, Time),
-    Previously(Box<Pmtl<V>>, Time, Time),
-    Since(Box<(Pmtl<V>, Pmtl<V>)>, Time, Time),
+    Not(Arc<Pmtl<V>>),
+    Implies(Arc<(Pmtl<V>, Pmtl<V>)>),
+    Historically(Arc<Pmtl<V>>, Time, Time),
+    Previously(Arc<Pmtl<V>>, Time, Time),
+    Since(Arc<(Pmtl<V>, Pmtl<V>)>, Time, Time),
 }
 
 impl<V> Pmtl<V>
@@ -33,14 +33,14 @@ where
             Pmtl::True | Pmtl::False | Pmtl::Atom(_) => HashSet::new(),
             Pmtl::And(subs) | Pmtl::Or(subs) => HashSet::from_iter(
                 subs.iter()
-                    .flat_map(|f| f.to_owned().set_subformulae().into_iter()),
+                    .flat_map(|f| f.clone().set_subformulae().into_iter()),
             ),
             Pmtl::Not(subformula)
             | Pmtl::Historically(subformula, _, _)
-            | Pmtl::Previously(subformula, _, _) => subformula.to_owned().set_subformulae(),
+            | Pmtl::Previously(subformula, _, _) => subformula.as_ref().clone().set_subformulae(),
             Pmtl::Implies(subs) | Pmtl::Since(subs, _, _) => {
-                let mut formulae = subs.0.to_owned().set_subformulae();
-                formulae.extend(subs.1.to_owned().set_subformulae());
+                let mut formulae = subs.0.clone().set_subformulae();
+                formulae.extend(subs.1.clone().set_subformulae());
                 formulae
             }
         };
@@ -77,8 +77,9 @@ where
 pub struct StateValuationVector<V: Clone + Eq + Hash> {
     time: DenseTime,
     subformulae: Arc<Vec<Pmtl<Atom<V>>>>,
-    valuations: HashMap<Pmtl<Atom<V>>, NumSet>,
-    output: HashMap<Pmtl<Atom<V>>, NumSet>,
+    // The first NumSet represents the valuation,
+    // the second NumSet represents the output.
+    val_output: HashMap<Pmtl<Atom<V>>, (NumSet, NumSet)>,
 }
 
 impl<V: std::fmt::Debug + Clone + Eq + Hash> Oracle<V> for StateValuationVector<V> {
@@ -90,22 +91,25 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> Oracle<V> for StateValuationVector<
 
 impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
     pub fn new(formula: Pmtl<Atom<V>>) -> Self {
-        let subformulae: Vec<_> = formula.to_owned().subformulae();
-        let subformulae = Arc::new(subformulae);
-        assert_eq!(subformulae.last().unwrap(), &formula);
+        let subformulae = Arc::new(formula.subformulae());
 
         Self {
+            // WARN: all Hell brakes loose with time: (0, 0)
             time: (0, 1),
-            valuations: HashMap::from_iter(subformulae.iter().cloned().map(|f| (f, NumSet::new()))),
-            output: HashMap::from_iter(subformulae.iter().cloned().map(|f| (f, NumSet::new()))),
+            val_output: HashMap::from_iter(
+                subformulae
+                    .iter()
+                    .cloned()
+                    .map(|f| (f, (NumSet::new(), NumSet::new()))),
+            ),
             subformulae,
         }
     }
 
     fn output(&self, formula: &Pmtl<Atom<V>>) -> bool {
-        self.output
+        self.val_output
             .get(formula)
-            .map(|val| val.contains(self.time))
+            .map(|(_, out)| out.contains(self.time))
             .unwrap()
         // .unwrap_or(false)
     }
@@ -115,128 +119,109 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
         let mut new_valuation = Self {
             time: (time, self.time.1 + 1),
             subformulae: self.subformulae.clone(),
-            valuations: HashMap::new(),
-            output: HashMap::new(),
+            val_output: HashMap::with_capacity(self.subformulae.len()),
         };
         for formula in self.subformulae.iter() {
             match formula {
                 Pmtl::True => {
-                    new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), NumSet::full());
-                    new_valuation.output.insert(
-                        formula.to_owned(),
-                        NumSet::from_range(self.time, new_valuation.time),
+                    new_valuation.val_output.insert(
+                        formula.clone(),
+                        (
+                            NumSet::full(),
+                            NumSet::from_range(self.time, new_valuation.time),
+                        ),
                     );
                 }
                 Pmtl::False => {
                     new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), NumSet::new());
-                    new_valuation
-                        .output
-                        .insert(formula.to_owned(), NumSet::new());
+                        .val_output
+                        .insert(formula.clone(), (NumSet::new(), NumSet::new()));
                 }
                 Pmtl::Atom(atom) => match atom {
                     Atom::Predicate(p) if state[*p] => {
-                        new_valuation.valuations.insert(
-                            formula.to_owned(),
-                            NumSet::from_range(self.time, new_valuation.time),
-                        );
-                        new_valuation.output.insert(
-                            formula.to_owned(),
-                            NumSet::from_range(self.time, new_valuation.time),
-                        );
+                        let numset = NumSet::from_range(self.time, new_valuation.time);
+                        new_valuation
+                            .val_output
+                            .insert(formula.clone(), (numset.clone(), numset));
                     }
                     Atom::Event(e) if event == e => {
-                        new_valuation.valuations.insert(
-                            formula.to_owned(),
-                            NumSet::from_range(
-                                (new_valuation.time.0, new_valuation.time.1 - 1),
-                                new_valuation.time,
-                            ),
+                        let numset = NumSet::from_range(
+                            (new_valuation.time.0, new_valuation.time.1 - 1),
+                            new_valuation.time,
                         );
-                        new_valuation.output.insert(
-                            formula.to_owned(),
-                            NumSet::from_range(
-                                (new_valuation.time.0, new_valuation.time.1 - 1),
-                                new_valuation.time,
-                            ),
-                        );
+                        new_valuation
+                            .val_output
+                            .insert(formula.clone(), (numset.clone(), numset));
                     }
                     _ => {
                         new_valuation
-                            .valuations
-                            .insert(formula.to_owned(), NumSet::new());
-                        new_valuation
-                            .output
-                            .insert(formula.to_owned(), NumSet::new());
+                            .val_output
+                            .insert(formula.clone(), (NumSet::new(), NumSet::new()));
                     }
                 },
                 Pmtl::And(subs) => {
                     let nset = NumSet::intersection(
                         subs.iter()
-                            .map(|f| new_valuation.valuations.get(f).expect("nset"))
+                            .filter_map(|f| new_valuation.val_output.get(f).map(|(_, val)| val))
                             .cloned(),
                     )
                     .simplify();
                     new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), nset.to_owned());
-                    new_valuation.output.insert(formula.to_owned(), nset);
+                        .val_output
+                        .insert(formula.clone(), (nset.clone(), nset));
                 }
                 Pmtl::Or(subs) => {
-                    let mut nset = NumSet::new();
-                    for sub in subs {
-                        nset.union(new_valuation.valuations.get(sub).expect("nset"));
-                    }
-                    nset.simplify();
+                    let nset = subs
+                        .iter()
+                        .filter_map(|sub| new_valuation.val_output.get(sub))
+                        .fold(NumSet::new(), |mut union, (_, numset)| {
+                            union.union(numset);
+                            union
+                        })
+                        .simplify();
                     new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), nset.to_owned());
-                    new_valuation.output.insert(formula.to_owned(), nset);
+                        .val_output
+                        .insert(formula.clone(), (nset.clone(), nset));
                 }
                 Pmtl::Not(f) => {
                     let mut nset = new_valuation
-                        .valuations
+                        .val_output
                         .get(f.as_ref())
                         .expect("nset")
-                        .to_owned();
+                        .1
+                        .clone();
                     nset.complement();
                     let nset = NumSet::intersection([
                         nset,
                         NumSet::from_range(self.time, new_valuation.time),
                     ]);
                     new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), nset.to_owned());
-                    new_valuation.output.insert(formula.to_owned(), nset);
+                        .val_output
+                        .insert(formula.clone(), (nset.clone(), nset));
                 }
                 Pmtl::Implies(subs) => {
-                    let out_lhs = new_valuation.output.get(&subs.0).expect("output lhs");
-                    let out_rhs = new_valuation.output.get(&subs.1).expect("output rhs");
-                    let mut nset = out_lhs.to_owned();
+                    let out_lhs = &new_valuation.val_output.get(&subs.0).expect("output lhs").1;
+                    let out_rhs = &new_valuation.val_output.get(&subs.1).expect("output rhs").1;
+                    let mut nset = out_lhs.clone();
                     nset.complement();
                     nset.union(out_rhs);
+                    let nset = NumSet::intersection([
+                        nset,
+                        NumSet::from_range(self.time, new_valuation.time),
+                    ]);
                     new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), nset.to_owned());
-                    new_valuation.output.insert(
-                        formula.to_owned(),
-                        NumSet::intersection([
-                            nset,
-                            NumSet::from_range(self.time, new_valuation.time),
-                        ]),
-                    );
+                        .val_output
+                        .insert(formula.clone(), (nset.clone(), nset));
                 }
                 Pmtl::Historically(sub, lower_bound, upper_bound) => {
                     let mut output_sub = new_valuation
-                        .output
+                        .val_output
                         .get(sub.as_ref())
                         .expect("nset")
-                        .to_owned();
+                        .1
+                        .clone();
                     output_sub.insert_bound(new_valuation.time);
-                    let mut valuation = self.valuations.get(formula).expect("formula").clone();
+                    let mut valuation = self.val_output.get(formula).expect("formula").0.clone();
                     let mut partial_lower_bound = self.time;
                     let mut nset_output = NumSet::new();
                     for (partial_upper_bound, out_sub) in
@@ -260,36 +245,37 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                             valuation.add_interval(lower_bound, upper_bound);
                         }
                         nset_output.union(&NumSet::intersection([
-                            valuation.to_owned(),
+                            valuation.clone(),
                             NumSet::from_range(partial_lower_bound, *partial_upper_bound),
                         ]));
                         partial_lower_bound = *partial_upper_bound;
                     }
-                    new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), valuation.simplify());
                     nset_output.complement();
-                    new_valuation.output.insert(
-                        formula.to_owned(),
-                        NumSet::intersection([
-                            nset_output,
-                            NumSet::from_range(self.time, new_valuation.time),
-                        ])
-                        .simplify(),
+                    new_valuation.val_output.insert(
+                        formula.clone(),
+                        (
+                            valuation.simplify(),
+                            NumSet::intersection([
+                                nset_output,
+                                NumSet::from_range(self.time, new_valuation.time),
+                            ])
+                            .simplify(),
+                        ),
                     );
                 }
                 Pmtl::Previously(sub, lower_bound, upper_bound) => {
-                    let mut sub_output = new_valuation
-                        .output
+                    let mut output_sub = new_valuation
+                        .val_output
                         .get(sub.as_ref())
                         .expect("nset")
-                        .to_owned();
-                    sub_output.insert_bound(new_valuation.time);
-                    let mut valuation = self.valuations.get(formula).expect("formula").clone();
+                        .1
+                        .clone();
+                    output_sub.insert_bound(new_valuation.time);
+                    let mut valuation = self.val_output.get(formula).expect("formula").0.clone();
                     let mut partial_lower_bound = self.time;
                     let mut output = NumSet::new();
                     for (partial_upper_bound, out_sub) in
-                        sub_output.bounds().iter().filter(|(ub, _)| self.time < *ub)
+                        output_sub.bounds().iter().filter(|(ub, _)| self.time < *ub)
                     {
                         assert!(partial_lower_bound < *partial_upper_bound);
                         assert!(self.time < *partial_upper_bound);
@@ -310,28 +296,30 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                             valuation.add_interval(interval_lower_bound, interval_upper_bound);
                         }
                         output.union(&NumSet::intersection([
-                            valuation.to_owned(),
+                            valuation.clone(),
                             NumSet::from_range(partial_lower_bound, *partial_upper_bound),
                         ]));
                         partial_lower_bound = *partial_upper_bound;
                     }
                     new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), valuation.simplify());
-                    new_valuation
-                        .output
-                        .insert(formula.to_owned(), output.simplify());
+                        .val_output
+                        .insert(formula.clone(), (valuation.simplify(), output.simplify()));
                 }
                 Pmtl::Since(subs, lower_bound, upper_bound) => {
-                    let mut nset_lhs = new_valuation.output.get(&subs.0).expect("nset").clone();
-                    let nset_rhs_orig = new_valuation.output.get(&subs.1).expect("nset");
+                    let mut nset_lhs = new_valuation
+                        .val_output
+                        .get(&subs.0)
+                        .expect("nset")
+                        .1
+                        .clone();
+                    let nset_rhs_orig = &new_valuation.val_output.get(&subs.1).expect("nset").1;
                     let mut nset_rhs = nset_rhs_orig.clone();
                     nset_rhs.insert_bound(new_valuation.time);
                     nset_lhs.insert_bound(new_valuation.time);
                     nset_rhs.sync(&nset_lhs);
                     nset_lhs.sync(nset_rhs_orig);
                     let mut partial_valuation =
-                        self.valuations.get(formula).expect("formula").clone();
+                        self.val_output.get(formula).expect("formula").0.clone();
                     let mut partial_lower_bound = self.time;
                     let mut nset_output = NumSet::new();
                     for (idx, (partial_upper_bound, out_lhs)) in nset_lhs
@@ -381,17 +369,15 @@ impl<V: std::fmt::Debug + Clone + Eq + Hash> StateValuationVector<V> {
                             (false, false) => NumSet::new(),
                         };
                         nset_output.union(&NumSet::intersection([
-                            partial_valuation.to_owned(),
+                            partial_valuation.clone(),
                             NumSet::from_range(partial_lower_bound, *partial_upper_bound),
                         ]));
                         partial_lower_bound = *partial_upper_bound;
                     }
-                    new_valuation
-                        .valuations
-                        .insert(formula.to_owned(), partial_valuation.simplify());
-                    new_valuation
-                        .output
-                        .insert(formula.to_owned(), nset_output.simplify());
+                    new_valuation.val_output.insert(
+                        formula.clone(),
+                        (partial_valuation.simplify(), nset_output.simplify()),
+                    );
                 }
             }
         }
@@ -406,12 +392,12 @@ mod tests {
     #[test]
     fn subformulae_1() {
         let subformulae: Vec<Pmtl<usize>> =
-            Pmtl::Since(Box::new((Pmtl::True, Pmtl::True)), 0, Time::MAX).subformulae();
+            Pmtl::Since(Arc::new((Pmtl::True, Pmtl::True)), 0, Time::MAX).subformulae();
         assert_eq!(
             subformulae,
             vec![
                 Pmtl::True,
-                Pmtl::Since(Box::new((Pmtl::True, Pmtl::True)), 0, Time::MAX)
+                Pmtl::Since(Arc::new((Pmtl::True, Pmtl::True)), 0, Time::MAX)
             ]
         );
     }
@@ -419,12 +405,12 @@ mod tests {
     #[test]
     fn subformulae_2() {
         let subformulae: Vec<Pmtl<usize>> =
-            Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(0))), 0, Time::MAX).subformulae();
+            Pmtl::Since(Arc::new((Pmtl::Atom(0), Pmtl::Atom(0))), 0, Time::MAX).subformulae();
         assert_eq!(
             subformulae,
             vec![
                 Pmtl::Atom(0),
-                Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(0))), 0, Time::MAX)
+                Pmtl::Since(Arc::new((Pmtl::Atom(0), Pmtl::Atom(0))), 0, Time::MAX)
             ]
         );
     }
@@ -433,20 +419,20 @@ mod tests {
     fn subformulae_3() {
         let subformulae: Vec<Pmtl<usize>> = Pmtl::And(vec![
             Pmtl::Atom(0),
-            Pmtl::Not(Box::new(Pmtl::Atom(0))),
+            Pmtl::Not(Arc::new(Pmtl::Atom(0))),
             Pmtl::True,
         ])
         .subformulae();
         assert_eq!(subformulae.len(), 4);
         assert!(matches!(subformulae[0], Pmtl::Atom(0) | Pmtl::True));
         assert!(matches!(subformulae[1], Pmtl::Atom(0) | Pmtl::True));
-        assert_eq!(subformulae[2], Pmtl::Not(Box::new(Pmtl::Atom(0))));
+        assert_eq!(subformulae[2], Pmtl::Not(Arc::new(Pmtl::Atom(0))));
     }
 
     #[test]
     fn since_1() {
         let formula = Pmtl::Since(
-            Box::new((
+            Arc::new((
                 Pmtl::Atom(Atom::Predicate(0)),
                 Pmtl::Atom(Atom::Predicate(1)),
             )),
@@ -465,7 +451,7 @@ mod tests {
     #[test]
     fn since_2() {
         let formula = Pmtl::Since(
-            Box::new((
+            Arc::new((
                 Pmtl::Atom(Atom::Predicate(0)),
                 Pmtl::Atom(Atom::Predicate(1)),
             )),
@@ -484,7 +470,7 @@ mod tests {
     #[test]
     fn since_3() {
         let formula = Pmtl::Since(
-            Box::new((
+            Arc::new((
                 Pmtl::Atom(Atom::Predicate(0)),
                 Pmtl::Atom(Atom::Predicate(1)),
             )),
@@ -503,7 +489,7 @@ mod tests {
     #[test]
     fn since_4() {
         let formula = Pmtl::Since(
-            Box::new((
+            Arc::new((
                 Pmtl::Atom(Atom::Predicate(0)),
                 Pmtl::Atom(Atom::Predicate(1)),
             )),
@@ -522,7 +508,7 @@ mod tests {
 
     #[test]
     fn historically() {
-        let formula = Pmtl::Historically(Box::new(Pmtl::Atom(Atom::Predicate(0))), 1, 2);
+        let formula = Pmtl::Historically(Arc::new(Pmtl::Atom(Atom::Predicate(0))), 1, 2);
         let mut state = StateValuationVector::new(formula);
         assert!(state.update(&0, &[false], 0));
         assert!(state.update(&0, &[false], 0));
@@ -535,7 +521,7 @@ mod tests {
 
     #[test]
     fn previously() {
-        let formula = Pmtl::Previously(Box::new(Pmtl::Atom(Atom::Predicate(0))), 1, 2);
+        let formula = Pmtl::Previously(Arc::new(Pmtl::Atom(Atom::Predicate(0))), 1, 2);
         let mut state = StateValuationVector::new(formula);
         assert!(!state.update(&0, &[false], 0));
         assert!(!state.update(&0, &[false], 0));
