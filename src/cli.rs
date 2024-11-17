@@ -1,6 +1,5 @@
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use scan::*;
 use scan_fmt_xml::scan_core::*;
 use std::{
     path::PathBuf,
@@ -9,6 +8,8 @@ use std::{
         Arc,
     },
 };
+
+use crate::PrintTrace;
 
 /// A statistical model checker for large concurrent systems
 #[derive(Parser)]

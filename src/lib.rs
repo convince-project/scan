@@ -21,6 +21,8 @@
 // - [ ] smallvec optimization
 // - [ ] multi-threading
 
+mod cli;
 mod print_trace;
 
+pub use cli::*;
 pub use print_trace::*;
