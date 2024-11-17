@@ -15,7 +15,7 @@ use std::{
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     /// Path of model's main XML file
-    #[arg(value_hint = clap::ValueHint::DirPath)]
+    #[arg(value_hint = clap::ValueHint::DirPath, default_value = ".")]
     model: PathBuf,
     /// Confidence
     #[arg(short, long, default_value = "0.95")]
@@ -27,10 +27,10 @@ pub struct Cli {
     #[arg(long = "print-traces", default_value = "false")]
     trace: bool,
     /// Max length of execution trace before it is stopped
-    #[arg(long, default_value = "1000000")]
+    #[arg(short, long, default_value = "1000000")]
     length: usize,
     /// Max duration of execution before it is stopped (in model-time)
-    #[arg(long, default_value = "10000")]
+    #[arg(short, long, default_value = "10000")]
     duration: usize,
 }
 
@@ -83,6 +83,7 @@ impl Cli {
         );
         let s = s.load(Ordering::Relaxed);
         let f = f.load(Ordering::Relaxed);
+        println!("Completed {} runs with {s} successes, {f} failures", s + f);
         let rate = s as f64 / (s + f) as f64;
         let mag = precision.log10().abs().ceil() as usize;
         println!(
