@@ -1,7 +1,8 @@
 # The User Interface
 
 SCAN provides a command line interface.
-To start with, print the help screen with:
+
+To print the help screen, use
 
 ```
 scan --help

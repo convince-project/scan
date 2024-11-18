@@ -1,14 +1,6 @@
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use scan_fmt_xml::scan_core::*;
-use std::{
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc,
-    },
-};
-
+use scan::*;
 use crate::PrintTrace;
 
 /// A statistical model checker for large concurrent systems

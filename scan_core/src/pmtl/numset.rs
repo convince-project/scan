@@ -47,18 +47,6 @@ impl NumSet {
         }
     }
 
-    pub fn from_range(lower_bound: DenseTime, upper_bound: DenseTime) -> Self {
-        if lower_bound < upper_bound {
-            if lower_bound == (0, 0) {
-                Self(vec![(upper_bound, true)])
-            } else {
-                Self(vec![(lower_bound, false), (upper_bound, true)])
-            }
-        } else {
-            Self::new()
-        }
-    }
-
     #[inline(always)]
     pub fn bounds(&self) -> &[(DenseTime, bool)] {
         &self.0
