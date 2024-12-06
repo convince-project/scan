@@ -11,13 +11,14 @@ panic = "abort"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = ["scan_core", "scan_fmt_xml"]
+members = ["scan_core", "scan_fmt_xml", "scan_fmt_jani"]
 
 [workspace.dependencies]
 log = "0.4.20"
 
 [dependencies]
 scan_fmt_xml = { version = "0.1.0", path = "scan_fmt_xml" }
+scan_fmt_jani = { version = "0.1.0", path = "scan_fmt_jani" }
 clap = { version = "4.4.14", features = ["derive"] }
 env_logger = "0.11.0"
 log = { workspace = true }
