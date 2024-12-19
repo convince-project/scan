@@ -1,0 +1,158 @@
+{
+	"jani-version": 1,
+	"name": "test.jani",
+	"type": "lts",
+	"constants": [
+		{
+			"name": "c1",
+			"type": "int",
+			"value": 10
+		},
+		{
+			"name": "c2",
+			"type": "bool",
+			"value": true
+		}
+	],
+	"variables": [
+		{
+			"name": "v1",
+			"type": "int",
+			"initial-value": 15
+		},
+		{
+			"name": "v2",
+			"type": "bool",
+			"initial-value": false
+		}
+	],
+	"actions": [ { "name": "a1" }, { "name": "a2" }, { "name": "a3" } ],
+	"automata": [
+		{
+			"name": "test",
+			"locations": [{ "name": "l" } , { "name": "o" } , { "name": "c" } ],
+			"variables": [
+				{
+					"name": "b",
+					"type": "bool",
+					"initial-value": false
+				},
+				{
+					"name": "i",
+					"type": "int",
+					"initial-value": 5
+				}
+			],
+			"initial-locations": ["l"],
+			"edges": [
+				{
+					"location": "l",
+					"action": "a1",
+					"guard": {
+						"exp": {
+							"op": "=",
+                            "left": "i",
+                            "right": 5
+						}
+					},
+					"destinations": [
+						{
+							"location": "o",
+							"assignments": [
+								{
+									"ref": "b",
+									"value": true
+								}
+							]
+						}
+					]
+				},
+				{
+					"location": "o",
+					"action": "a2",
+					"guard": { 
+						"exp": { 
+							"op": "∧",
+							"left": "b",
+							"right": {
+								"op": "=",
+								"left": "v1",
+								"right": 5
+							}
+						}
+					},
+					"destinations": [
+						{
+							"location": "c",
+							"assignments": [
+								{
+									"ref": "v2",
+									"value": true
+								},
+                                {
+                                    "ref": "i",
+                                    "value": 10
+                                }
+							]
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "tset",
+			"locations": [{ "name": "l" } , { "name": "o" } , { "name": "c" } ],
+			"variables": [
+				{
+					"name": "b",
+					"type": "bool",
+					"initial-value": true
+				},
+				{
+					"name": "i",
+					"type": "int",
+					"initial-value": 15
+				}
+			],
+			"initial-locations": ["l"],
+			"edges": [
+				{
+					"location": "l",
+					"action": "a1",
+					"guard": {
+						"exp": "b"
+					},
+					"destinations": [
+						{
+							"location": "o",
+							"assignments": [
+								{
+									"ref": "i",
+									"value": 5
+								}
+							]
+						}
+					]
+				},
+				{
+					"location": "o",
+					"action": "a2",
+					"destinations": [
+						{
+							"location": "c",
+							"assignments": [
+								{
+									"ref": "v1",
+									"value": 5
+								}
+							]
+						}
+					]
+				}
+			]
+		}
+	],
+	"system": {
+		"elements": [ { "automaton": "test" }, { "automaton": "tset" } ]
+	}
+}
