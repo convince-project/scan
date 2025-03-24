@@ -29,13 +29,13 @@ fn ij_3() {
 }
 
 fn parse_test(path: &Path) {
-    let _ast = scan_fmt_jani::Parser::parse(path).unwrap();
+    let _ast = scan_jani::Parser::parse(path).unwrap();
     // println!("{ast:?}");
 }
 
 fn test(path: &Path) {
-    let ast = scan_fmt_jani::Parser::parse(path).unwrap();
-    let mut model = scan_fmt_jani::ModelBuilder::build(ast).unwrap();
+    let ast = scan_jani::Parser::parse(path).unwrap();
+    let mut model = scan_jani::ModelBuilder::build(ast).unwrap();
     let mut steps = 0;
     assert!(model.possible_transitions().count() > 0);
     let mut rng = rand::rng();
