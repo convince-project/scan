@@ -7,8 +7,8 @@ mod expression;
 mod jani_type;
 mod variable_declaration;
 
-pub(crate) use automaton::Automaton;
-pub(crate) use composition::Composition;
+pub(crate) use automaton::*;
+pub(crate) use composition::{Composition, Sync};
 pub(crate) use constant_declaration::ConstantDeclaration;
 pub(crate) use expression::Expression;
 pub(crate) use jani_type::Type;
@@ -22,32 +22,32 @@ pub(crate) type LValue = Identifier;
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Model {
     /// the jani-model version of this model
-    jani_version: u8,
+    pub(crate) jani_version: u8,
     /// the name of the model (e.g. the name of the underlying model file)
-    name: String,
+    pub(crate) name: String,
     /// the model's metadata
     #[serde(default)]
-    metadata: Option<Metadata>,
+    pub(crate) metadata: Option<Metadata>,
     /// the model's type
     #[serde(rename = "type")]
-    model_type: ModelType,
+    pub(crate) model_type: ModelType,
     /// extended jani-model features defined elsewhere that are used by this model
     #[serde(default)]
-    features: Vec<ModelFeature>,
+    pub(crate) features: Vec<ModelFeature>,
     /// the model's actions
     #[serde(default)]
-    actions: Vec<Action>,
+    pub(crate) actions: Vec<Action>,
     /// the model's constants
     #[serde(default)]
-    constants: Vec<ConstantDeclaration>,
+    pub(crate) constants: Vec<ConstantDeclaration>,
     /// the model's global variables
     #[serde(default)]
-    variables: Vec<VariableDeclaration>,
+    pub(crate) variables: Vec<VariableDeclaration>,
     /// the model's automata; at least one
-    automata: Vec<Automaton>,
+    pub(crate) automata: Vec<Automaton>,
     /// the model's automata network composition expression, note that one automaton
     /// can appear multiple times (= in multiple instances)
-    system: Composition,
+    pub(crate) system: Composition,
     // TODO
     // "?restrict-initial": { // restricts the initial values of the global variables
     //   "exp": Expression, // the initial states expression, type bool, must not reference transient variables
@@ -64,10 +64,10 @@ pub(crate) struct Metadata {
 #[derive(Deserialize)]
 pub(crate) struct Action {
     /// the action's name, unique among all actions
-    name: Identifier,
+    pub(crate) name: Identifier,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    pub(crate) comment: String,
 }
 
 #[derive(Deserialize)]

@@ -51,7 +51,7 @@ enum EcmaObj<V: Clone> {
 }
 
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder<SmallRng>,
     // Associates a type's id with both its OMG type and SCAN type.
@@ -99,25 +99,8 @@ impl ModelBuilder {
     /// (particularly type mismatches)
     /// or references to non-existing items.
     pub fn build(mut parser: Parser) -> anyhow::Result<(CsModel<SmallRng>, ScxmlModel)> {
-        let mut model_builder = ModelBuilder {
-            cs: ChannelSystemBuilder::new(),
-            types: HashMap::new(),
-            enums: HashMap::new(),
-            structs: HashMap::new(),
-            fsm_names: HashMap::new(),
-            fsm_builders: HashMap::new(),
-            events: Vec::new(),
-            event_indexes: HashMap::new(),
-            parameters: HashMap::new(),
-            guarantees: Vec::new(),
-            assumes: Vec::new(),
-            predicates: Vec::new(),
-            ports: HashMap::new(),
-            int_queues: HashSet::new(),
-        };
-
+        let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
-
         model_builder.prebuild_processes(&mut parser)?;
 
         info!(target: "build", "Visit process list");
@@ -391,7 +374,8 @@ impl ModelBuilder {
         // Initial location of Program Graph.
         let initial_loc = self
             .cs
-            .initial_location(pg_id)
+            // .initial_location(pg_id)
+            .new_initial_location(pg_id)
             .expect("program graph must exist");
         let mut initialize = None;
         // Initialize variables from datamodel

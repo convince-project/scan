@@ -7,15 +7,18 @@ use scan_core::*;
 fn run_to_completion(mut pg: ProgramGraph<StepRng>) {
     let mut rng = StepRng::new(0, 1);
     while let Some((action, post)) = pg.possible_transitions().last() {
-        assert!(pg.transition(action, post, &mut rng).is_ok());
+        let post = post
+            .into_iter()
+            .map(|v| *v.first().expect("loc"))
+            .collect::<Vec<_>>();
+        assert!(pg.transition(action, post.as_slice(), &mut rng).is_ok());
     }
-    // pg.possible_transitions().last()
 }
 
 #[inline(always)]
 fn simple_pg() -> ProgramGraph<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
-    let pre = pg.initial_location();
+    let pre = pg.new_initial_location();
     let action = pg.new_action();
     let post = pg.new_location();
     pg.add_transition(pre, action, post, None).unwrap();
@@ -25,7 +28,7 @@ fn simple_pg() -> ProgramGraph<StepRng> {
 #[inline(always)]
 fn condition_pg() -> ProgramGraph<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
-    let pre = pg.initial_location();
+    let pre = pg.new_initial_location();
     let action = pg.new_action();
     let post = pg.new_location();
     pg.add_transition(
@@ -56,7 +59,7 @@ fn condition_pg() -> ProgramGraph<StepRng> {
 #[inline(always)]
 fn long_pg() -> ProgramGraph<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
-    let mut pre = pg.initial_location();
+    let mut pre = pg.new_initial_location();
     let action = pg.new_action();
     for _ in 0..10 {
         let post = pg.new_location();
@@ -69,7 +72,7 @@ fn long_pg() -> ProgramGraph<StepRng> {
 #[inline(always)]
 fn counter_pg() -> ProgramGraph<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
-    let initial = pg.initial_location();
+    let initial = pg.new_initial_location();
     let action = pg.new_action();
     let var = pg.new_var(Expression::Const(Val::Integer(0))).unwrap();
     pg.add_effect(

@@ -3,17 +3,9 @@ name = "scan_jani"
 version = "0.1.0"
 edition = "2021"
 
-[build-dependencies]
-cfgrammar = "0.13"
-lrlex = "0.13"
-lrpar = "0.13"
-
 [dependencies]
 anyhow = { workspace = true }
 log = { workspace = true }
-cfgrammar = "0.13"
-lrlex = "0.13"
-lrpar = "0.13"
 scan_core = { path="../scan_core" }
 rand = { workspace = true }
 thiserror = { workspace = true }

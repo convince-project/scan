@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use scan_fmt_xml::scan_core::{adaptive_bound, okamoto_bound, CsModelBuilder, RunStatus};
+use scan_fmt_xml::scan_core::{adaptive_bound, okamoto_bound, RunStatus};
 use scan_fmt_xml::TracePrinter;
 use std::{
     path::PathBuf,
@@ -79,23 +79,19 @@ impl Cli {
     fn run_jani(&self) -> anyhow::Result<()> {
         use scan_jani::*;
 
-        parse(&self.path)?;
-
-        // let jani_model = Parser::parse(self.path.as_path())?;
-        // let model = ModelBuilder::build(jani_model)?;
-        // let cs_model = CsModelBuilder::new(model).build();
-        // let confidence = self.confidence;
-        // let precision = self.precision;
-        // let length = self.length;
-        // let duration = self.duration;
-        // let bar_state = Arc::clone(&cs_model.run_status());
-        // // TODO: JANI needs a tracer too
-        // let tracer: Option<TracePrinter> = None;
-        // let check = std::thread::spawn(move || {
-        //     cs_model.par_adaptive(confidence, precision, length, duration, tracer);
-        // });
-        // self.print_progress_bar(&[], bar_state);
-        // check.join().expect("terminate bar process");
+        let (cs_model, _model) = parse(&self.path)?;
+        let confidence = self.confidence;
+        let precision = self.precision;
+        let length = self.length;
+        let duration = self.duration;
+        let bar_state = Arc::clone(&cs_model.run_status());
+        // TODO: JANI needs a tracer too
+        let tracer: Option<TracePrinter> = None;
+        let check = std::thread::spawn(move || {
+            cs_model.par_adaptive(confidence, precision, length, duration, tracer);
+        });
+        self.print_progress_bar(&[], bar_state);
+        check.join().expect("terminate bar process");
 
         Ok(())
     }

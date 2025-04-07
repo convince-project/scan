@@ -1,0 +1,60 @@
+{
+	"jani-version": 1,
+	"name": "sync.jani",
+	"type": "lts",
+	"actions": [ { "name": "step" }],
+	"automata": [
+		{
+			"name": "automaton_1",
+			"locations": [{ "name": "l" } , { "name": "o" }],
+			"variables": [],
+			"initial-locations": ["l"],
+			"edges": [
+				{
+					"location": "l",
+					"action": "step_1",
+					"destinations": [
+						{
+							"location": "o"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "automaton_2",
+			"locations": [{ "name": "l" } , { "name": "o" }],
+			"variables": [],
+			"initial-locations": ["l"],
+			"edges": [
+				{
+					"location": "l",
+					"action": "step_2",
+					"destinations": [
+						{
+							"location": "o"
+						}
+					]
+				},
+				{
+					"location": "o",
+					"action": "step_2",
+					"destinations": [
+						{
+							"location": "l"
+						}
+					]
+				}
+			]
+		}
+	],
+	"system": {
+		"elements": [ { "automaton": "automaton_1" }, { "automaton": "automaton_2" } ],
+		"syncs": [
+		  {
+  		  "synchronise": ["step_1",  "step_2"],
+  		  "result": "step"
+		  }
+		]
+	}
+}

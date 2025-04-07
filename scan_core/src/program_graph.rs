@@ -27,7 +27,7 @@
 //! let mut pg_builder = ProgramGraphBuilder::new();
 //!
 //! // The builder is initialized with an initial location
-//! let initial_loc = pg_builder.initial_location();
+//! let initial_loc = pg_builder.new_initial_location();
 //!
 //! // Create a new action
 //! let action = pg_builder.new_action();
@@ -47,16 +47,16 @@
 //! let mut pg = pg_builder.build();
 //!
 //! // Execution starts in the initial location
-//! assert_eq!(pg.current_location(), initial_loc);
+//! assert_eq!(pg.current_states(), &[initial_loc]);
 //!
 //! // Compute the possible transitions on the PG
-//! assert_eq!(Vec::from_iter(pg.possible_transitions()), vec![(action, post_loc)]);
+//! assert_eq!(Vec::from_iter(pg.possible_transitions()), vec![(action, vec![vec![post_loc]])]);
 //!
 //! // Perform a transition
 //! # use rand::{Rng, SeedableRng};
 //! # use rand::rngs::SmallRng;
 //! let mut rng = SmallRng::from_os_rng();
-//! let result = pg.transition(action, post_loc, &mut rng);
+//! let result = pg.transition(action, vec![post_loc], &mut rng);
 //!
 //! // Performing a transition can fail, in particular, if the transition was not allowed
 //! result.expect("The transition from the initial location onto itself is possible");
@@ -65,17 +65,16 @@
 //! assert!(pg.possible_transitions().next().is_none());
 //!
 //! // Attempting to transition results in an error
-//! pg.transition(action, post_loc, &mut rng).expect_err("The transition is not possible");
+//! pg.transition(action, vec![post_loc], &mut rng).expect_err("The transition is not possible");
 //! ```
 
 mod builder;
 
-use super::grammar::*;
-use crate::Time;
+use crate::{grammar::*, Time};
 pub use builder::*;
-use core::panic;
 use rand::{rngs::mock::StepRng, Rng};
-use std::sync::Arc;
+use smallvec::SmallVec;
+use std::{collections::BTreeSet, sync::Arc};
 use thiserror::Error;
 
 /// An indexing object for locations in a PG.
@@ -156,6 +155,9 @@ pub enum PgError {
     /// This action is a communication (either Send or Receive).
     #[error("{0:?} is a communication (either Send or Receive)")]
     Communication(Action),
+    /// Mismatching (i.e., wrong number) post states of transition.
+    #[error("Mismatching (i.e., wrong number) post states of transition")]
+    MismatchingPostStates,
     /// The action is a not a Send communication.
     #[error("{0:?} is a not a Send communication")]
     NotSend(Action),
@@ -188,7 +190,7 @@ type Transition = (Action, Location, Option<Guard>, Vec<TimeConstraint>);
 #[derive(Debug)]
 struct ProgramGraphDef<R: Rng> {
     effects: Vec<FnEffect<R>>,
-    locations: Vec<(Vec<Transition>, Vec<TimeConstraint>)>,
+    locations: Vec<(Vec<Transition>, Vec<TimeConstraint>, BTreeSet<Action>)>,
 }
 
 impl<R: Rng> ProgramGraphDef<R> {
@@ -202,7 +204,7 @@ impl<R: Rng> ProgramGraphDef<R> {
         action: Action,
         post_state: Location,
     ) -> impl Iterator<Item = (&Option<Guard>, &Vec<TimeConstraint>)> {
-        let (transitions, _) = &self.locations[pre_state.0 as usize];
+        let (transitions, ..) = &self.locations[pre_state.0 as usize];
         let part = transitions.partition_point(|(a, p, ..)| (*a, *p) < (action, post_state));
         transitions[part..]
             .iter()
@@ -223,10 +225,11 @@ impl<R: Rng> ProgramGraphDef<R> {
 /// and thus the PG will always be in a consistent state.
 #[derive(Clone, Debug)]
 pub struct ProgramGraph<R: Rng> {
-    current_location: Location,
+    current_states: SmallVec<[Location; 8]>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
     def: Arc<ProgramGraphDef<R>>,
+    buf: BTreeSet<Action>,
 }
 
 impl<R: Rng> ProgramGraph<R> {
@@ -238,7 +241,7 @@ impl<R: Rng> ProgramGraph<R> {
     /// let mut pg_builder = ProgramGraphBuilder::new();
     ///
     /// // The builder is initialized with an initial location
-    /// let initial_loc = pg_builder.initial_location();
+    /// let initial_loc = pg_builder.new_initial_location();
     ///
     /// // Build the PG from its builder
     /// // The builder is always guaranteed to build a well-defined PG and building cannot fail
@@ -246,11 +249,22 @@ impl<R: Rng> ProgramGraph<R> {
     /// let mut pg = pg_builder.build::<SmallRng>();
     ///
     /// // Execution starts in the initial location
-    /// assert_eq!(pg.current_location(), initial_loc);
+    /// assert_eq!(pg.current_states(), &vec![initial_loc]);
     /// ```
     #[inline(always)]
-    pub fn current_location(&self) -> Location {
-        self.current_location
+    pub fn current_states(&self) -> &SmallVec<[Location; 8]> {
+        &self.current_states
+    }
+
+    #[inline(always)]
+    fn update_buf(&mut self) {
+        if self.current_states.len() > 1 {
+            self.buf = &self.def.locations[self.current_states[0].0 as usize].2
+                & &self.def.locations[self.current_states[1].0 as usize].2;
+            for loc in &self.current_states[2..] {
+                self.buf = &self.buf & &self.def.locations[loc.0 as usize].2;
+            }
+        }
     }
 
     /// Iterates over all transitions that can be admitted in the current state.
@@ -258,13 +272,57 @@ impl<R: Rng> ProgramGraph<R> {
     /// An admittable transition is characterized by the required action and the post-state
     /// (the pre-state being necessarily the current state of the machine).
     /// The guard (if any) is guaranteed to be satisfied.
-    pub fn possible_transitions(&self) -> impl Iterator<Item = (Action, Location)> + use<'_, R> {
-        self.def.locations[self.current_location.0 as usize]
-            .0
+    pub fn possible_transitions(
+        &self,
+    ) -> impl Iterator<Item = (Action, SmallVec<[SmallVec<[Location; 8]>; 4]>)> + use<'_, R> {
+        let filter = |action: Action| {
+            self.possible_transitions_action(action)
+                .map(|t| (action, t))
+        };
+        if self.current_states.len() == 1 {
+            &self.def.locations[self.current_states[0].0 as usize].2
+        } else {
+            &self.buf
+        }
+        .iter()
+        .copied()
+        .filter_map(filter)
+    }
+
+    #[inline(always)]
+    fn possible_transitions_action(
+        &self,
+        action: Action,
+    ) -> Option<SmallVec<[SmallVec<[Location; 8]>; 4]>> {
+        self.current_states
             .iter()
-            .filter_map(|(action, post_state, guard, constraints)| {
-                let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-                let resets = if *action == EPSILON {
+            .map(|loc| {
+                let ts = self.possible_transitions_action_post(action, *loc);
+                (!ts.is_empty()).then_some(ts)
+            })
+            .collect::<Option<_>>()
+    }
+
+    #[inline(always)]
+    fn possible_transitions_action_post(
+        &self,
+        action: Action,
+        current_state: Location,
+    ) -> SmallVec<[Location; 8]> {
+        let ppoint = self.def.locations[current_state.0 as usize]
+            .0
+            .partition_point(|(a, ..)| *a < action);
+        let mut last_post_state: Option<Location> = None;
+        self.def.locations[current_state.0 as usize].0[ppoint..]
+            .iter()
+            .take_while(|(a, ..)| *a == action)
+            .filter_map(|(_, post_state, guard, constraints)| {
+                // post_states could be duplicated waistfully
+                if last_post_state.is_some_and(|s| s == *post_state) {
+                    return None;
+                }
+                let (_, ref invariants, _) = self.def.locations[post_state.0 as usize];
+                let resets = if action == EPSILON {
                     &Vec::new()
                 } else {
                     match self.def.effects[action.0 as usize] {
@@ -272,9 +330,14 @@ impl<R: Rng> ProgramGraph<R> {
                         FnEffect::Send(_) | FnEffect::Receive(_) => &Vec::new(),
                     }
                 };
-                self.active_transition(guard.as_ref(), constraints, invariants, resets)
-                    .then_some((*action, *post_state))
+                if self.active_transition(guard.as_ref(), constraints, invariants, resets) {
+                    last_post_state = Some(*post_state);
+                    last_post_state
+                } else {
+                    None
+                }
             })
+            .collect::<SmallVec<_>>()
     }
 
     #[inline(always)]
@@ -313,13 +376,15 @@ impl<R: Rng> ProgramGraph<R> {
     ///
     /// Fails if the requested transition is not admissible,
     /// or if the post-location time invariants are violated.
-    pub fn transition<'a>(
-        &'a mut self,
+    pub fn transition(
+        &mut self,
         action: Action,
-        post_state: Location,
-        rng: &'a mut R,
+        post_states: &[Location],
+        rng: &mut R,
     ) -> Result<(), PgError> {
-        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
+        if post_states.len() != self.current_states.len() {
+            return Err(PgError::MismatchingPostStates);
+        }
         let (effects, resets) = if action == EPSILON {
             (&Vec::new(), &Vec::new())
         } else {
@@ -330,13 +395,7 @@ impl<R: Rng> ProgramGraph<R> {
                 }
             }
         };
-        if self
-            .def
-            .guards(self.current_location, action, post_state)
-            .any(|(guard, constraints)| {
-                self.active_transition(guard.as_ref(), constraints, invariants, resets)
-            })
-        {
+        if self.active_transitions(action, post_states, resets) {
             for (var, effect) in effects {
                 self.vars[var.0 as usize] =
                     effect.eval(&|var| self.vars[var.0 as usize].clone(), rng);
@@ -344,22 +403,49 @@ impl<R: Rng> ProgramGraph<R> {
             for clock in resets {
                 self.clocks[clock.0 as usize] = 0;
             }
-            self.current_location = post_state;
+            self.current_states.copy_from_slice(post_states);
+            // self.current_states = post_states;
+            self.update_buf();
             Ok(())
         } else {
             Err(PgError::UnsatisfiedGuard)
         }
     }
 
+    fn active_transitions(
+        &self,
+        action: Action,
+        post_states: &[Location],
+        resets: &[Clock],
+    ) -> bool {
+        self.current_states
+            .iter()
+            .zip(post_states)
+            .all(|(current_state, post_state)| {
+                self.def
+                    .guards(*current_state, action, *post_state)
+                    .any(|(guard, constraints)| {
+                        self.active_transition(
+                            guard.as_ref(),
+                            constraints,
+                            &self.def.locations[post_state.0 as usize].1,
+                            resets,
+                        )
+                    })
+            })
+    }
+
     /// Checks if it is possible to wait a given amount of time-units without violating the time invariants.
     pub fn can_wait(&self, delta: Time) -> bool {
-        let (_, ref invariants) = self.def.locations[self.current_location.0 as usize];
-        invariants.iter().all(|(c, l, u)| {
-            // Invariants need to be satisfied during the whole wait.
-            let start_time = self.clocks[c.0 as usize];
-            let end_time = start_time + delta;
-            l.is_none_or(|l| l <= start_time) && u.is_none_or(|u| end_time < u)
-        })
+        self.current_states
+            .iter()
+            .flat_map(|current_state| self.def.locations[current_state.0 as usize].1.iter())
+            .all(|(c, l, u)| {
+                // Invariants need to be satisfied during the whole wait.
+                let start_time = self.clocks[c.0 as usize];
+                let end_time = start_time + delta;
+                l.is_none_or(|l| l <= start_time) && u.is_none_or(|u| end_time < u)
+            })
     }
 
     /// Waits a given amount of time-units.
@@ -377,22 +463,17 @@ impl<R: Rng> ProgramGraph<R> {
     pub(crate) fn send<'a>(
         &'a mut self,
         action: Action,
-        post_state: Location,
+        post_states: &[Location],
         rng: &'a mut R,
     ) -> Result<Val, PgError> {
-        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
         if action == EPSILON {
             Err(PgError::NotSend(action))
-        } else if self
-            .def
-            .guards(self.current_location, action, post_state)
-            .any(|(guard, constraints)| {
-                self.active_transition(guard.as_ref(), constraints, invariants, &[])
-            })
-        {
+        } else if self.active_transitions(action, post_states, &[]) {
             if let FnEffect::Send(effect) = &self.def.effects[action.0 as usize] {
                 let val = effect.eval(&|var| self.vars[var.0 as usize].clone(), rng);
-                self.current_location = post_state;
+                self.current_states.copy_from_slice(post_states);
+                // self.current_states = post_states;
+                self.update_buf();
                 Ok(val)
             } else {
                 Err(PgError::NotSend(action))
@@ -405,24 +486,19 @@ impl<R: Rng> ProgramGraph<R> {
     pub(crate) fn receive(
         &mut self,
         action: Action,
-        post_state: Location,
+        post_states: &[Location],
         val: Val,
     ) -> Result<(), PgError> {
-        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
         if action == EPSILON {
-            Err(PgError::NotSend(action))
-        } else if self
-            .def
-            .guards(self.current_location, action, post_state)
-            .any(|(guard, constraints)| {
-                self.active_transition(guard.as_ref(), constraints, invariants, &[])
-            })
-        {
+            Err(PgError::NotReceive(action))
+        } else if self.active_transitions(action, post_states, &[]) {
             if let FnEffect::Receive(var) = self.def.effects[action.0 as usize] {
                 let var_content = self.vars.get_mut(var.0 as usize).expect("variable exists");
                 if var_content.r#type() == val.r#type() {
                     *var_content = val;
-                    self.current_location = post_state;
+                    self.current_states.copy_from_slice(post_states);
+                    // self.current_states = post_states;
+                    self.update_buf();
                     Ok(())
                 } else {
                     Err(PgError::TypeMismatch)
@@ -446,7 +522,8 @@ mod tests {
 
     #[test]
     fn wait() {
-        let builder = ProgramGraphBuilder::new();
+        let mut builder = ProgramGraphBuilder::new();
+        let _ = builder.new_initial_location();
         let mut pg = builder.build::<SmallRng>();
         assert_eq!(pg.possible_transitions().count(), 0);
         pg.wait(1).expect("wait 1 time unit");
@@ -455,19 +532,23 @@ mod tests {
     #[test]
     fn transitions() {
         let mut builder = ProgramGraphBuilder::new();
-        let initial = builder.initial_location();
+        let initial = builder.new_initial_location();
         let r#final = builder.new_location();
         let action = builder.new_action();
         builder
             .add_transition(initial, action, r#final, None)
             .expect("add transition");
         let mut pg = builder.build();
+        assert_eq!(pg.current_states().as_slice(), &[initial]);
         assert_eq!(
             pg.possible_transitions().collect::<Vec<_>>(),
-            vec![(action, r#final)]
+            vec![(
+                action,
+                SmallVec::<[_; 4]>::from(vec![SmallVec::<[_; 8]>::from(vec![r#final])])
+            )]
         );
         let mut rng = SmallRng::from_seed([0; 32]);
-        pg.transition(action, r#final, &mut rng)
+        pg.transition(action, &[r#final], &mut rng)
             .expect("transition to final");
         assert_eq!(pg.possible_transitions().count(), 0);
     }
@@ -480,7 +561,7 @@ mod tests {
         // Variables
         let battery = builder.new_var_with_rng(Expression::Const(Val::Integer(0)), &mut rng)?;
         // Locations
-        let initial = builder.initial_location();
+        let initial = builder.new_initial_location();
         let left = builder.new_location();
         let center = builder.new_location();
         let right = builder.new_location();
@@ -488,23 +569,13 @@ mod tests {
         let initialize = builder.new_action();
         builder.add_effect(initialize, battery, PgExpression::Const(Val::Integer(3)))?;
         let move_left = builder.new_action();
-        builder.add_effect(
-            move_left,
-            battery,
-            PgExpression::Sum(vec![
-                PgExpression::Var(battery, Type::Integer),
-                PgExpression::Const(Val::Integer(-1)),
-            ]),
-        )?;
+        let discharge = PgExpression::Sum(vec![
+            PgExpression::Var(battery, Type::Integer),
+            PgExpression::Const(Val::Integer(-1)),
+        ]);
+        builder.add_effect(move_left, battery, discharge.clone())?;
         let move_right = builder.new_action();
-        builder.add_effect(
-            move_right,
-            battery,
-            PgExpression::Sum(vec![
-                PgExpression::Var(battery, Type::Integer),
-                PgExpression::Const(Val::Integer(-1)),
-            ]),
-        )?;
+        builder.add_effect(move_right, battery, discharge)?;
         // Guards
         let out_of_charge = PgExpression::Greater(Box::new((
             PgExpression::Var(battery, Type::Integer),
@@ -520,21 +591,22 @@ mod tests {
         let mut pg = builder.build();
         assert_eq!(pg.possible_transitions().count(), 1);
         let mut rng = SmallRng::from_seed([0; 32]);
-        pg.transition(initialize, center, &mut rng)
+        pg.transition(initialize, &[center], &mut rng)
             .expect("initialize");
         assert_eq!(pg.possible_transitions().count(), 2);
-        pg.transition(move_right, right, &mut rng)
+        pg.transition(move_right, &[right], &mut rng)
             .expect("move right");
         assert_eq!(pg.possible_transitions().count(), 1);
-        pg.transition(move_right, right, &mut rng)
+        pg.transition(move_right, &[right], &mut rng)
             .expect_err("already right");
         assert_eq!(pg.possible_transitions().count(), 1);
-        pg.transition(move_left, center, &mut rng)
+        pg.transition(move_left, &[center], &mut rng)
             .expect("move left");
         assert_eq!(pg.possible_transitions().count(), 2);
-        pg.transition(move_left, left, &mut rng).expect("move left");
+        pg.transition(move_left, &[left], &mut rng)
+            .expect("move left");
         assert_eq!(pg.possible_transitions().count(), 0);
-        pg.transition(move_left, left, &mut rng)
+        pg.transition(move_left, &[left], &mut rng)
             .expect_err("battery = 0");
         Ok(())
     }

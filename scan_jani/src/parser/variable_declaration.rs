@@ -20,8 +20,9 @@ pub(crate) struct VariableDeclaration {
     transient: bool,
     /// if omitted: any value allowed by type (possibly restricted by the restrict-initial
     /// attributes of the model or an automaton); must be present if transient is present and true
+    #[serde(default)]
     initial_value: Option<Expression>,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    comment: String,
 }

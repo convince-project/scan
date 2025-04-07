@@ -1,14 +1,11 @@
 use super::{
     Action, Clock, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph,
-    TimeConstraint, Var, EPSILON,
+    ProgramGraphDef, TimeConstraint, Var, EPSILON,
 };
-use crate::{
-    grammar::{Type, Val},
-    program_graph::ProgramGraphDef,
-};
+use crate::grammar::{Type, Val};
 use log::info;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Debug, Clone)]
 enum Effect {
@@ -41,6 +38,7 @@ type TransitionBuilder = (Action, Location, Option<PgExpression>, Vec<TimeConstr
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
 pub struct ProgramGraphBuilder {
+    initial_states: Vec<Location>,
     // Effects are indexed by actions
     effects: Vec<Effect>,
     // Transitions are indexed by locations
@@ -59,30 +57,17 @@ impl Default for ProgramGraphBuilder {
 }
 
 impl ProgramGraphBuilder {
-    const INITIAL: Location = Location(0);
-
     /// Creates a new [`ProgramGraphBuilder`].
     /// At creation, this will only have the inital location with no variables, no actions and no transitions.
     /// The initial location can be retreived by [`ProgramGraphBuilder::initial_location`]
     pub fn new() -> Self {
-        let mut pgb = Self {
+        Self {
+            initial_states: Vec::new(),
             effects: Vec::new(),
             vars: Vec::new(),
             locations: Vec::new(),
             clocks: 0,
-        };
-        // Create an initial location and make sure it is equal to the constant `Self::INITIAL_LOCATION`
-        // This is the simplest way to make sure the state of the builder is always consistent
-        let initial_location = pgb.new_location();
-        assert_eq!(initial_location, Self::INITIAL);
-
-        pgb
-    }
-
-    /// Gets the initial location of the PG.
-    /// This is created toghether with the [`ProgramGraphBuilder`] by default.
-    pub fn initial_location(&self) -> Location {
-        Self::INITIAL
+        }
     }
 
     // Gets the type of a variable.
@@ -310,6 +295,32 @@ impl ProgramGraphBuilder {
         }
     }
 
+    /// Adds a new location to the PG and returns its [`Location`] indexing object.
+    #[inline(always)]
+    pub fn new_initial_location(&mut self) -> Location {
+        assert!(self.initial_states.is_empty());
+        self.new_initial_timed_location(Vec::new())
+            .expect("new untimed location")
+    }
+
+    /// Adds a new location to the PG with the given time invariants,
+    /// and returns its [`Location`] indexing object.
+    pub fn new_initial_timed_location(
+        &mut self,
+        invariants: Vec<TimeConstraint>,
+    ) -> Result<Location, PgError> {
+        if let Some((clock, _, _)) = invariants.iter().find(|(c, _, _)| c.0 >= self.clocks) {
+            Err(PgError::MissingClock(*clock))
+        } else {
+            // Locations are indexed progressively
+            let idx = self.locations.len();
+            self.locations.push((Vec::new(), invariants));
+            let location = Location(idx as u16);
+            self.initial_states.push(location);
+            Ok(location)
+        }
+    }
+
     /// Adds a transition to the PG.
     /// Requires specifying:
     ///
@@ -324,7 +335,7 @@ impl ProgramGraphBuilder {
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
-    /// let initial_loc = pg_builder.initial_location();
+    /// let initial_loc = pg_builder.new_initial_location();
     ///
     /// // Create a new action
     /// let action = pg_builder.new_action();
@@ -358,7 +369,7 @@ impl ProgramGraphBuilder {
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
-    /// let initial_loc = pg_builder.initial_location();
+    /// let initial_loc = pg_builder.new_initial_location();
     ///
     /// // Create a new action
     /// let action = pg_builder.new_action();
@@ -399,7 +410,7 @@ impl ProgramGraphBuilder {
         {
             Err(PgError::MissingClock(*clock))
         } else {
-            if let Some(guard) = guard.clone() {
+            if let Some(ref guard) = guard {
                 guard
                     .context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
                     .map_err(PgError::Type)?;
@@ -423,7 +434,7 @@ impl ProgramGraphBuilder {
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
-    /// let initial_loc = pg_builder.initial_location();
+    /// let initial_loc = pg_builder.new_initial_location();
     ///
     /// // Add a transition
     /// pg_builder
@@ -453,7 +464,7 @@ impl ProgramGraphBuilder {
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
-    /// let initial_loc = pg_builder.initial_location();
+    /// let initial_loc = pg_builder.new_initial_location();
     ///
     /// // Add a new clock
     /// let clock = pg_builder.new_clock();
@@ -498,7 +509,8 @@ impl ProgramGraphBuilder {
                     .collect::<Vec<_>>();
                 transitions.sort_unstable_by_key(|(a, p, ..)| (*a, *p));
                 transitions.shrink_to_fit();
-                (transitions, invariants)
+                let actions = BTreeSet::from_iter(transitions.iter().map(|(a, ..)| *a));
+                (transitions, invariants, actions)
             })
             .collect::<Vec<_>>();
         locations.shrink_to_fit();
@@ -513,11 +525,23 @@ impl ProgramGraphBuilder {
             effects: self.effects.into_iter().map(FnEffect::from).collect(),
             locations,
         };
+        self.initial_states.sort_unstable();
+        self.initial_states.shrink_to_fit();
+        // Initialize buf
+        let mut buf = BTreeSet::from_iter(
+            (0..self.initial_states.len() as u16)
+                .map(Action)
+                .chain([EPSILON]),
+        );
+        for loc in &self.initial_states {
+            buf = &buf & &def.locations[loc.0 as usize].2
+        }
         ProgramGraph {
-            current_location: Self::INITIAL,
+            current_states: self.initial_states.into(),
             vars: self.vars,
             def: Arc::new(def),
             clocks: vec![0; self.clocks as usize],
+            buf,
         }
     }
 }

@@ -7,12 +7,12 @@ use serde::Deserialize;
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Automaton {
     /// the name of the automaton, unique among all automata
-    name: String,
+    pub(crate) name: String,
     /// the local variables of the automaton
     #[serde(default)]
-    variables: Vec<VariableDeclaration>,
+    pub(crate) variables: Vec<VariableDeclaration>,
     /// the locations that make up the automaton; at least one
-    locations: Vec<Location>,
+    pub(crate) locations: Vec<Location>,
     // TODO
     // "?restrict-initial": { // restricts the initial values of the local variables of this automaton (i.e. it has no
     //                        // effect on the initial values of global variables or local variables of other automata)
@@ -20,25 +20,25 @@ pub(crate) struct Automaton {
     //   "?comment": String // an optional comment
     // },
     /// the automaton's initial locations
-    initial_locations: Vec<Identifier>,
+    pub(crate) initial_locations: Vec<Identifier>,
     /// the edges connecting the locations
-    edges: Vec<Edge>,
+    pub(crate) edges: Vec<Edge>,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    pub(crate) comment: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Location {
     /// the name of the location, unique among all locations of this automaton
-    name: Identifier,
+    pub(crate) name: Identifier,
     /// values for transient variables in this location
     #[serde(default)]
-    transient_values: Vec<TransientValue>,
+    pub(crate) transient_values: Vec<TransientValue>,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    pub(crate) comment: String,
     // TODO
     // "?time-progress": { // the location's time progress condition, not allowed except TA, PTA, STA, HA, PHA and STA,
     //                     // type bool; if omitted in TA, PTA, STA, HA, PHA or SHA, it is true
@@ -51,23 +51,23 @@ pub(crate) struct Location {
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct TransientValue {
     /// what to set the value for
-    r#ref: LValue,
+    pub(crate) r#ref: LValue,
     /// the value, must not contain references to transient variables or variables of type
     /// "clock" or "continuous"
-    value: Expression,
+    pub(crate) value: Expression,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    pub(crate) comment: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Edge {
     /// the edge's source location
-    location: Identifier,
+    pub(crate) location: Identifier,
     /// the edge's action label; if omitted, the label is the silent action
     #[serde(default)]
-    action: Option<Identifier>,
+    pub(crate) action: Option<Identifier>,
     // "?rate": { // the edge's rate, required for CTMC and CTMDP, optional for MA,
     //            // optional in DTMC where it represents the weight of the edge to be able to resolve nondeterminism,
     //            // not allowed in all other model types; if present in a MA, action must be omitted
@@ -76,41 +76,41 @@ pub(crate) struct Edge {
     // },
     /// the edge's guard; if omitted, it is true
     #[serde(default)]
-    guard: Option<Guard>,
+    pub(crate) guard: Option<Guard>,
     /// the destinations of the edge, at least one, at most one for LTS, TA and HA
-    destinations: Vec<Destination>,
+    pub(crate) destinations: Vec<Destination>,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    pub(crate) comment: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Guard {
     /// the guard expression, type bool
-    exp: Expression,
+    pub(crate) exp: Expression,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    pub(crate) comment: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Destination {
     /// the destination's target location
-    location: Identifier,
+    pub(crate) location: Identifier,
     /// the destination's probability, not allowed in LTS, TA and HA; if omitted, it is 1
     #[serde(default)]
-    probability: Option<Probability>,
+    pub(crate) probability: Option<Probability>,
     /// the set of assignments to execute atomically
     #[serde(default)]
-    assignments: Vec<Assignment>,
+    pub(crate) assignments: Vec<Assignment>,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    pub(crate) comment: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Assignment {
     /// what to assign to (can be both transient and non-transient)
@@ -122,15 +122,15 @@ pub(crate) struct Assignment {
     // "?index": Number.step(1), // the index, to create sequences of atomic assignment sets, default 0
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    comment: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Probability {
     /// the probability expression, type real; note that this may evaluate to zero
     exp: Expression,
     /// an optional comment
     #[serde(skip)]
-    comment: Option<String>,
+    comment: String,
 }

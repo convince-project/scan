@@ -78,7 +78,11 @@ fn test(path: &Path) -> anyhow::Result<()> {
         .collect::<Vec<_>>()
         .pop()
     {
-        model.transition(pg_id, act, loc)?;
+        let loc = loc
+            .into_iter()
+            .map(|d| *d.first().expect("destination"))
+            .collect::<Vec<_>>();
+        model.transition(pg_id, act, &loc)?;
         steps += 1;
         if steps >= MAXSTEP {
             return Err(anyhow!("step limit reached"));

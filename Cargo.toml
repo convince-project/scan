@@ -14,7 +14,7 @@ members = ["scan_core", "scan_scxml", "scan_jani"]
 
 [workspace.dependencies]
 anyhow = "1.0.97"
-log = "0.4.26"
+log = "0.4.27"
 ordered-float = "5.0.0"
 rand = { version = "0.9.0", features = ["small_rng"] }
 thiserror = "2.0.12"
@@ -23,7 +23,7 @@ thiserror = "2.0.12"
 anyhow = { workspace = true }
 scan_scxml = { version = "0.1.0", path = "scan_scxml" }
 scan_jani = { version = "0.1.0", path = "scan_jani" }
-clap = { version = "4.5.32", features = ["derive"] }
-env_logger = "0.11.7"
+clap = { version = "4.5.35", features = ["derive"] }
+env_logger = "0.11.8"
 log = { workspace = true }
 indicatif = { version = "0.17.11", features = ["improved_unicode"] }

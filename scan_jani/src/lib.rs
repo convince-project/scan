@@ -1,27 +1,26 @@
 //! Parser and model builder for SCAN's JANI specification format.
 
-pub mod jani_builder;
-pub mod jani_parser;
+mod builder;
 mod parser;
 
 use anyhow::Context;
-use parser::Model;
+use builder::{build, JaniModelData};
+use log::info;
+use parser::{Model, Sync};
+use rand::SeedableRng;
+use scan_core::CsModel;
 use std::{fs::File, path::Path};
 
-pub use jani_builder::ModelBuilder;
-pub use jani_parser::Parser;
-use log::info;
-
-pub fn parse(path: &Path) -> anyhow::Result<()> {
+pub fn parse(path: &Path) -> anyhow::Result<(CsModel<rand::rngs::SmallRng>, JaniModelData)> {
     info!(target: "parser", "parsing JANI model file '{}'", path.display());
     let reader = File::open(path)
         .with_context(|| format!("failed to create reader from file '{}'", path.display()))?;
-    let _model: Model = serde_json::de::from_reader(reader).with_context(|| {
+    let jani_model: Model = serde_json::de::from_reader(reader).with_context(|| {
         format!(
             "failed to parse model specification in '{}'",
             path.display(),
         )
     })?;
 
-    Ok(())
+    build(jani_model, rand::rngs::SmallRng::from_os_rng())
 }
