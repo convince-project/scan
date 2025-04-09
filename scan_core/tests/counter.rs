@@ -1,4 +1,5 @@
-use rand::{rngs::SmallRng, seq::IndexedRandom, SeedableRng};
+use rand::prelude::IteratorRandom;
+use rand::{SeedableRng, rngs::SmallRng, seq::IndexedRandom};
 use scan_core::{program_graph::*, *};
 
 #[test]
@@ -29,7 +30,7 @@ fn counter_pg() -> Result<(), PgError> {
     while let Some((act, post)) = pg.possible_transitions().last() {
         let post = post
             .into_iter()
-            .map(|d| *d.choose(&mut rng).expect("destination"))
+            .map(|d| d.choose(&mut rng).expect("destination"))
             .collect::<Vec<_>>();
         // assert_eq!(post, initial);
         assert_eq!(act, action);
