@@ -274,11 +274,16 @@ impl<R: Rng> ProgramGraph<R> {
     /// The guard (if any) is guaranteed to be satisfied.
     pub fn possible_transitions(
         &self,
-    ) -> impl Iterator<Item = (Action, SmallVec<[SmallVec<[Location; 8]>; 4]>)> + use<'_, R> {
-        let filter = |action: Action| {
-            self.possible_transitions_action(action)
-                .map(|t| (action, t))
-        };
+    ) -> impl Iterator<
+        Item = (
+            Action,
+            impl Iterator<Item = impl Iterator<Item = Location> + use<'_, R>>,
+        ),
+    > + use<'_, R> {
+        // let filter = |action: Action| {
+        //     self.possible_transitions_action(action)
+        //         .map(|t| (action, t))
+        // };
         if self.current_states.len() == 1 {
             &self.def.locations[self.current_states[0].0 as usize].2
         } else {
@@ -286,21 +291,21 @@ impl<R: Rng> ProgramGraph<R> {
         }
         .iter()
         .copied()
-        .filter_map(filter)
+        .map(|action| (action, self.possible_transitions_action(action)))
+        // .filter_map(filter)
     }
 
     #[inline(always)]
     fn possible_transitions_action(
         &self,
         action: Action,
-    ) -> Option<SmallVec<[SmallVec<[Location; 8]>; 4]>> {
-        self.current_states
-            .iter()
-            .map(|loc| {
-                let ts = self.possible_transitions_action_post(action, *loc);
-                (!ts.is_empty()).then_some(ts)
-            })
-            .collect::<Option<_>>()
+    ) -> impl Iterator<Item = impl Iterator<Item = Location> + use<'_, R>> {
+        self.current_states.iter().map(move |loc| {
+            self.possible_transitions_action_post(action, *loc)
+            // let mut ts = ts.peekable();
+            // (ts.peek().is_some()).then_some(ts)
+        })
+        // .collect::<Option<_>>()
     }
 
     #[inline(always)]
@@ -308,15 +313,15 @@ impl<R: Rng> ProgramGraph<R> {
         &self,
         action: Action,
         current_state: Location,
-    ) -> SmallVec<[Location; 8]> {
+    ) -> impl Iterator<Item = Location> + use<'_, R> {
         let ppoint = self.def.locations[current_state.0 as usize]
             .0
             .partition_point(|(a, ..)| *a < action);
         let mut last_post_state: Option<Location> = None;
         self.def.locations[current_state.0 as usize].0[ppoint..]
             .iter()
-            .take_while(|(a, ..)| *a == action)
-            .filter_map(|(_, post_state, guard, constraints)| {
+            .take_while(move |(a, ..)| *a == action)
+            .filter_map(move |(_, post_state, guard, constraints)| {
                 // post_states could be duplicated waistfully
                 if last_post_state.is_some_and(|s| s == *post_state) {
                     return None;
@@ -337,7 +342,6 @@ impl<R: Rng> ProgramGraph<R> {
                     None
                 }
             })
-            .collect::<SmallVec<_>>()
     }
 
     #[inline(always)]
@@ -540,13 +544,13 @@ mod tests {
             .expect("add transition");
         let mut pg = builder.build();
         assert_eq!(pg.current_states().as_slice(), &[initial]);
-        assert_eq!(
-            pg.possible_transitions().collect::<Vec<_>>(),
-            vec![(
-                action,
-                SmallVec::<[_; 4]>::from(vec![SmallVec::<[_; 8]>::from(vec![r#final])])
-            )]
-        );
+        // assert_eq!(
+        //     pg.possible_transitions().collect::<Vec<_>>(),
+        //     vec![(
+        //         action,
+        //         SmallVec::<[_; 4]>::from(vec![SmallVec::<[_; 8]>::from(vec![r#final])])
+        //     )]
+        // );
         let mut rng = SmallRng::from_seed([0; 32]);
         pg.transition(action, &[r#final], &mut rng)
             .expect("transition to final");

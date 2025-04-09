@@ -99,7 +99,8 @@ use crate::program_graph::{
 };
 use crate::{grammar::*, Time};
 pub use builder::*;
-use rand::seq::{IndexedRandom, IteratorRandom, SliceRandom};
+use rand::rngs::SmallRng;
+use rand::seq::{IteratorRandom, SliceRandom};
 use rand::{Rng, SeedableRng};
 use smallvec::SmallVec;
 use std::collections::VecDeque;
@@ -340,6 +341,7 @@ impl<R: Rng> ChannelSystem<R> {
     pub(crate) fn montecarlo_execution(&mut self, duration: Time) -> Option<Event> {
         let mut pg_vec =
             SmallVec::<[_; 8]>::from_iter((0..self.program_graphs.len() as u16).map(PgId));
+        let mut rand = SmallRng::from_rng(&mut self.rng);
         while self.time <= duration {
             // Resets PG queue
             let mut pg_list = pg_vec.as_mut_slice();
@@ -349,8 +351,8 @@ impl<R: Rng> ChannelSystem<R> {
                 let pg_id = select[0];
                 while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
                     .possible_transitions()
-                    .filter(|(action, _)| {
-                        self.def.communication(Action(pg_id, *action)).is_none_or(
+                    .filter_map(|(action, post_state)| {
+                        if self.def.communication(Action(pg_id, action)).is_none_or(
                             |(channel, message)| {
                                 let (_, capacity) = self.def.channels[channel.0 as usize];
                                 let queue = &self.message_queue[channel.0 as usize];
@@ -369,29 +371,26 @@ impl<R: Rng> ChannelSystem<R> {
                                         Message::ProbeEmptyQueue => queue.is_empty(),
                                     }
                             },
-                        )
+                        ) {
+                            post_state
+                                .map(|locs| locs.choose(&mut self.rng).map(|l| Location(pg_id, l)))
+                                .collect::<Option<SmallVec<[Location; 4]>>>()
+                                .map(|s| (action, s))
+                        } else {
+                            None
+                        }
                     })
-                    .choose(&mut self.rng)
+                    .choose(&mut rand)
                 {
-                    let post_state = post_states
-                        .into_iter()
-                        .map(|locs| {
-                            Location(
-                                pg_id,
-                                *locs.choose(&mut self.rng).expect("some choice of location"),
-                            )
-                        })
-                        .collect::<SmallVec<[Location; 8]>>();
                     let event = self
-                        .transition(pg_id, Action(pg_id, action), &post_state)
+                        .transition(pg_id, Action(pg_id, action), post_states.as_slice())
                         .expect("successful transition");
                     if event.is_some() {
                         return event;
                     }
                 }
             }
-            // self.wait(1).ok()?;
-            self.wait(1).expect("wait");
+            self.wait(1).ok()?;
         }
         None
     }
@@ -577,117 +576,117 @@ impl<R: Rng> ChannelSystem<R> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     #[test]
-//     fn builder() {
-//         let _cs = ChannelSystemBuilder::new();
-//     }
+    #[test]
+    fn builder() {
+        let _cs = ChannelSystemBuilder::new();
+    }
 
-//     #[test]
-//     fn new_pg() {
-//         let mut cs = ChannelSystemBuilder::new();
-//         let _ = cs.new_program_graph();
-//     }
+    #[test]
+    fn new_pg() {
+        let mut cs = ChannelSystemBuilder::new();
+        let _ = cs.new_program_graph();
+    }
 
-//     #[test]
-//     fn new_action() -> Result<(), CsError> {
-//         let mut cs = ChannelSystemBuilder::new();
-//         let pg = cs.new_program_graph();
-//         let _action = cs.new_action(pg)?;
-//         Ok(())
-//     }
+    #[test]
+    fn new_action() -> Result<(), CsError> {
+        let mut cs = ChannelSystemBuilder::new();
+        let pg = cs.new_program_graph();
+        let _action = cs.new_action(pg)?;
+        Ok(())
+    }
 
-//     #[test]
-//     fn new_var() -> Result<(), CsError> {
-//         let mut cs = ChannelSystemBuilder::new();
-//         let pg = cs.new_program_graph();
-//         let _var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
-//         let _var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
-//         Ok(())
-//     }
+    #[test]
+    fn new_var() -> Result<(), CsError> {
+        let mut cs = ChannelSystemBuilder::new();
+        let pg = cs.new_program_graph();
+        let _var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
+        let _var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
+        Ok(())
+    }
 
-//     #[test]
-//     fn add_effect() -> Result<(), CsError> {
-//         let mut cs = ChannelSystemBuilder::new();
-//         let pg = cs.new_program_graph();
-//         let action = cs.new_action(pg)?;
-//         let var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
-//         let var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
-//         let effect_1 = CsExpression::Const(Val::Integer(2));
-//         cs.add_effect(pg, action, var1, effect_1.clone())
-//             .expect_err("type mismatch");
-//         let effect_2 = CsExpression::Const(Val::Boolean(true));
-//         cs.add_effect(pg, action, var1, effect_2.clone())?;
-//         cs.add_effect(pg, action, var2, effect_2)
-//             .expect_err("type mismatch");
-//         cs.add_effect(pg, action, var2, effect_1)?;
-//         Ok(())
-//     }
+    #[test]
+    fn add_effect() -> Result<(), CsError> {
+        let mut cs = ChannelSystemBuilder::new();
+        let pg = cs.new_program_graph();
+        let action = cs.new_action(pg)?;
+        let var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
+        let var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
+        let effect_1 = CsExpression::Const(Val::Integer(2));
+        cs.add_effect(pg, action, var1, effect_1.clone())
+            .expect_err("type mismatch");
+        let effect_2 = CsExpression::Const(Val::Boolean(true));
+        cs.add_effect(pg, action, var1, effect_2.clone())?;
+        cs.add_effect(pg, action, var2, effect_2)
+            .expect_err("type mismatch");
+        cs.add_effect(pg, action, var2, effect_1)?;
+        Ok(())
+    }
 
-//     #[test]
-//     fn new_location() -> Result<(), CsError> {
-//         let mut cs = ChannelSystemBuilder::new();
-//         let pg = cs.new_program_graph();
-//         let initial = cs.new_initial_location(pg)?;
-//         let location = cs.new_location(pg)?;
-//         assert_ne!(initial, location);
-//         Ok(())
-//     }
+    #[test]
+    fn new_location() -> Result<(), CsError> {
+        let mut cs = ChannelSystemBuilder::new();
+        let pg = cs.new_program_graph();
+        let initial = cs.new_initial_location(pg)?;
+        let location = cs.new_location(pg)?;
+        assert_ne!(initial, location);
+        Ok(())
+    }
 
-//     #[test]
-//     fn add_transition() -> Result<(), CsError> {
-//         let mut cs = ChannelSystemBuilder::new();
-//         let pg = cs.new_program_graph();
-//         let initial = cs.new_initial_location(pg)?;
-//         let action = cs.new_action(pg)?;
-//         let var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
-//         let var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
-//         let effect_1 = CsExpression::Const(Val::Integer(0));
-//         let effect_2 = CsExpression::Const(Val::Boolean(true));
-//         cs.add_effect(pg, action, var1, effect_2)?;
-//         cs.add_effect(pg, action, var2, effect_1)?;
-//         let post = cs.new_location(pg)?;
-//         cs.add_transition(pg, initial, action, post, None)?;
-//         Ok(())
-//     }
+    #[test]
+    fn add_transition() -> Result<(), CsError> {
+        let mut cs = ChannelSystemBuilder::new();
+        let pg = cs.new_program_graph();
+        let initial = cs.new_initial_location(pg)?;
+        let action = cs.new_action(pg)?;
+        let var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
+        let var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
+        let effect_1 = CsExpression::Const(Val::Integer(0));
+        let effect_2 = CsExpression::Const(Val::Boolean(true));
+        cs.add_effect(pg, action, var1, effect_2)?;
+        cs.add_effect(pg, action, var2, effect_1)?;
+        let post = cs.new_location(pg)?;
+        cs.add_transition(pg, initial, action, post, None)?;
+        Ok(())
+    }
 
-//     #[test]
-//     fn add_communication() -> Result<(), CsError> {
-//         let mut cs = ChannelSystemBuilder::new();
-//         let ch = cs.new_channel(Type::Boolean, Some(1));
+    #[test]
+    fn add_communication() -> Result<(), CsError> {
+        let mut cs = ChannelSystemBuilder::new();
+        let ch = cs.new_channel(Type::Boolean, Some(1));
 
-//         let pg1 = cs.new_program_graph();
-//         let initial1 = cs.new_initial_location(pg1)?;
-//         let post1 = cs.new_location(pg1)?;
-//         let effect = CsExpression::Const(Val::Boolean(true));
-//         let send = cs.new_send(pg1, ch, effect.clone())?;
-//         let _ = cs.new_send(pg1, ch, effect)?;
-//         cs.add_transition(pg1, initial1, send, post1, None)?;
+        let pg1 = cs.new_program_graph();
+        let initial1 = cs.new_initial_location(pg1)?;
+        let post1 = cs.new_location(pg1)?;
+        let effect = CsExpression::Const(Val::Boolean(true));
+        let send = cs.new_send(pg1, ch, effect.clone())?;
+        let _ = cs.new_send(pg1, ch, effect)?;
+        cs.add_transition(pg1, initial1, send, post1, None)?;
 
-//         let var1 = cs.new_var(pg1, Expression::Const(Val::Integer(0)))?;
-//         let effect = CsExpression::Const(Val::Integer(0));
-//         cs.add_effect(pg1, send, var1, effect)
-//             .expect_err("send is a message so it cannot have effects");
+        let var1 = cs.new_var(pg1, Expression::Const(Val::Integer(0)))?;
+        let effect = CsExpression::Const(Val::Integer(0));
+        cs.add_effect(pg1, send, var1, effect)
+            .expect_err("send is a message so it cannot have effects");
 
-//         let pg2 = cs.new_program_graph();
-//         let initial2 = cs.new_initial_location(pg2)?;
-//         let post2 = cs.new_location(pg2)?;
-//         let var2 = cs.new_var(pg2, Expression::Const(Val::Boolean(false)))?;
-//         let receive = cs.new_receive(pg2, ch, var2)?;
-//         let _ = cs.new_receive(pg2, ch, var2)?;
-//         let _ = cs.new_receive(pg2, ch, var2)?;
-//         cs.add_transition(pg2, initial2, receive, post2, None)?;
+        let pg2 = cs.new_program_graph();
+        let initial2 = cs.new_initial_location(pg2)?;
+        let post2 = cs.new_location(pg2)?;
+        let var2 = cs.new_var(pg2, Expression::Const(Val::Boolean(false)))?;
+        let receive = cs.new_receive(pg2, ch, var2)?;
+        let _ = cs.new_receive(pg2, ch, var2)?;
+        let _ = cs.new_receive(pg2, ch, var2)?;
+        cs.add_transition(pg2, initial2, receive, post2, None)?;
 
-//         let mut cs = cs.build();
-//         assert_eq!(cs.possible_transitions().count(), 1);
-//         assert_eq!(cs.def.communications_pg_idxs, vec![0, 2, 5]);
+        let mut cs = cs.build();
+        assert_eq!(cs.possible_transitions().count(), 1);
+        assert_eq!(cs.def.communications_pg_idxs, vec![0, 2, 5]);
 
-//         cs.transition(pg1, send, vec![post1])?;
-//         cs.transition(pg2, receive, vec![post2])?;
-//         assert_eq!(cs.possible_transitions().count(), 0);
-//         Ok(())
-//     }
-// }
+        cs.transition(pg1, send, &[post1])?;
+        cs.transition(pg2, receive, &[post2])?;
+        assert_eq!(cs.possible_transitions().count(), 0);
+        Ok(())
+    }
+}

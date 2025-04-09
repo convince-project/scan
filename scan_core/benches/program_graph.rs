@@ -9,7 +9,7 @@ fn run_to_completion(mut pg: ProgramGraph<StepRng>) {
     while let Some((action, post)) = pg.possible_transitions().last() {
         let post = post
             .into_iter()
-            .map(|v| *v.first().expect("loc"))
+            .map(|mut v| v.next().expect("loc"))
             .collect::<Vec<_>>();
         assert!(pg.transition(action, post.as_slice(), &mut rng).is_ok());
     }
