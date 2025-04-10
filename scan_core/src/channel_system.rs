@@ -97,7 +97,7 @@ mod builder;
 use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
 };
-use crate::{grammar::*, Time};
+use crate::{Time, grammar::*};
 pub use builder::*;
 use rand::rngs::SmallRng;
 use rand::seq::{IteratorRandom, SliceRandom};
@@ -319,7 +319,13 @@ impl<R: Rng> ChannelSystem<R> {
     /// See also [`ProgramGraph::possible_transitions`].
     pub fn possible_transitions(
         &self,
-    ) -> impl Iterator<Item = (PgId, Action, SmallVec<[SmallVec<[Location; 8]>; 4]>)> + '_ {
+    ) -> impl Iterator<
+        Item = (
+            PgId,
+            Action,
+            impl Iterator<Item = impl Iterator<Item = Location> + '_> + '_,
+        ),
+    > + '_ {
         self.program_graphs
             .iter()
             .enumerate()
@@ -327,11 +333,8 @@ impl<R: Rng> ChannelSystem<R> {
                 let pg_id = PgId(id as u16);
                 pg.possible_transitions().filter_map(move |(action, post)| {
                     let action = Action(pg_id, action);
-                    self.check_communication(pg_id, action).ok().map(|()| {
-                        let post = post
-                            .into_iter()
-                            .map(|locs| locs.into_iter().map(|loc| Location(pg_id, loc)).collect())
-                            .collect();
+                    self.check_communication(pg_id, action).ok().map(move |()| {
+                        let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
                         (pg_id, action, post)
                     })
                 })
@@ -474,7 +477,7 @@ impl<R: Rng> ChannelSystem<R> {
                     EventType::Send(val)
                 }
                 Message::Receive if self.message_queue[channel.0 as usize].is_empty() => {
-                    return Err(CsError::Empty(channel))
+                    return Err(CsError::Empty(channel));
                 }
                 Message::Receive => {
                     let val = self.message_queue[channel.0 as usize]
@@ -498,7 +501,7 @@ impl<R: Rng> ChannelSystem<R> {
                     return Err(CsError::ProbingHandshakeChannel(channel));
                 }
                 Message::ProbeEmptyQueue if !self.message_queue[channel.0 as usize].is_empty() => {
-                    return Err(CsError::NotEmpty(channel))
+                    return Err(CsError::NotEmpty(channel));
                 }
                 Message::ProbeEmptyQueue => {
                     self.program_graphs[pg_id.0 as usize]

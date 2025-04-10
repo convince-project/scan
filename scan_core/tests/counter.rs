@@ -1,5 +1,4 @@
-use rand::prelude::IteratorRandom;
-use rand::{SeedableRng, rngs::SmallRng, seq::IndexedRandom};
+use rand::{SeedableRng, rngs::SmallRng};
 use scan_core::{program_graph::*, *};
 
 #[test]
@@ -27,14 +26,20 @@ fn counter_pg() -> Result<(), PgError> {
             .unwrap();
     }
     let mut pg = pg.build();
-    while let Some((act, post)) = pg.possible_transitions().last() {
-        let post = post
-            .into_iter()
-            .map(|d| d.choose(&mut rng).expect("destination"))
-            .collect::<Vec<_>>();
-        // assert_eq!(post, initial);
-        assert_eq!(act, action);
-        pg.transition(act, post.as_slice(), &mut rng)?;
+    // let mut post;
+    let mut action;
+    loop {
+        if let Some((a, iter)) = pg.possible_transitions().last() {
+            action = a;
+            todo!();
+            // post = iter
+            //     .into_iter()
+            //     .map(|mut v| v.next().expect("loc"))
+            //     .collect::<Vec<_>>();
+        } else {
+            break;
+        }
+        assert!(pg.transition(action, post.as_slice(), &mut rng).is_ok());
     }
     Ok(())
 }

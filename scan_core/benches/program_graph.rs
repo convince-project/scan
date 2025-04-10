@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::rngs::mock::StepRng;
 use scan_core::program_graph::*;
 use scan_core::*;
@@ -6,12 +6,20 @@ use scan_core::*;
 #[inline(always)]
 fn run_to_completion(mut pg: ProgramGraph<StepRng>) {
     let mut rng = StepRng::new(0, 1);
-    while let Some((action, post)) = pg.possible_transitions().last() {
-        let post = post
-            .into_iter()
-            .map(|mut v| v.next().expect("loc"))
-            .collect::<Vec<_>>();
-        assert!(pg.transition(action, post.as_slice(), &mut rng).is_ok());
+    // let mut post;
+    let mut action;
+    loop {
+        if let Some((a, iter)) = pg.possible_transitions().last() {
+            action = a;
+            todo!()
+            // post = iter
+            //     .into_iter()
+            //     .map(|mut v| v.next().expect("loc"))
+            //     .collect::<Vec<_>>();
+        } else {
+            break;
+        }
+        // assert!(pg.transition(action, post.as_slice(), &mut rng).is_ok());
     }
 }
 
