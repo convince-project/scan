@@ -1,16 +1,11 @@
-use crate::channel_system::{Channel, ChannelSystem, Event, EventType};
-use crate::{
-    adaptive_bound, Expression, FnExpression, Pmtl, PmtlOracle, RunOutcome, Time, Tracer, Val,
-};
-use log::{info, trace};
-use rand::rngs::mock::StepRng;
+use crate::channel_system::{Channel, ChannelSystem, CsError, Event, EventType};
+use crate::{DummyRng, Expression, FnExpression, Time, TransitionSystem, Val};
 use rand::{Rng, SeedableRng};
-use rayon::prelude::*;
-use std::collections::{btree_map, BTreeMap};
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, btree_map};
+use std::sync::Arc;
 
 /// An atomic variable for [`Pmtl`] formulae.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum Atom {
     /// A predicate.
     State(Channel),
@@ -19,16 +14,13 @@ pub enum Atom {
 }
 
 /// A builder type for [`CsModel`].
-#[derive(Debug)]
-pub struct CsModelBuilder<R: Rng> {
+pub struct CsModelBuilder<R: Rng + SeedableRng> {
     cs: ChannelSystem<R>,
     ports: BTreeMap<Channel, Val>,
-    predicates: Vec<FnExpression<Atom, StepRng>>,
-    assumes: Vec<Pmtl<usize>>,
-    guarantees: Vec<Pmtl<usize>>,
+    predicates: Vec<FnExpression<Atom, DummyRng>>,
 }
 
-impl<R: Rng> CsModelBuilder<R> {
+impl<R: Rng + SeedableRng> CsModelBuilder<R> {
     /// Creates new [`CsModelBuilder`] from a [`ChannelSystem`].
     pub fn new(initial_state: ChannelSystem<R>) -> Self {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
@@ -36,8 +28,6 @@ impl<R: Rng> CsModelBuilder<R> {
             cs: initial_state,
             ports: BTreeMap::new(),
             predicates: Vec::new(),
-            assumes: Vec::new(),
-            guarantees: Vec::new(),
         }
     }
 
@@ -61,20 +51,10 @@ impl<R: Rng> CsModelBuilder<R> {
                 Atom::State(channel) => self.ports.get(&channel).unwrap().clone(),
                 Atom::Event(_event) => Val::Boolean(false),
             },
-            &mut StepRng::new(0, 1),
+            &mut DummyRng,
         );
         self.predicates.push(predicate);
         self.predicates.len() - 1
-    }
-
-    /// Adds an assume [`Pmtl`] formula to the [`CsModelBuilder`].
-    pub fn add_assume(&mut self, assume: Pmtl<usize>) {
-        self.assumes.push(assume);
-    }
-
-    /// Adds a guarantee [`Pmtl`] formula to the [`CsModelBuilder`].
-    pub fn add_guarantee(&mut self, guarantee: Pmtl<usize>) {
-        self.guarantees.push(guarantee);
     }
 
     /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
@@ -82,53 +62,12 @@ impl<R: Rng> CsModelBuilder<R> {
     /// Predicates have to be passed all at once,
     /// as it is not possible to add any further ones after the [`CsModel`] has been initialized.
     pub fn build(self) -> CsModel<R> {
-        let mut run_state = RunStatus::default();
-        let guarantees = self.guarantees.to_vec();
-        run_state.guarantees = vec![0; self.guarantees.len()];
-        run_state.running = true;
-
         CsModel {
             cs: self.cs,
             ports: self.ports,
             predicates: Arc::new(self.predicates),
-            oracle: PmtlOracle::new(&self.assumes, &guarantees),
-            run_status: Arc::new(Mutex::new(run_state)),
+            last_event: None,
         }
-    }
-}
-
-/// Represents the state of the current verification run.
-#[derive(Debug, Clone, Default)]
-pub struct RunStatus {
-    /// Whether the verification is still running (`true`) or has terminated (`false`).
-    running: bool,
-    /// How many runs have succeeded.
-    successes: u32,
-    /// How many runs have failed.
-    failures: u32,
-    /// How many times each guarantee has been violated.
-    guarantees: Vec<u32>,
-}
-
-impl RunStatus {
-    /// Gets the running status of the verification run.
-    pub fn running(&self) -> bool {
-        self.running
-    }
-
-    /// Gets the current number of successful runs.
-    pub fn successes(&self) -> u32 {
-        self.successes
-    }
-
-    /// Gets the current number of failed runs.
-    pub fn failures(&self) -> u32 {
-        self.failures
-    }
-
-    /// Gets the current number of violations for the guarantee corresponding to `index`.
-    pub fn guarantee(&self, index: usize) -> Option<u32> {
-        self.guarantees.get(index).copied()
     }
 }
 
@@ -136,38 +75,45 @@ impl RunStatus {
 ///
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
-#[derive(Debug, Clone)]
-pub struct CsModel<R: Rng> {
+#[derive(Clone)]
+pub struct CsModel<R: Rng + SeedableRng> {
     cs: ChannelSystem<R>,
     ports: BTreeMap<Channel, Val>,
     // TODO: predicates should not use rng
-    predicates: Arc<Vec<FnExpression<Atom, StepRng>>>,
-    oracle: PmtlOracle,
-    run_status: Arc<Mutex<RunStatus>>,
+    predicates: Arc<Vec<FnExpression<Atom, DummyRng>>>,
+    last_event: Option<Event>,
 }
 
-impl<R: Rng + SeedableRng + Sync + Clone> CsModel<R> {
-    /// Gets the underlying [`ChannelSystem`].
-    #[inline(always)]
-    pub fn channel_system(&self) -> &ChannelSystem<R> {
-        &self.cs
+impl<R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<Event, CsError> for CsModel<R> {
+    fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {
+        let event = self.cs.montecarlo_execution(duration);
+        if let Some(ref event) = event {
+            if let btree_map::Entry::Occupied(mut e) = self.ports.entry(event.channel) {
+                if let EventType::Send(ref val) = event.event_type {
+                    e.insert(val.clone());
+                }
+            }
+        }
+        self.last_event = event.clone();
+        Ok(event)
     }
 
-    /// Gets an `Arc<Mutex<_>>` handle to the state of the current run.
-    pub fn run_status(&self) -> Arc<Mutex<RunStatus>> {
-        self.run_status.clone()
+    fn time(&self) -> Time {
+        self.cs.time()
     }
 
-    fn labels(&self, last_event: &Event) -> Vec<bool> {
+    fn labels(&self) -> Vec<bool> {
         self.predicates
             .iter()
             .map(|prop| {
                 if let Val::Boolean(b) = prop.eval(
                     &|port| match port {
                         Atom::State(channel) => self.ports.get(&channel).unwrap().clone(),
-                        Atom::Event(event) => Val::Boolean(*last_event == event),
+                        Atom::Event(event) => {
+                            Val::Boolean(self.last_event.as_ref().is_some_and(|e| e == &event))
+                        }
                     },
-                    &mut StepRng::new(0, 1),
+                    &mut DummyRng,
                 ) {
                     Some(b)
                 } else {
@@ -179,130 +125,7 @@ impl<R: Rng + SeedableRng + Sync + Clone> CsModel<R> {
             .unwrap()
     }
 
-    #[inline(always)]
-    fn time(&self) -> Time {
-        self.cs.time()
-    }
-
-    /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
-    /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
-    /// and a state [`Mutex`] to be updated with the results as they are produced.
-    pub fn par_adaptive<P>(
-        &self,
-        confidence: f64,
-        precision: f64,
-        length: usize,
-        duration: Time,
-        tracer: Option<P>,
-    ) where
-        P: Tracer<Event>,
-    {
-        info!("verification starting");
-        {
-            let run_state = &mut *self.run_status.lock().expect("lock state");
-            run_state.successes = 0;
-            run_state.failures = 0;
-            run_state.running = true;
-            run_state.guarantees.iter_mut().for_each(|n| *n = 0);
-            // Drop handles!
-        }
-        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
-        (0..usize::MAX)
-            .into_par_iter()
-            .take_any_while(|_| {
-                // .take_while(|_| {
-                let mut tracer = tracer.clone();
-                if let Some(tracer) = tracer.as_mut() {
-                    tracer.init();
-                }
-                let model = self.clone();
-                let result = model.experiment(&mut tracer, length, duration);
-                let run_status = &mut *self.run_status.lock().expect("lock state");
-                if run_status.running {
-                    if let Some(tracer) = tracer {
-                        tracer.finalize(result);
-                    }
-                    match result {
-                        RunOutcome::Success => {
-                            run_status.successes += 1;
-                            // If all guarantees are satisfied, the execution is successful
-                            info!("runs: {} successes", run_status.successes);
-                        }
-                        RunOutcome::Fail(guarantee) => {
-                            run_status.failures += 1;
-                            run_status.guarantees[guarantee] += 1;
-                            // If guarantee is violated, we have found a counter-example!
-                            info!("runs: {} failures", run_status.failures);
-                        }
-                        RunOutcome::Incomplete => return true,
-                    }
-                    let runs = run_status.successes + run_status.failures;
-                    // Avoid division by 0
-                    let avg = if runs == 0 {
-                        0.5f64
-                    } else {
-                        run_status.successes as f64 / runs as f64
-                    };
-                    if adaptive_bound(avg, confidence, precision) <= runs as f64 {
-                        info!("adaptive bound satisfied");
-                        run_status.running = false;
-                        false
-                    } else {
-                        true
-                    }
-                } else if let Some(tracer) = tracer {
-                    tracer.finalize(RunOutcome::Incomplete);
-                    false
-                } else {
-                    false
-                }
-            })
-            .count();
-        info!("verification terminating");
-    }
-
-    fn experiment<P>(
-        mut self,
-        tracer: &mut Option<P>,
-        max_length: usize,
-        duration: Time,
-    ) -> RunOutcome
-    where
-        P: Tracer<Event>,
-    {
-        // WARN: without reseeding experiments will not be randomized!
-        self.cs.reseed_rng();
-        let mut current_len = 0;
-        trace!("new run starting");
-        while let Some(event) = self.cs.montecarlo_execution(duration) {
-            // We only need to keep track of events that are associated to the ports
-            if let btree_map::Entry::Occupied(mut e) = self.ports.entry(event.channel) {
-                if let EventType::Send(ref val) = event.event_type {
-                    e.insert(val.clone());
-                }
-            }
-            current_len += 1;
-            let state = self.labels(&event);
-            let time = self.time();
-            if let Some(tracer) = tracer.as_mut() {
-                tracer.trace(&event, time, self.ports.values());
-            }
-            self.oracle = self.oracle.update(&state, time);
-            if self.oracle.output_assumes().is_some() {
-                trace!("run undetermined");
-                return RunOutcome::Incomplete;
-            } else if let Some(i) = self.oracle.output_guarantees() {
-                trace!("run fails");
-                return RunOutcome::Fail(i);
-            } else if current_len >= max_length {
-                trace!("run exceeds maximum lenght");
-                return RunOutcome::Incomplete;
-            } else if !self.run_status.lock().expect("lock state").running {
-                trace!("run stopped");
-                return RunOutcome::Incomplete;
-            }
-        }
-        trace!("run succeeds");
-        RunOutcome::Success
+    fn state(&self) -> impl Iterator<Item = &Val> {
+        self.ports.values()
     }
 }

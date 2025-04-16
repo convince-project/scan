@@ -72,17 +72,31 @@ fn test(path: &Path) -> anyhow::Result<()> {
     let mut model = scan_fmt_xml::load(path)?.0.channel_system().to_owned();
     let mut steps = 0;
     assert!(model.possible_transitions().count() > 0);
-    while let Some((pg_id, act, loc)) = model
-        .possible_transitions()
-        .take(1)
-        .collect::<Vec<_>>()
-        .pop()
-    {
-        model.transition(pg_id, act, loc)?;
-        steps += 1;
-        if steps >= MAXSTEP {
-            return Err(anyhow!("step limit reached"));
+    let mut pg_id;
+    let mut post;
+    let mut action;
+    loop {
+        if let Some((pg, a, p)) = model
+            .possible_transitions()
+            .filter_map(|(pg, a, iter)| {
+                iter.into_iter()
+                    .map(|mut v| v.next())
+                    .collect::<Option<Vec<_>>>()
+                    .map(|l| (pg, a, l))
+            })
+            .next()
+        {
+            pg_id = pg;
+            action = a;
+            post = p;
+            steps += 1;
+            if steps >= MAXSTEP {
+                return Err(anyhow!("step limit reached"));
+            }
+        } else {
+            break;
         }
+        model.transition(pg_id, action, &post)?;
     }
     Ok(())
 }

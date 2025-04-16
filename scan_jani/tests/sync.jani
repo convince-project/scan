@@ -1,0 +1,85 @@
+{
+	"jani-version": 1,
+	"name": "sync.jani",
+	"type": "lts",
+	"actions": [ { "name": "step" }],
+  "variables": [
+    {
+      "initial-value": true,
+      "name": "q1",
+      "type": "bool"
+    }
+  ],
+	"automata": [
+		{
+			"name": "automaton_1",
+			"locations": [{ "name": "l" } , { "name": "o" }],
+			"variables": [],
+			"initial-locations": ["l"],
+			"edges": [
+				{
+					"location": "l",
+					"action": "step_1",
+					"guard": {
+						"exp": "q1"
+					},
+					"destinations": [
+						{
+							"location": "o",
+							"assignments": [
+								{
+	                "ref": "q1",
+	                "value": false
+								}
+							]
+						}
+					]
+				},
+				{
+					"location": "o",
+					"action": "step_1",
+					"destinations": [
+						{
+							"location": "l"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "automaton_2",
+			"locations": [{ "name": "l" } , { "name": "o" }],
+			"variables": [],
+			"initial-locations": ["l"],
+			"edges": [
+				{
+					"location": "l",
+					"action": "step_2",
+					"destinations": [
+						{
+							"location": "o"
+						}
+					]
+				},
+				{
+					"location": "o",
+					"action": "step_2",
+					"destinations": [
+						{
+							"location": "l"
+						}
+					]
+				}
+			]
+		}
+	],
+	"system": {
+		"elements": [ { "automaton": "automaton_1" }, { "automaton": "automaton_2" } ],
+		"syncs": [
+		  {
+  		  "synchronise": ["step_1",  "step_2"],
+  		  "result": "step"
+		  }
+		]
+	}
+}

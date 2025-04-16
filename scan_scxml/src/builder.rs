@@ -51,7 +51,7 @@ enum EcmaObj<V: Clone> {
 }
 
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder<SmallRng>,
     // Associates a type's id with both its OMG type and SCAN type.
@@ -98,26 +98,11 @@ impl ModelBuilder {
     /// Can fail if the model specification contains semantic errors
     /// (particularly type mismatches)
     /// or references to non-existing items.
-    pub fn build(mut parser: Parser) -> anyhow::Result<(CsModel<SmallRng>, ScxmlModel)> {
-        let mut model_builder = ModelBuilder {
-            cs: ChannelSystemBuilder::new(),
-            types: HashMap::new(),
-            enums: HashMap::new(),
-            structs: HashMap::new(),
-            fsm_names: HashMap::new(),
-            fsm_builders: HashMap::new(),
-            events: Vec::new(),
-            event_indexes: HashMap::new(),
-            parameters: HashMap::new(),
-            guarantees: Vec::new(),
-            assumes: Vec::new(),
-            predicates: Vec::new(),
-            ports: HashMap::new(),
-            int_queues: HashSet::new(),
-        };
-
+    pub fn build(
+        mut parser: Parser,
+    ) -> anyhow::Result<(CsModel<SmallRng>, PmtlOracle, ScxmlModel)> {
+        let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
-
         model_builder.prebuild_processes(&mut parser)?;
 
         info!(target: "build", "Visit process list");
@@ -361,11 +346,7 @@ impl ModelBuilder {
                     .clone();
                 match bin.op() {
                     boa_ast::expression::operator::binary::BinaryOp::Arithmetic(_) => {
-                        if lhs == rhs {
-                            Ok(type_name)
-                        } else {
-                            todo!()
-                        }
+                        if lhs == rhs { Ok(type_name) } else { todo!() }
                     }
                     boa_ast::expression::operator::binary::BinaryOp::Bitwise(_) => todo!(),
                     boa_ast::expression::operator::binary::BinaryOp::Relational(_)
@@ -391,7 +372,8 @@ impl ModelBuilder {
         // Initial location of Program Graph.
         let initial_loc = self
             .cs
-            .initial_location(pg_id)
+            // .initial_location(pg_id)
+            .new_initial_location(pg_id)
             .expect("program graph must exist");
         let mut initialize = None;
         // Initialize variables from datamodel
@@ -711,7 +693,7 @@ impl ModelBuilder {
             let unknown_event = if known_events.is_empty() {
                 None
             } else {
-                Some(CsExpression::not(CsExpression::or(known_events)))
+                Some(CsExpression::not(CsExpression::or(known_events)?)?)
             };
             self.cs
                 .add_autonomous_transition(
@@ -788,6 +770,7 @@ impl ModelBuilder {
                     // TODO FIXME: optimize And/Or expressions
                     guard = cond
                         .map(|cond| CsExpression::and(vec![event_match.clone(), cond]))
+                        .transpose()?
                         .or(Some(event_match));
                     // Check this transition after the other eventful transitions.
                     check_trans_loc = eventful_trans;
@@ -836,6 +819,7 @@ impl ModelBuilder {
                 // This happens in State Charts already, so we model it faithfully without optimizations.
                 let not_guard = guard
                     .map(CsExpression::not)
+                    .transpose()?
                     .unwrap_or(CsExpression::from(false));
                 self.cs
                     .add_autonomous_transition(
@@ -1057,7 +1041,7 @@ impl ModelBuilder {
                             pg_id,
                             old_loc,
                             curr_loc,
-                            Some(Expression::not(cond)),
+                            Some(Expression::not(cond)?),
                         )
                         .unwrap();
                 }
@@ -1172,7 +1156,7 @@ impl ModelBuilder {
                 match unary.op() {
                     UnaryOp::Minus => -expr,
                     UnaryOp::Plus => expr,
-                    UnaryOp::Not => Expression::not(expr),
+                    UnaryOp::Not => Expression::not(expr)?,
                     _ => return Err(anyhow!("unimplemented operator")),
                 }
             }
@@ -1193,7 +1177,7 @@ impl ModelBuilder {
                     },
                     BinaryOp::Relational(rel_bin) => match rel_bin {
                         RelationalOp::Equal => Expression::Equal(Box::new((lhs, rhs))),
-                        RelationalOp::NotEqual => !(Expression::Equal(Box::new((lhs, rhs)))),
+                        RelationalOp::NotEqual => Expression::Equal(Box::new((lhs, rhs))).not()?,
                         RelationalOp::GreaterThan => Expression::Greater(Box::new((lhs, rhs))),
                         RelationalOp::GreaterThanOrEqual => {
                             Expression::GreaterEq(Box::new((lhs, rhs)))
@@ -1203,8 +1187,8 @@ impl ModelBuilder {
                         _ => return Err(anyhow!("unimplemented operator")),
                     },
                     BinaryOp::Logical(op) => match op {
-                        LogicalOp::And => Expression::and(vec![lhs, rhs]),
-                        LogicalOp::Or => Expression::or(vec![lhs, rhs]),
+                        LogicalOp::And => Expression::and(vec![lhs, rhs])?,
+                        LogicalOp::Or => Expression::or(vec![lhs, rhs])?,
                         _ => return Err(anyhow!("unimplemented operator")),
                     },
                     BinaryOp::Comma => todo!(),
@@ -1526,7 +1510,7 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(self) -> (CsModel<SmallRng>, ScxmlModel) {
+    fn build_model(self) -> (CsModel<SmallRng>, PmtlOracle, ScxmlModel) {
         let mut model = CsModelBuilder::new(self.cs.build());
         let mut ports = Vec::new();
         for (port_name, (atom, init)) in self.ports {
@@ -1540,16 +1524,9 @@ impl ModelBuilder {
             // TODO FIXME handle error.
             let _id = model.add_predicate(pred_expr);
         }
-        let mut guarantees = Vec::new();
-        for (name, guarantee) in self.guarantees.into_iter() {
-            guarantees.push(name);
-            model.add_guarantee(guarantee);
-        }
-        let mut assumes = Vec::new();
-        for (name, assume) in self.assumes.into_iter() {
-            assumes.push(name.clone());
-            model.add_assume(assume.clone());
-        }
+        let (guarantee_names, guarantees): (Vec<_>, Vec<_>) = self.guarantees.into_iter().unzip();
+        let (assume_names, assumes): (Vec<_>, Vec<_>) = self.assumes.into_iter().unzip();
+        let oracle = PmtlOracle::new(assumes.as_slice(), guarantees.as_slice());
         let mut events = Vec::from_iter(self.event_indexes);
         events.sort_unstable_by_key(|(_, idx)| *idx);
         let events = events
@@ -1563,6 +1540,7 @@ impl ModelBuilder {
 
         (
             model.build(),
+            oracle,
             ScxmlModel {
                 fsm_names: self.fsm_names,
                 parameters: self
@@ -1583,8 +1561,8 @@ impl ModelBuilder {
                     .map(|(name, b)| (u16::from(b.pg_id) as usize, name))
                     .collect(),
                 ports,
-                assumes,
-                guarantees,
+                assumes: assume_names,
+                guarantees: guarantee_names,
             },
         )
     }

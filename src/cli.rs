@@ -1,11 +1,8 @@
 use clap::{Parser, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use scan_fmt_xml::scan_core::{adaptive_bound, okamoto_bound, CsModelBuilder, RunStatus};
 use scan_fmt_xml::TracePrinter;
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use scan_fmt_xml::scan_core::{Scan, adaptive_bound, okamoto_bound};
+use std::{path::PathBuf, sync::Arc};
 
 /// Supported model specification formats
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -55,50 +52,50 @@ impl Cli {
     }
 
     fn run_scxml(&self) -> anyhow::Result<()> {
-        let (cs_model, scxml_model) = scan_fmt_xml::load(&self.path)?;
+        let (scan, scxml_model) = scan_fmt_xml::load(&self.path)?;
         let scxml_model = Arc::new(scxml_model);
         let confidence = self.confidence;
         let precision = self.precision;
         let length = self.length;
         let duration = self.duration;
-        let bar_state = Arc::clone(&cs_model.run_status());
         let tracer = if self.traces {
             Some(TracePrinter::new(scxml_model.clone()))
         } else {
             None
         };
-        let check = std::thread::spawn(move || {
-            cs_model.par_adaptive(confidence, precision, length, duration, tracer);
-        });
-        self.print_progress_bar(&scxml_model.guarantees, bar_state);
-        check.join().expect("terminate bar process");
+        scan.adaptive(confidence, precision, duration, tracer);
+        self.print_progress_bar(&scxml_model.guarantees, &scan);
+        // check.join().expect("terminate bar process");
 
         Ok(())
     }
 
     fn run_jani(&self) -> anyhow::Result<()> {
-        use scan_fmt_jani::*;
+        use scan_jani::*;
 
-        let jani_model = Parser::parse(self.path.as_path())?;
-        let model = ModelBuilder::build(jani_model)?;
-        let cs_model = CsModelBuilder::new(model).build();
+        let (cs_model, _model) = parse(&self.path)?;
         let confidence = self.confidence;
         let precision = self.precision;
         let length = self.length;
         let duration = self.duration;
-        let bar_state = Arc::clone(&cs_model.run_status());
+        // let bar_state = Arc::clone(&cs_model.run_status());
         // TODO: JANI needs a tracer too
         let tracer: Option<TracePrinter> = None;
         let check = std::thread::spawn(move || {
-            cs_model.par_adaptive(confidence, precision, length, duration, tracer);
+            // cs_model.par_adaptive(confidence, precision, length, duration, tracer);
         });
-        self.print_progress_bar(&[], bar_state);
+        // self.print_progress_bar(&[], bar_state);
         check.join().expect("terminate bar process");
 
         Ok(())
     }
 
-    fn print_progress_bar(&self, guarantee_names: &[String], bar_state: Arc<Mutex<RunStatus>>) {
+    fn print_progress_bar<E, Err, Ts>(&self, guarantee_names: &[String], scan: &Scan<E, Err, Ts>)
+    where
+        Ts: scan_fmt_xml::scan_core::TransitionSystem<E, Err> + 'static,
+        Err: std::error::Error + Send + Sync,
+        E: Send + Sync,
+    {
         const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
         const ASCII_BAR: &str = "#--";
         const ASCII_SPINNER: &str = "|/-\\";
@@ -188,79 +185,81 @@ impl Cli {
         );
 
         bars.set_move_cursor(true);
-        loop {
-            let run_status = bar_state.lock().expect("lock state").clone();
-            let runs = (run_status.successes() + run_status.failures()) as u64;
-            let rate = run_status.successes() as f64 / runs as f64;
-            if run_status.running() {
-                if runs > progress_bar.position() {
-                    // Status spinner
-                    spinner.tick();
+        while scan.running() {
+            let successes = scan.successes();
+            let failures = scan.failures();
+            let runs = (successes + failures) as u64;
+            let rate = successes as f64 / runs as f64;
+            if runs > progress_bar.position() {
+                // Status spinner
+                spinner.tick();
 
-                    let bound = adaptive_bound(rate, self.confidence, self.precision);
-                    // let derived_precision =
-                    //     derive_precision(run_status.successes, run_status.failures, confidence);
-                    progress_bar.set_length(bound.ceil() as u64);
-                    progress_bar.set_position(runs);
-                    line.tick();
-                    let mut overall_fails = 0;
-                    for (i, bar) in bars_guarantees.iter().enumerate() {
-                        let fails = run_status.guarantee(i).expect("guarantee exists");
-                        overall_fails += fails;
-                        let pos = runs - fails as u64;
-                        bar.set_position(pos);
-                        bar.set_length(runs);
-                        if fails > 0 {
-                            bar.set_message(format!("({fails} failed)"));
-                        }
-                        bar.tick();
+                let bound = adaptive_bound(rate, self.confidence, self.precision);
+                // let derived_precision =
+                //     derive_precision(run_status.successes, run_status.failures, confidence);
+                progress_bar.set_length(bound.ceil() as u64);
+                progress_bar.set_position(runs);
+                line.tick();
+                let mut overall_fails = 0;
+                let violations = scan.violations();
+                for (i, bar) in bars_guarantees.iter().enumerate() {
+                    let violations = violations.get(i).copied().unwrap_or(0);
+                    overall_fails += violations;
+                    let pos = runs - violations as u64;
+                    bar.set_position(pos);
+                    bar.set_length(runs);
+                    if violations > 0 {
+                        bar.set_message(format!("({violations} failed)"));
                     }
+                    bar.tick();
+                }
 
-                    // Overall property bar
-                    let pos = runs - overall_fails as u64;
-                    overall_bar.set_position(pos);
-                    overall_bar.set_length(runs);
-                    if overall_fails > 0 {
-                        overall_bar.set_message(format!("({overall_fails} failed)"));
-                    }
-                    overall_bar.tick();
+                // Overall property bar
+                let pos = runs - overall_fails as u64;
+                overall_bar.set_position(pos);
+                overall_bar.set_length(runs);
+                if overall_fails > 0 {
+                    overall_bar.set_message(format!("({overall_fails} failed)"));
                 }
-            } else {
-                bars.set_move_cursor(false);
-                spinner.finish_and_clear();
-                progress_bar.finish_and_clear();
-                line.finish_and_clear();
-                bars_guarantees.iter().for_each(|b| b.finish_and_clear());
-                overall_bar.finish_and_clear();
-                // Magnitude of precision, to round results to sensible number of digits
-                let mag = (self.precision.log10().abs().ceil() as usize).max(2);
-                println!(
-                    "SCAN results for {model_name} (confidence {}, precision {})",
-                    self.confidence, self.precision
-                );
-                println!(
-                    "Completed {runs} runs with {} successes, {} failures)",
-                    run_status.successes(),
-                    run_status.failures()
-                );
-                for (i, name) in guarantee_names.iter().enumerate() {
-                    let f = run_status.guarantee(i).expect("guarantee exists");
-                    print!(
-                        "{name} success rate: {0:.1$}",
-                        ((runs - f as u64) as f64) / (runs as f64),
-                        mag,
-                    );
-                    if f > 0 {
-                        println!(" ({f} fails)");
-                    } else {
-                        println!();
-                    }
-                }
-                println!("Overall success rate: {rate:.0$}", mag);
-                break;
+                overall_bar.tick();
             }
             // Sleep a while to limit update/refresh rate.
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        bars.set_move_cursor(false);
+        spinner.finish_and_clear();
+        progress_bar.finish_and_clear();
+        line.finish_and_clear();
+        bars_guarantees.iter().for_each(|b| b.finish_and_clear());
+        overall_bar.finish_and_clear();
+        // Magnitude of precision, to round results to sensible number of digits
+        let mag = (self.precision.log10().abs().ceil() as usize).max(2);
+        println!(
+            "SCAN results for {model_name} (confidence {}, precision {})",
+            self.confidence, self.precision
+        );
+        let successes = scan.successes();
+        let failures = scan.failures();
+        let runs = (successes + failures) as u64;
+        let rate = successes as f64 / runs as f64;
+        println!(
+            "Completed {runs} runs with {} successes, {} failures)",
+            successes, failures
+        );
+        let violations = scan.violations();
+        for (i, property) in guarantee_names.iter().enumerate() {
+            let violations = violations.get(i).copied().unwrap_or(0);
+            print!(
+                "{property} success rate: {0:.1$}",
+                ((runs - violations as u64) as f64) / (runs as f64),
+                mag,
+            );
+            if violations > 0 {
+                println!(" ({property} fails)");
+            } else {
+                println!();
+            }
+        }
+        println!("Overall success rate: {rate:.0$}", mag);
     }
 }

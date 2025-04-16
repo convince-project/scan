@@ -3,7 +3,7 @@ use env_logger::Env;
 use scan::Cli;
 
 fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(Env::default().default_filter_or("off")).init();
-    let cli = Cli::parse();
-    cli.run()
+    let env = Env::default().default_filter_or("off");
+    env_logger::Builder::from_env(env).init();
+    Cli::parse().run()
 }

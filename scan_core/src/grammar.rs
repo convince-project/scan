@@ -5,7 +5,6 @@
 //! The language features base types and product types,
 //! Boolean logic and basic arithmetic expressions.
 
-use ordered_float::OrderedFloat;
 use rand::Rng;
 use std::hash::Hash;
 use thiserror::Error;
@@ -56,7 +55,7 @@ impl Type {
         match self {
             Type::Boolean => Val::Boolean(false),
             Type::Integer => Val::Integer(0),
-            Type::Float => Val::Float(OrderedFloat(0.0)),
+            Type::Float => Val::Float(0.0),
             Type::Product(tuple) => {
                 Val::Tuple(Vec::from_iter(tuple.iter().map(Self::default_value)))
             }
@@ -72,14 +71,14 @@ pub type Integer = i32;
 pub type Float = f64;
 
 /// Possible values for each [`Type`].
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Val {
     /// Boolean values.
     Boolean(bool),
     /// Integer values.
     Integer(Integer),
     /// Floating-point values.
-    Float(OrderedFloat<Float>),
+    Float(Float),
     /// Values for product types, i.e., tuples of suitable values.
     Tuple(Vec<Val>),
     /// Values for list types
@@ -101,7 +100,7 @@ impl Val {
 
 impl From<Float> for Val {
     fn from(value: Float) -> Self {
-        Val::Float(OrderedFloat(value))
+        Val::Float(value)
     }
 }
 
@@ -249,10 +248,19 @@ where
                     Err(TypeError::TypeMismatch)
                 }
             }
-            Expression::Equal(exprs) | Expression::GreaterEq(exprs) | Expression::LessEq(exprs) => {
+            Expression::Equal(exprs) => {
                 let type_0 = exprs.0.r#type()?;
                 let type_1 = exprs.1.r#type()?;
                 if matches!(type_0, Type::Integer | Type::Boolean) && type_0 == type_1 {
+                    Ok(Type::Boolean)
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
+            Expression::GreaterEq(exprs) | Expression::LessEq(exprs) => {
+                let type_0 = exprs.0.r#type()?;
+                let type_1 = exprs.1.r#type()?;
+                if matches!(type_0, Type::Integer) && matches!(type_1, Type::Integer) {
                     Ok(Type::Boolean)
                 } else {
                     Err(TypeError::TypeMismatch)
@@ -322,6 +330,95 @@ where
         }
     }
 
+    /// Evals a constant expression.
+    /// Returns an error if expression contains variables.
+    pub fn eval_constant(&self) -> Result<Val, TypeError> {
+        match self {
+            Expression::Const(val) => Ok(val.clone()),
+            Expression::Tuple(tuple) => tuple
+                .iter()
+                .map(|e| e.eval_constant())
+                .collect::<Result<Vec<Val>, TypeError>>()
+                .map(Val::Tuple),
+            Expression::Var(_, _) => Err(TypeError::UnknownVar),
+            Expression::And(props) => props
+                .iter()
+                .try_fold(false, |acc, prop| {
+                    let val = prop.eval_constant()?;
+                    if let Val::Boolean(b) = val {
+                        Ok(acc && b)
+                    } else {
+                        Err(TypeError::TypeMismatch)
+                    }
+                })
+                .map(Val::Boolean),
+            Expression::Or(props) => props
+                .iter()
+                .try_fold(false, |acc, prop| {
+                    let val = prop.eval_constant()?;
+                    if let Val::Boolean(b) = val {
+                        Ok(acc || b)
+                    } else {
+                        Err(TypeError::TypeMismatch)
+                    }
+                })
+                .map(Val::Boolean),
+            Expression::Implies(props) => {
+                if let (Val::Boolean(lhs), Val::Boolean(rhs)) =
+                    (props.0.eval_constant()?, props.1.eval_constant()?)
+                {
+                    Ok(Val::Boolean(rhs || !lhs))
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
+            Expression::Not(prop) => {
+                if let Val::Boolean(val) = prop.eval_constant()? {
+                    Ok(Val::Boolean(!val))
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
+            Expression::Opposite(expr) => match expr.eval_constant()? {
+                Val::Integer(i) => Ok(Val::Integer(-i)),
+                Val::Float(i) => Ok(Val::Float(-i)),
+                _ => Err(TypeError::TypeMismatch),
+            },
+            Expression::Sum(exprs) => exprs.iter().try_fold(Val::Integer(0), |acc, expr| {
+                let val = expr.eval_constant()?;
+                match (acc, val) {
+                    (Val::Integer(acc), Val::Integer(val)) => Ok(Val::Integer(acc + val)),
+                    (Val::Integer(acc), Val::Float(val)) => Ok(Val::Float(f64::from(acc) + val)),
+                    (Val::Float(acc), Val::Integer(val)) => Ok(Val::Float(acc + f64::from(val))),
+                    (Val::Float(acc), Val::Float(val)) => Ok(Val::Float(acc + val)),
+                    _ => Err(TypeError::TypeMismatch),
+                }
+            }),
+            Expression::Mult(exprs) => exprs.iter().try_fold(Val::Integer(1), |acc, expr| {
+                let val = expr.eval_constant()?;
+                match (acc, val) {
+                    (Val::Integer(acc), Val::Integer(val)) => Ok(Val::Integer(acc * val)),
+                    (Val::Integer(acc), Val::Float(val)) => Ok(Val::Float(f64::from(acc) * val)),
+                    (Val::Float(acc), Val::Integer(val)) => Ok(Val::Float(acc * f64::from(val))),
+                    (Val::Float(acc), Val::Float(val)) => Ok(Val::Float(acc * val)),
+                    _ => Err(TypeError::TypeMismatch),
+                }
+            }),
+            Expression::Component(_, expression) => todo!(),
+            Expression::RandBool(_) => todo!(),
+            Expression::RandInt(_, _) => todo!(),
+            Expression::Mod(_) => todo!(),
+            Expression::Equal(_) => todo!(),
+            Expression::Greater(_) => todo!(),
+            Expression::GreaterEq(_) => todo!(),
+            Expression::Less(_) => todo!(),
+            Expression::LessEq(_) => todo!(),
+            Expression::Append(_) => todo!(),
+            Expression::Truncate(expression) => todo!(),
+            Expression::Len(expression) => todo!(),
+        }
+    }
+
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
             Expression::Var(var, t) => {
@@ -362,10 +459,15 @@ where
     /// Creates the disjunction of a list of expressions.
     ///
     /// Optimizes automatically nested disjunctions through associativity.
-    pub fn and(args: Vec<Self>) -> Self {
+    pub fn and(args: Vec<Self>) -> Result<Self, TypeError> {
+        args.iter().try_for_each(|arg| {
+            matches!(arg.r#type()?, Type::Boolean)
+                .then_some(())
+                .ok_or(TypeError::TypeMismatch)
+        })?;
         match args.len() {
-            0 => Expression::Const(Val::Boolean(true)),
-            1 => args[0].clone(),
+            0 => Ok(Expression::Const(Val::Boolean(true))),
+            1 => Ok(args[0].clone()),
             _ => {
                 let mut subformulae = Vec::new();
                 for subformula in args.into_iter() {
@@ -375,7 +477,7 @@ where
                         subformulae.push(subformula);
                     }
                 }
-                Expression::And(subformulae)
+                Ok(Expression::And(subformulae))
             }
         }
     }
@@ -383,10 +485,15 @@ where
     /// Creates the conjunction of a list of expressions.
     ///
     /// Optimizes automatically nested conjunctions through associativity.
-    pub fn or(args: Vec<Self>) -> Self {
+    pub fn or(args: Vec<Self>) -> Result<Self, TypeError> {
+        args.iter().try_for_each(|arg| {
+            matches!(arg.r#type()?, Type::Boolean)
+                .then_some(())
+                .ok_or(TypeError::TypeMismatch)
+        })?;
         match args.len() {
-            0 => Expression::Const(Val::Boolean(false)),
-            1 => args[0].clone(),
+            0 => Ok(Expression::Const(Val::Boolean(false))),
+            1 => Ok(args[0].clone()),
             _ => {
                 let mut subformulae = Vec::new();
                 for subformula in args.into_iter() {
@@ -396,7 +503,7 @@ where
                         subformulae.push(subformula);
                     }
                 }
-                Expression::Or(subformulae)
+                Ok(Expression::Or(subformulae))
             }
         }
     }
@@ -417,13 +524,17 @@ impl<V> std::ops::Not for Expression<V>
 where
     V: Clone,
 {
-    type Output = Self;
+    type Output = Result<Self, TypeError>;
 
     fn not(self) -> Self::Output {
-        if let Expression::Not(sub) = self {
-            *sub
+        if let Type::Boolean = self.r#type()? {
+            if let Expression::Not(sub) = self {
+                Ok(*sub)
+            } else {
+                Ok(Expression::Not(Box::new(self)))
+            }
         } else {
-            Expression::Not(Box::new(self))
+            Err(TypeError::TypeMismatch)
         }
     }
 }
@@ -528,7 +639,7 @@ where
     V: Clone,
 {
     fn from(value: Float) -> Self {
-        Expression::Const(Val::Float(OrderedFloat(value)))
+        Expression::Const(Val::Float(value))
     }
 }
 
@@ -648,11 +759,11 @@ impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
                     exprs.iter().fold(Val::Integer(0), |val, expr| match val {
                         Val::Integer(acc) => match expr.eval(vars, rng) {
                             Val::Integer(i) => Val::Integer(acc + i),
-                            Val::Float(f) => Val::Float(OrderedFloat::from(acc) + f),
+                            Val::Float(f) => Val::Float(f64::from(acc) + f),
                             _ => panic!("type mismatch"),
                         },
                         Val::Float(acc) => match expr.eval(vars, rng) {
-                            Val::Integer(i) => Val::Float(acc + OrderedFloat::from(i)),
+                            Val::Integer(i) => Val::Float(acc + f64::from(i)),
                             Val::Float(f) => Val::Float(acc + f),
                             _ => panic!("type mismatch"),
                         },
@@ -666,11 +777,11 @@ impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
                     exprs.iter().fold(Val::Integer(0), |val, expr| match val {
                         Val::Integer(acc) => match expr.eval(vars, rng) {
                             Val::Integer(i) => Val::Integer(acc * i),
-                            Val::Float(f) => Val::Float(OrderedFloat::from(acc) * f),
+                            Val::Float(f) => Val::Float(f64::from(acc) * f),
                             _ => panic!("type mismatch"),
                         },
                         Val::Float(acc) => match expr.eval(vars, rng) {
-                            Val::Integer(i) => Val::Float(acc * OrderedFloat::from(i)),
+                            Val::Integer(i) => Val::Float(acc * f64::from(i)),
                             Val::Float(f) => Val::Float(acc * f),
                             _ => panic!("type mismatch"),
                         },
@@ -697,11 +808,11 @@ impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
                 Box::new(move |vars, rng| match lhs.eval(vars, rng) {
                     Val::Integer(lhs) => match rhs.eval(vars, rng) {
                         Val::Integer(rhs) => Val::Boolean(lhs > rhs),
-                        Val::Float(rhs) => Val::Boolean(OrderedFloat::from(lhs) > rhs),
+                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) > rhs),
                         _ => panic!("type mismatch"),
                     },
                     Val::Float(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs > OrderedFloat::from(rhs)),
+                        Val::Integer(rhs) => Val::Boolean(lhs > f64::from(rhs)),
                         Val::Float(rhs) => Val::Boolean(lhs > rhs),
                         _ => panic!("type mismatch"),
                     },
@@ -729,11 +840,11 @@ impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
                 Box::new(move |vars, rng| match lhs.eval(vars, rng) {
                     Val::Integer(lhs) => match rhs.eval(vars, rng) {
                         Val::Integer(rhs) => Val::Boolean(lhs < rhs),
-                        Val::Float(rhs) => Val::Boolean(OrderedFloat::from(lhs) < rhs),
+                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) < rhs),
                         _ => panic!("type mismatch"),
                     },
                     Val::Float(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs < OrderedFloat::from(rhs)),
+                        Val::Integer(rhs) => Val::Boolean(lhs < f64::from(rhs)),
                         Val::Float(rhs) => Val::Boolean(lhs < rhs),
                         _ => panic!("type mismatch"),
                     },
