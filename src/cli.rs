@@ -16,6 +16,7 @@ enum Format {
     Jani,
 }
 
+/// Type of verification report
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Output {
     /// Human-readable report
@@ -24,6 +25,7 @@ enum Output {
     Json,
 }
 
+/// Verification progress bar
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Bar {
     /// Fancy Unicode progress bars
@@ -50,7 +52,7 @@ struct Report {
 #[command(version, about, long_about = None)]
 pub struct Cli {
     /// Path of model's main XML file
-    #[arg(value_hint = clap::ValueHint::AnyPath, default_value = ".")]
+    #[arg(value_hint = clap::ValueHint::AnyPath)]
     path: PathBuf,
     /// Format used to specify the model
     #[arg(value_enum, short, long)]
