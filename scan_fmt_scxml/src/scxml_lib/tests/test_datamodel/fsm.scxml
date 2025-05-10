@@ -1,0 +1,20 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm" initial="idle">
+
+  <datamodel>
+    <!-- TYPE counter:int32 -->
+    <data id="counter" expr="0"/>
+  </datamodel>
+
+  <state id="idle">
+    <transition target="running" cond="counter < 10"/>
+    <transition target="finished"/>
+  </state>
+
+  <state id="running">
+    <transition target="idle">
+      <assign location="counter" expr="counter + 1"/>
+    </transition>
+  </state>
+
+  <state id="finished"/>
+</scxml>

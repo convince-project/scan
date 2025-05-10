@@ -1,0 +1,18 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm" initial="idle">
+
+  <state id="idle">
+    <transition target="running"/>
+    <transition target="loop"/>
+  </state>
+
+  <state id="running">
+    <transition target="finished"/>
+    <transition target="loop"/>
+  </state>
+
+  <state id="finished"/>
+
+  <state id="loop">
+    <transition target="loop"/>
+  </state>
+</scxml>

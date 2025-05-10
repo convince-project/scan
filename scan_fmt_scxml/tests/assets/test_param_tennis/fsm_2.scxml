@@ -1,0 +1,49 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_2" initial="idle">
+
+  <state id="idle">
+    <transition event="tick" target="running_0">
+      <send event="tickResponse" target="fsm_1">
+        <!-- TYPE result:TickResponse -->
+        <param name="result" expr="RUNNING"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="running_0">
+    <transition event="tick" target="running_1">
+      <send event="tickResponse" target="fsm_1">
+        <!-- TYPE result:TickResponse -->
+        <param name="result" expr="RUNNING"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="running_1">
+    <transition event="tick" target="running_2">
+      <send event="tickResponse" target="fsm_1">
+        <!-- TYPE result:TickResponse -->
+        <param name="result" expr="RUNNING"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="running_2">
+    <transition event="tick" target="running_3">
+      <send event="tickResponse" target="fsm_1">
+        <!-- TYPE result:TickResponse -->
+        <param name="result" expr="RUNNING"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="running_3">
+    <transition event="tick" target="finished">
+      <send event="tickResponse" target="fsm_1">
+        <!-- TYPE result:TickResponse -->
+        <param name="result" expr="SUCCESS"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="finished"/>
+</scxml>

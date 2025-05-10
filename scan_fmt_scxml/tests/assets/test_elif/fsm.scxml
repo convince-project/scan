@@ -1,0 +1,49 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm" initial="idle">
+
+  <datamodel>
+    <!-- TYPE test_1:boolean-->
+    <data id="test_1" expr="false"/>
+    <!-- TYPE test_2:boolean-->
+    <data id="test_2" expr="false"/>
+    <!-- TYPE test_3:boolean-->
+    <data id="test_3" expr="false"/>
+  </datamodel>
+
+  <state id="idle">
+    <onentry>
+      <if cond="!test_1">
+        <assign location="test_1" expr="true"/>
+      </if>
+    </onentry>
+    <transition target="running" cond="test_1">
+      <if cond="test_2">
+        <assign location="test_2" expr="false"/>
+      <else/>
+        <assign location="test_2" expr="true"/>
+      </if>
+    </transition>
+    <transition target="loop"/>
+  </state>
+
+  <state id="running">
+    <transition target="finished" cond="test_1 &amp;&amp; test_2"/>
+    <transition target="loop"/>
+    <onexit>
+      <if cond="test_3">
+        <assign location="test_3" expr="false"/>
+      <elseif cond="!test_3"/>
+        <assign location="test_3" expr="true"/>
+      <else/>
+        <assign location="test_2" expr="false"/>
+      </if>
+    </onexit>
+  </state>
+
+  <state id="finished">
+    <transition target="loop" cond="!test_1 || !test_2 || !test_3"/>
+  </state>
+
+  <state id="loop">
+    <transition target="loop"/>
+  </state>
+</scxml>

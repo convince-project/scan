@@ -1,0 +1,19 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_2" initial="idle">
+
+  <datamodel>
+    <!-- TYPE origin:URI -->
+    <data id="origin"/>
+  </datamodel>
+
+  <state id="idle">
+    <transition event="message" target="finished">
+      <assign location="origin" expr="_event.origin"/>
+    </transition>
+  </state>
+
+  <state id="finished">
+    <onentry>
+      <send event="reply" targetexpr="origin"/>
+    </onentry>
+  </state>
+</scxml>

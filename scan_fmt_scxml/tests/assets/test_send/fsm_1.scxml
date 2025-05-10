@@ -1,0 +1,10 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_1" initial="initial">
+
+  <state id="initial">
+    <transition target="finished">
+      <send event="message" target="fsm_2"/>
+    </transition>
+  </state>
+
+  <state id="finished"/>
+</scxml>

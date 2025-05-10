@@ -1,0 +1,11 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_2" initial="idle">
+
+  <state id="idle">
+    <transition event="message" target="idle">
+      <send event="message" target="fsm_3">
+        <!-- TYPE counter:int32 -->
+        <param name="counter" expr="_event.data.counter"/>
+      </send>
+    </transition>
+  </state>
+</scxml>

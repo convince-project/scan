@@ -1,0 +1,15 @@
+<specification xmlns="..." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="...">
+
+  <types path="./types.xml" />
+
+  <model>
+    
+    <processList>
+      <process id="fsm" moc="fsm" path="./fsm.scxml" />
+    </processList>
+ 
+  </model>
+
+  <!-- <properties path="./properties.xml"/> -->
+</specification>
