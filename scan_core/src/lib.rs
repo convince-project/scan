@@ -151,6 +151,7 @@ where
         // length: usize,
         duration: Time,
         tracer: Option<P>,
+        single_thread: bool,
     ) where
         P: Tracer<Event> + 'static,
     {
@@ -166,68 +167,72 @@ where
         let failures = self.failures.clone();
         let violations = self.violations.clone();
 
+        let verification = || {
+            let local_successes;
+            let local_failures;
+
+            match ts.as_ref().clone().experiment(
+                duration,
+                oracle.as_ref().clone(),
+                tracer.clone(),
+                running.clone(),
+            ) {
+                Ok(result) => {
+                    if !running.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    match result {
+                        RunOutcome::Success => {
+                            local_successes = successes.fetch_add(1, Ordering::Relaxed);
+                            local_failures = failures.load(Ordering::Relaxed);
+                            // If all guarantees are satisfied, the execution is successful
+                            trace!("runs: {} successes", local_successes);
+                        }
+                        RunOutcome::Fail(guarantee) => {
+                            local_successes = successes.load(Ordering::Relaxed);
+                            local_failures = failures.fetch_add(1, Ordering::Relaxed);
+                            let violations = &mut *violations.lock().unwrap();
+                            violations.resize(violations.len().max(guarantee + 1), 0);
+                            violations[guarantee] += 1;
+                            // If guarantee is violated, we have found a counter-example!
+                            trace!("runs: {} failures", local_failures);
+                        }
+                        RunOutcome::Incomplete => return true,
+                    }
+                }
+                Err(err) => {
+                    warn!("run returned error: {err}");
+                    return true;
+                }
+            };
+            let runs = local_successes + local_failures;
+            // Avoid division by 0
+            let avg = if runs == 0 {
+                0.5f64
+            } else {
+                local_successes as f64 / runs as f64
+            };
+            if adaptive_bound(avg, confidence, precision) <= runs as f64 {
+                info!("adaptive bound satisfied");
+                running.store(false, Ordering::Relaxed);
+                false
+            } else {
+                true
+            }
+        };
+
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("verification starting");
         let start_time = Instant::now();
 
-        (0..usize::MAX)
-            .into_par_iter()
-            .take_any_while(|_| {
-                // .take_while(|_| {
-
-                let local_successes;
-                let local_failures;
-
-                match ts.as_ref().clone().experiment(
-                    duration,
-                    oracle.as_ref().clone(),
-                    tracer.clone(),
-                    running.clone(),
-                ) {
-                    Ok(result) => {
-                        if !running.load(Ordering::Relaxed) {
-                            return false;
-                        }
-                        match result {
-                            RunOutcome::Success => {
-                                local_successes = successes.fetch_add(1, Ordering::Relaxed);
-                                local_failures = failures.load(Ordering::Relaxed);
-                                // If all guarantees are satisfied, the execution is successful
-                                trace!("runs: {} successes", local_successes);
-                            }
-                            RunOutcome::Fail(guarantee) => {
-                                local_successes = successes.load(Ordering::Relaxed);
-                                local_failures = failures.fetch_add(1, Ordering::Relaxed);
-                                let violations = &mut *violations.lock().unwrap();
-                                violations.resize(violations.len().max(guarantee + 1), 0);
-                                violations[guarantee] += 1;
-                                // If guarantee is violated, we have found a counter-example!
-                                trace!("runs: {} failures", local_failures);
-                            }
-                            RunOutcome::Incomplete => return true,
-                        }
-                    }
-                    Err(err) => {
-                        warn!("run returned error: {err}");
-                        return true;
-                    }
-                };
-                let runs = local_successes + local_failures;
-                // Avoid division by 0
-                let avg = if runs == 0 {
-                    0.5f64
-                } else {
-                    local_successes as f64 / runs as f64
-                };
-                if adaptive_bound(avg, confidence, precision) <= runs as f64 {
-                    info!("adaptive bound satisfied");
-                    running.store(false, Ordering::Relaxed);
-                    false
-                } else {
-                    true
-                }
-            })
-            .count();
+        if single_thread {
+            (0..usize::MAX).take_while(|_| verification()).count();
+        } else {
+            (0..usize::MAX)
+                .into_par_iter()
+                .take_any_while(|_| verification())
+                .count();
+        }
 
         let elapsed = start_time.elapsed();
         info!("Verification time elapsed: {elapsed:0.2?}");

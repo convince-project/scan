@@ -69,6 +69,9 @@ pub struct Cli {
     /// Saves execution traces in gz-compressed csv format
     #[arg(long = "traces", default_value = "false")]
     traces: bool,
+    /// Run the verification on a single thread
+    #[arg(long = "single-thread", default_value = "false")]
+    single_thread: bool,
     /// Output format of verification report
     #[arg(short, long, default_value = "human")]
     out: Output,
@@ -156,7 +159,13 @@ impl Cli {
                 );
             }));
         }
-        scan.adaptive(self.confidence, self.precision, self.duration, tracer);
+        scan.adaptive(
+            self.confidence,
+            self.precision,
+            self.duration,
+            tracer,
+            self.single_thread,
+        );
         if let Some(handle) = handle {
             handle.join().expect("terminate process");
         }
