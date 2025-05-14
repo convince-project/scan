@@ -235,7 +235,7 @@ where
         }
 
         let elapsed = start_time.elapsed();
-        info!("Verification time elapsed: {elapsed:0.2?}");
+        info!("verification time elapsed: {elapsed:0.2?}");
         info!("verification terminating");
     }
 }
