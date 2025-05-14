@@ -1,6 +1,6 @@
 use super::{
-    Action, Clock, EPSILON, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph,
-    ProgramGraphDef, TimeConstraint, Var,
+    Action, ActionIdx, Clock, EPSILON, FnEffect, FnExpression, Location, LocationIdx, PgError,
+    PgExpression, ProgramGraph, ProgramGraphDef, TimeConstraint, Var,
 };
 use crate::grammar::{Type, Val};
 use log::info;
@@ -154,7 +154,7 @@ impl ProgramGraphBuilder {
     pub fn new_action(&mut self) -> Action {
         let idx = self.effects.len();
         self.effects.push(Effect::Effects(Vec::new(), Vec::new()));
-        Action(idx as u16)
+        Action(idx as ActionIdx)
     }
 
     /// Associates a clock reset to an action.
@@ -258,7 +258,7 @@ impl ProgramGraphBuilder {
         // Actions are indexed progressively
         let idx = self.effects.len();
         self.effects.push(Effect::Send(msg));
-        Ok(Action(idx as u16))
+        Ok(Action(idx as ActionIdx))
     }
 
     pub(crate) fn new_receive(&mut self, var: Var) -> Result<Action, PgError> {
@@ -268,7 +268,7 @@ impl ProgramGraphBuilder {
             // Actions are indexed progressively
             let idx = self.effects.len();
             self.effects.push(Effect::Receive(var));
-            Ok(Action(idx as u16))
+            Ok(Action(idx as ActionIdx))
         }
     }
 
@@ -291,7 +291,7 @@ impl ProgramGraphBuilder {
             // Locations are indexed progressively
             let idx = self.locations.len();
             self.locations.push((Vec::new(), invariants));
-            Ok(Location(idx as u16))
+            Ok(Location(idx as LocationIdx))
         }
     }
 
@@ -403,11 +403,11 @@ impl ProgramGraphBuilder {
         constraints: Vec<TimeConstraint>,
     ) -> Result<(), PgError> {
         // Check 'pre' and 'post' locations exists
-        if self.locations.len() as u16 <= pre.0 {
+        if self.locations.len() as LocationIdx <= pre.0 {
             Err(PgError::MissingLocation(pre))
-        } else if self.locations.len() as u16 <= post.0 {
+        } else if self.locations.len() as LocationIdx <= post.0 {
             Err(PgError::MissingLocation(post))
-        } else if action != EPSILON && self.effects.len() as u16 <= action.0 {
+        } else if action != EPSILON && self.effects.len() as ActionIdx <= action.0 {
             // Check 'action' exists
             Err(PgError::MissingAction(action))
         } else if guard
@@ -546,8 +546,11 @@ impl ProgramGraphBuilder {
         self.initial_states.sort_unstable();
         self.initial_states.shrink_to_fit();
         // Initialize buf
-        let mut buf =
-            BTreeSet::from_iter((0..def.effects.len() as u16).map(Action).chain([EPSILON]));
+        let mut buf = BTreeSet::from_iter(
+            (0..def.effects.len() as ActionIdx)
+                .map(Action)
+                .chain([EPSILON]),
+        );
         for loc in &self.initial_states {
             buf = &buf & &def.locations[loc.0 as usize].2
         }

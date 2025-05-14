@@ -85,23 +85,28 @@ use smallvec::SmallVec;
 use std::{collections::BTreeSet, sync::Arc};
 use thiserror::Error;
 
+pub type LocationIdx = u32;
+
 /// An indexing object for locations in a PG.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Location(u16);
+pub struct Location(LocationIdx);
+
+pub type ActionIdx = u32;
 
 /// An indexing object for actions in a PG.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Action(u16);
+
+pub struct Action(ActionIdx);
 
 /// Epsilon action to enable autonomous transitions.
 /// It cannot have effects.
-const EPSILON: Action = Action(u16::MAX);
+const EPSILON: Action = Action(ActionIdx::MAX);
 
 /// An indexing object for typed variables in a PG.
 ///
@@ -445,7 +450,7 @@ impl<R: Rng> ProgramGraph<R> {
         }
         if let Some(ps) = post_states
             .iter()
-            .find(|ps| ps.0 >= self.def.locations.len() as u16)
+            .find(|ps| ps.0 >= self.def.locations.len() as LocationIdx)
         {
             return Err(PgError::MissingLocation(*ps));
         }
@@ -453,7 +458,7 @@ impl<R: Rng> ProgramGraph<R> {
             if !self.active_autonomous_transitions(post_states) {
                 return Err(PgError::UnsatisfiedGuard);
             }
-        } else if action.0 >= self.def.effects.len() as u16 {
+        } else if action.0 >= self.def.effects.len() as LocationIdx {
             return Err(PgError::MissingAction(action));
         } else if let FnEffect::Effects(ref effects, ref resets) =
             self.def.effects[action.0 as usize]
