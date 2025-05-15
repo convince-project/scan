@@ -1,0 +1,18 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_2" initial="idle">
+
+  <state id="idle">
+    <!-- Autonomous transitions have priority -->
+    <transition event="message" target="loop"/>
+    <transition target="wait"/>
+  </state>
+
+  <state id="wait">
+    <transition event="message" target="finished"/>
+  </state>
+
+  <state id="finished"/>
+
+  <state id="loop">
+    <transition target="loop"/>
+  </state>
+</scxml>

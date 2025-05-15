@@ -1,0 +1,29 @@
+<scxml initial="idle" version="1.0" name="BatteryLevel" xmlns="http://www.w3.org/2005/07/scxml">
+    <datamodel>
+        <data name="level" type="i32" expr="0" />
+        <data name="origin" type="URI" />
+    </datamodel>
+    <state id="idle">
+        <transition event="tickCall" target="levelCheck" />
+        <transition event="BatteryDriverCmp.readLevelReturn" target="idle">
+            <assign location="level" expr="_event.data.result"/>
+        </transition>
+        <onexit>
+            <assign location="origin" expr="_event.origin" />
+        </onexit>
+    </state>
+     <state id="levelCheck">
+        <onentry>
+            <if cond="level_&gt;_30">
+                <send event="tickReturn" targetexpr="origin" >
+                    <param name="result" expr="SUCCESS"/>
+                </send>
+                <else/>
+                <send event="tickReturn" targetexpr="origin" >
+                    <param name="result" expr="FAILURE"/>
+                </send>
+            </if>
+        </onentry>
+        <transition target="idle" />
+    </state>
+</scxml>

@@ -1,0 +1,23 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_1" initial="initial">
+
+  <datamodel>
+    <!-- TYPE p:int32 -->
+    <data id="p" expr="0"/>
+  </datamodel>
+
+  <state id="initial">
+    <transition target="finished" cond="p == 0">
+      <send event="message" target="fsm_2">
+        <!-- TYPE result:int32 -->
+        <param name="result" expr="p + 1"/>
+      </send>
+    </transition>
+    <transition target="loop"/>
+  </state>
+
+  <state id="finished"/>
+
+  <state id="loop">
+    <transition target="loop"/>
+  </state>
+</scxml>

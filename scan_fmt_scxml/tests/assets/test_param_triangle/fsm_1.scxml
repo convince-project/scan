@@ -1,0 +1,23 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_1" initial="initial">
+
+  <state id="initial">
+    <transition target="running">
+      <send event="message" target="fsm_2">
+        <!-- TYPE counter:int32 -->
+        <param name="counter" expr="10"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="running">
+    <transition event="message" target="finished" cond="_event.data.counter == 0"/>
+    <transition event="message" target="running">
+      <send event="message" target="fsm_2">
+        <!-- TYPE counter:int32 -->
+        <param name="counter" expr="_event.data.counter - 1"/>
+      </send>
+    </transition>
+  </state>
+
+  <state id="finished"/>
+</scxml>

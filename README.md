@@ -77,6 +77,7 @@ RUST_LOG=<LOG_LEVEL> scan <MODEL>
 ```
 where `LOG_LEVEL=error|warn|info|debug|trace`.
 
+
 ## Development
 
 For development's purposes, you will want to build and run SCAN from source code.
@@ -118,3 +119,9 @@ Run all unit and integration tests with:
 ```
 cargo test --workspace
 ```
+
+## Contributors
+
+- Andrea Letizia
+- Pouya Bathaei Pourmand
+- Atoosa Ebrahimabadi

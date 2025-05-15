@@ -1,0 +1,8 @@
+<scxml version="1.0" xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" name="fsm_3" initial="idle">
+
+  <state id="idle">
+    <transition event="message" target="idle">
+      <send event="message" target="fsm_1"/>
+    </transition>
+  </state>
+</scxml>

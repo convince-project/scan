@@ -1,15 +1,14 @@
 [package]
-name = "scan_scxml"
+name = "scan_fmt_scxml"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "scan_scxml"  # The name of the target.
+name = "scan_fmt_scxml"  # The name of the target.
 crate-type = ["lib"]   # The crate types to generate.
 
 [dependencies]
 scan_core = { version = "0.1.0", path="../scan_core" }
-scan_fmt_scxml = { path = "../scan_fmt_scxml" }
 anyhow = { workspace = true }
 boa_ast = "0.20.0"
 boa_interner = "0.20.0"
@@ -22,4 +21,3 @@ logos = "0.15.0"
 chumsky = "0.10.1"
 csv = { workspace = true }
 flate2 = { workspace = true }
-scan_fmt_scxml = { path = "../scan_fmt_scxml" }
