@@ -1,3 +1,11 @@
+# Parser For SCXML-based Language
+
+**UniGe Artificial Intelligence Laboratory + Italian Institute of Technology**
+
+The goal of the project is to develop a Parser from the SCXML-based language.
+
+Please follows the following guide to compile each document in the project.
+
 # SCAN
 
 SCAN (StatistiCal ANalyzer) is a statistical model checker
