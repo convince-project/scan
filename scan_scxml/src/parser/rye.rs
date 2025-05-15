@@ -155,11 +155,10 @@ pub fn parse(input: &str) -> anyhow::Result<Pmtl<String>> {
     }
 
     //parses the tokens to construct an AST
-    let result = parser()
+    parser()
         .parse(&tokens)
         .into_result()
-        .map_err(|_err| anyhow!("failed parsing Rye expression"));
-    result
+        .map_err(|_err| anyhow!("failed parsing Rye expression"))
 }
 
 #[cfg(test)]

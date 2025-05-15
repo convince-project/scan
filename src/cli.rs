@@ -1,6 +1,4 @@
-use anyhow::Context;
-use anyhow::anyhow;
-use anyhow::bail;
+use anyhow::{Context, anyhow, bail};
 use clap::{Parser, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use scan_core::{Oracle, Scan, adaptive_bound, okamoto_bound};
