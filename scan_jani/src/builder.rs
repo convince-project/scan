@@ -713,6 +713,7 @@ impl JaniBuilder {
                 match op {
                     BoolOp::And => PgExpression::and(vec![left, right]),
                     BoolOp::Or => PgExpression::or(vec![left, right]),
+                    BoolOp::Implies => Ok(PgExpression::Implies(Box::new((left, right)))),
                 }
                 .map_err(|err| err.into())
             }
@@ -853,6 +854,7 @@ impl JaniBuilder {
                 match op {
                     BoolOp::And => PgExpression::and(vec![left, right]).map_err(|err| err.into()),
                     BoolOp::Or => PgExpression::or(vec![left, right]).map_err(|err| err.into()),
+                    BoolOp::Implies => Ok(PgExpression::Implies(Box::new((left, right)))),
                 }
                 .map(Either::Left)
             }
