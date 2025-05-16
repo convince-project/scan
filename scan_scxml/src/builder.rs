@@ -1,7 +1,7 @@
 //! Model builder for SCAN's XML specification format.
 
 use crate::parser::{Executable, If, OmgType, OmgTypes, Param, Parser, Scxml, Send, Target};
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use boa_interner::{Interner, ToInternedString};
 use log::{info, trace};
 use rand::rngs::SmallRng;
@@ -106,8 +106,10 @@ impl ModelBuilder {
         model_builder.prebuild_processes(&mut parser)?;
 
         info!(target: "build", "Visit process list");
-        for (_id, fsm) in parser.process_list.iter() {
-            model_builder.build_fsm(fsm, &mut parser.interner)?;
+        for (id, fsm) in parser.process_list.iter() {
+            model_builder
+                .build_fsm(fsm, &mut parser.interner)
+                .with_context(|| format!("failed building fsm '{id}'"))?;
         }
 
         model_builder.build_ports(&parser)?;
@@ -319,7 +321,9 @@ impl ModelBuilder {
                     Literal::Int(_) => Ok(String::from("int32")),
                     Literal::BigInt(_) => todo!(),
                     Literal::Bool(_) => Ok(String::from("bool")),
-                    _ => unimplemented!(),
+                    _ => Err(anyhow!(
+                        "unable to infer type for literal expression '{lit:?}'"
+                    )),
                 }
             }
             boa_ast::Expression::Unary(unary) => {
@@ -328,7 +332,10 @@ impl ModelBuilder {
                     boa_ast::expression::operator::unary::UnaryOp::Minus
                     | boa_ast::expression::operator::unary::UnaryOp::Plus => Ok(type_name),
                     boa_ast::expression::operator::unary::UnaryOp::Not => Ok(String::from("bool")),
-                    _ => unimplemented!(),
+                    _ => Err(anyhow!(
+                        "unable to infer type for operator '{:?}'",
+                        unary.op()
+                    )),
                 }
             }
             boa_ast::Expression::Binary(bin) => {
@@ -345,18 +352,28 @@ impl ModelBuilder {
                     .1
                     .clone();
                 match bin.op() {
-                    boa_ast::expression::operator::binary::BinaryOp::Arithmetic(_) => {
-                        if lhs == rhs { Ok(type_name) } else { todo!() }
+                    boa_ast::expression::operator::binary::BinaryOp::Arithmetic(op) => {
+                        if lhs == rhs {
+                            Ok(type_name)
+                        } else {
+                            Err(anyhow!(
+                                "unable to infer type for operator '{op:?}' arithmetic expression"
+                            ))
+                        }
                     }
                     boa_ast::expression::operator::binary::BinaryOp::Bitwise(_) => todo!(),
                     boa_ast::expression::operator::binary::BinaryOp::Relational(_)
                     | boa_ast::expression::operator::binary::BinaryOp::Logical(_) => {
                         Ok(String::from("bool"))
                     }
-                    boa_ast::expression::operator::binary::BinaryOp::Comma => todo!(),
+                    boa_ast::expression::operator::binary::BinaryOp::Comma => Err(anyhow!(
+                        "unknown binary operator 'comma', unable to infer type"
+                    )),
                 }
             }
-            _ => unimplemented!(),
+            _ => Err(anyhow!(
+                "unknown expression '{expr:?}', unable to infer type"
+            )),
         }
     }
 
