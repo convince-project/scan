@@ -25,6 +25,16 @@ fn crowds() {
     test(Path::new("./tests/crowds.v1.jani"))
 }
 
+#[test]
+fn leader_sync_3_2() {
+    test(Path::new("./tests/leader_sync.3-2.v1.jani"))
+}
+
+#[test]
+fn leader_sync_5_4() {
+    test(Path::new("./tests/leader_sync.5-4.v1.jani"))
+}
+
 fn test(path: &Path) {
     let (scan, ..) = scan_jani::load(path).expect("load");
     scan.adaptive::<scan_jani::TracePrinter>(0.95, 0.01, 10000, None, true);
