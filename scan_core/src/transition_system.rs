@@ -45,8 +45,6 @@ pub trait TransitionSystem<Event, Err: Error>: Clone + Send + Sync {
     where
         P: Tracer<Event>,
     {
-        // WARN: without reseeding experiments will not be randomized!
-        // self.cs.reseed_rng();
         // let mut current_len = 0;
         trace!("new run starting");
         if let Some(tracer) = tracer.as_mut() {
@@ -64,17 +62,29 @@ pub trait TransitionSystem<Event, Err: Error>: Clone + Send + Sync {
                 if !running.load(Ordering::Relaxed) {
                     trace!("run stopped");
                     return Ok(RunOutcome::Incomplete);
-                } else if oracle.output_assumes().is_some() {
+                } else if oracle.output_assumes().any(|f| f.is_some_and(|a| !a)) {
                     trace!("run undetermined");
                     break RunOutcome::Incomplete;
-                } else if let Some(i) = oracle.output_guarantees() {
+                } else if let Some(i) = oracle
+                    .output_guarantees()
+                    .enumerate()
+                    .find_map(|(i, f)| f.is_some_and(|a| !a).then_some(i))
+                {
                     trace!("run fails");
                     break RunOutcome::Fail(i);
+                } else if oracle.output_guarantees().all(|f| f.is_some_and(|a| a)) {
+                    // Early success if all properties are verified
+                    trace!("run succeeds");
+                    break RunOutcome::Success;
                 }
-            } else if oracle.final_output_assumes().is_some() {
+            } else if oracle.final_output_assumes().any(|f| !f) {
                 trace!("run undetermined");
                 break RunOutcome::Incomplete;
-            } else if let Some(i) = oracle.final_output_guarantees() {
+            } else if let Some(i) = oracle
+                .final_output_guarantees()
+                .enumerate()
+                .find_map(|(i, f)| (!f).then_some(i))
+            {
                 trace!("run fails");
                 break RunOutcome::Fail(i);
             } else {

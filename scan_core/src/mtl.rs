@@ -30,47 +30,34 @@ impl Oracle for MtlOracle {
             .for_each(|(mtl, opt)| {
                 *opt = match mtl {
                     Mtl::Atom(i) => state.get(*i).cloned(),
-                    Mtl::Until(lhs, rhs) => match opt {
-                        Some(_) => *opt,
-                        None => {
-                            if state.get(*rhs).is_some_and(|b| *b) {
-                                Some(true)
-                            } else if state.get(*lhs).is_some_and(|b| *b) {
-                                None
-                            } else {
-                                Some(false)
-                            }
+                    Mtl::Until(lhs, rhs) => {
+                        if opt.is_some() {
+                            *opt
+                        } else if state.get(*rhs).is_some_and(|b| *b) {
+                            Some(true)
+                        } else if state.get(*lhs).is_some_and(|b| *b) {
+                            None
+                        } else {
+                            Some(false)
                         }
-                    },
+                    }
                 }
             })
     }
 
-    fn output_assumes(&self) -> Option<usize> {
-        self.assumes
-            .iter()
-            .enumerate()
-            .find_map(|(i, (_, opt))| opt.is_some_and(|b| !b).then_some(i))
+    fn output_assumes(&self) -> impl Iterator<Item = Option<bool>> {
+        self.assumes.iter().map(|(_, opt)| *opt)
     }
 
-    fn output_guarantees(&self) -> Option<usize> {
-        self.guarantees
-            .iter()
-            .enumerate()
-            .find_map(|(i, (_, opt))| opt.is_some_and(|b| !b).then_some(i))
+    fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>> {
+        self.guarantees.iter().map(|(_, opt)| *opt)
     }
 
-    fn final_output_assumes(&self) -> Option<usize> {
-        self.assumes
-            .iter()
-            .enumerate()
-            .find_map(|(i, (_, opt))| (!opt.is_some_and(|b| b)).then_some(i))
+    fn final_output_assumes(&self) -> impl Iterator<Item = bool> {
+        self.assumes.iter().map(|(_, opt)| opt.unwrap_or(false))
     }
 
-    fn final_output_guarantees(&self) -> Option<usize> {
-        self.guarantees
-            .iter()
-            .enumerate()
-            .find_map(|(i, (_, opt))| (!opt.is_some_and(|b| b)).then_some(i))
+    fn final_output_guarantees(&self) -> impl Iterator<Item = bool> {
+        self.guarantees.iter().map(|(_, opt)| opt.unwrap_or(false))
     }
 }

@@ -317,25 +317,102 @@ impl PmtlOracle {
     fn formula_output(&self, formula: usize) -> bool {
         self.outputs[formula].contains(self.time)
     }
+
+    // Represents the knowledge that the given formula is always true, or always false, from the current moment.
+    fn formula_valuation(&self, formula: usize) -> Option<bool> {
+        match self.subformulae.get(formula).expect("formula") {
+            ArcPmtl::True => Some(true),
+            ArcPmtl::False => Some(false),
+            ArcPmtl::Atom(_) => None,
+            ArcPmtl::And(items) => items
+                .iter()
+                .map(|(_, f)| self.formula_valuation(*f))
+                .try_fold(true, |acc, t| t.map(|b| b && acc)),
+            ArcPmtl::Or(items) => items
+                .iter()
+                .map(|(_, f)| self.formula_valuation(*f))
+                .try_fold(false, |acc, t| t.map(|b| b || acc)),
+            ArcPmtl::Not((_, f)) => self.formula_valuation(*f).map(|b| !b),
+            ArcPmtl::Implies((_, f), (_, g)) => {
+                if self.formula_valuation(*g).is_some_and(|b| b)
+                    || self.formula_valuation(*f).is_some_and(|b| !b)
+                {
+                    Some(true)
+                } else if self.formula_valuation(*g).is_some_and(|b| !b)
+                    && self.formula_valuation(*f).is_some_and(|b| b)
+                {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            // Valuation of Historically represents the set of time moments in which we know the formula to be false.
+            // If the argument of the operator is know to be always true, then Historically is always true.
+            // If the argument of the operator is know to be always false, then Historically is always false provided that the lower time bound is 0.
+            ArcPmtl::Historically((_, f), lb, _) => self
+                .formula_valuation(*f)
+                .and_then(|v| (*lb == 0 || v).then_some(v))
+                .or_else(|| {
+                    self.valuations
+                        .get(formula)
+                        .expect("valuation")
+                        .contains_since(self.time)
+                        .then_some(false)
+                }),
+            // Valuation of Previously represents the set of time moments in which we know the formula to be false.
+            // If the argument of the operator is know to be always true, then Previously is always true provided that the lower time bound is 0.
+            // If the argument of the operator is know to be always false, then Previously is always false.
+            ArcPmtl::Previously((_, f), lb, _) => self
+                .formula_valuation(*f)
+                .and_then(|v| (*lb == 0 || !v).then_some(v))
+                .or_else(|| {
+                    self.valuations
+                        .get(formula)
+                        .expect("valuation")
+                        .contains_since(self.time)
+                        .then_some(true)
+                }),
+            // Valuation of Since represents the set of time moments in which we know the formula to be true if its lhs argument is true from then on.
+            // If the rhs argument of the operator is know to be always false, then Since is always false.
+            // If the Since valuation is always true and the lhs argument of the operator is know to be always true, then Since is always true.
+            // If the Since valuation is always true and the lhs argument of the operator is know to be always false, then Since is always false provided that the lower time bound is 0.
+            ArcPmtl::Since((_, lhs), (_, rhs), lb, _) => {
+                if self.formula_valuation(*rhs) == Some(false) {
+                    Some(false)
+                } else if self
+                    .valuations
+                    .get(formula)
+                    .expect("valuation")
+                    .contains_since(self.time)
+                {
+                    self.formula_valuation(*lhs)
+                        .and_then(|v| (*lb == 0 || v).then_some(v))
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 impl Oracle for PmtlOracle {
-    fn output_assumes(&self) -> Option<usize> {
-        self.assumes
-            .iter()
-            .enumerate()
-            .find(|(_, f)| !self.formula_output(**f))
-            .map(|(i, _)| i)
+    fn output_assumes(&self) -> impl Iterator<Item = Option<bool>> {
+        self.assumes.iter().map(|f| self.formula_valuation(*f))
     }
 
-    fn output_guarantees(&self) -> Option<usize> {
-        self.guarantees
-            .iter()
-            .enumerate()
-            .find(|(_, f)| !self.formula_output(**f))
-            .map(|(i, _)| i)
+    fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>> {
+        self.guarantees.iter().map(|f| self.formula_valuation(*f))
     }
 
+    fn final_output_assumes(&self) -> impl Iterator<Item = bool> {
+        self.assumes.iter().map(|f| self.formula_output(*f))
+    }
+
+    fn final_output_guarantees(&self) -> impl Iterator<Item = bool> {
+        self.guarantees.iter().map(|f| self.formula_output(*f))
+    }
+
+    // From Ulus 2024: Online monitoring of metric temporal logic using sequential networks. Link: <http://arxiv.org/abs/1901.00175v2>
     fn update(&mut self, state: &[bool], time: Time) {
         assert!(self.time.0 <= time);
         let new_time = (time, self.time.1 + 1);
@@ -415,7 +492,7 @@ impl Oracle for PmtlOracle {
                             let lower_bound = if *lower_bound > 0 {
                                 lower_bound
                                     .checked_add(partial_lower_bound.0)
-                                    .map(|ub| (ub, 0))
+                                    .map(|lb| (lb, 0))
                                     .unwrap_or((Time::MAX, Time::MAX))
                             } else {
                                 partial_lower_bound
@@ -453,7 +530,7 @@ impl Oracle for PmtlOracle {
                             let interval_lower_bound = if *lower_bound > 0 {
                                 lower_bound
                                     .checked_add(partial_lower_bound.0)
-                                    .map(|ub| (ub, 0))
+                                    .map(|lb| (lb, 0))
                                     .unwrap()
                             } else {
                                 partial_lower_bound
@@ -494,13 +571,12 @@ impl Oracle for PmtlOracle {
                         assert_eq!(*partial_upper_bound, nset_rhs.bounds()[idx].0);
                         assert!(partial_lower_bound < *partial_upper_bound);
                         assert!(self.time < *partial_upper_bound);
-                        let out_rhs = nset_rhs.bounds()[idx].1;
-                        valuation = match (out_lhs, out_rhs) {
-                            (true, true) => {
+                        if *out_lhs {
+                            if nset_rhs.bounds()[idx].1 {
                                 let lower_bound = if *lower_bound > 0 {
                                     lower_bound
                                         .checked_add(partial_lower_bound.0)
-                                        .map(|ub| (ub, 0))
+                                        .map(|lb| (lb, 0))
                                         .unwrap_or((Time::MAX, Time::MAX))
                                 } else {
                                     partial_lower_bound
@@ -509,27 +585,29 @@ impl Oracle for PmtlOracle {
                                     .checked_add(partial_upper_bound.0)
                                     .map(|ub| (ub, Time::MAX))
                                     .unwrap_or((Time::MAX, Time::MAX));
+                                assert!(lower_bound < upper_bound);
                                 valuation.add_interval(lower_bound, upper_bound);
-                                valuation
                             }
-                            (true, false) => valuation,
-                            (false, true) => {
+                        } else {
+                            valuation = NumSet::new();
+                            if nset_rhs.bounds()[idx].1 {
+                                // WARN: Ulus says (t' + a, t' = b] here (because lhs is false up to time t'?)
                                 let lower_bound = if *lower_bound > 0 {
                                     lower_bound
                                         .checked_add(partial_upper_bound.0)
-                                        .map(|ub| (ub, 0))
+                                        .map(|lb| (lb, 0))
                                         .unwrap_or((Time::MAX, Time::MAX))
                                 } else {
-                                    *partial_upper_bound
+                                    partial_lower_bound
                                 };
                                 let upper_bound = upper_bound
                                     .checked_add(partial_upper_bound.0)
                                     .map(|ub| (ub, Time::MAX))
                                     .unwrap_or((Time::MAX, Time::MAX));
-                                NumSet::from_range(lower_bound, upper_bound)
+                                assert!(lower_bound < upper_bound);
+                                valuation.add_interval(lower_bound, upper_bound);
                             }
-                            (false, false) => NumSet::new(),
-                        };
+                        }
                         let mut to_add = valuation.clone();
                         to_add.cut(partial_lower_bound, *partial_upper_bound);
                         nset_output.union(&to_add);
@@ -609,17 +687,17 @@ mod tests {
         let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), 0, Time::MAX);
         let mut state = PmtlOracle::new(&[], &[formula]);
         state.update(&[false, true], 0);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false, true], 1);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, true], 2);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, true], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 4);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false, false], 5);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
     }
 
     #[test]
@@ -627,17 +705,17 @@ mod tests {
         let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), 0, 2);
         let mut state = PmtlOracle::new(&[], &[formula]);
         state.update(&[false, true], 0);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false, true], 1);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, true], 2);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 4);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 5);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
     }
 
     #[test]
@@ -645,17 +723,17 @@ mod tests {
         let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), 1, 2);
         let mut state = PmtlOracle::new(&[], &[formula]);
         state.update(&[false, true], 0);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[false, true], 1);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true, true], 2);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 4);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 5);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
     }
 
     #[test]
@@ -663,19 +741,19 @@ mod tests {
         let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), 1, 2);
         let mut state = PmtlOracle::new(&[], &[formula]);
         state.update(&[false, true], 0);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[false, true], 1);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[false, true], 2);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true, true], 2);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true, false], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 4);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true, false], 5);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
     }
 
     #[test]
@@ -683,19 +761,19 @@ mod tests {
         let formula = Pmtl::Historically(Box::new(Pmtl::Atom(0)), 1, 2);
         let mut state = PmtlOracle::new(&[], &[formula]);
         state.update(&[false], 0);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false], 0);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true], 1);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true], 2);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true], 4);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
     }
 
     #[test]
@@ -703,18 +781,18 @@ mod tests {
         let formula = Pmtl::Once(Box::new(Pmtl::Atom(0)), 1, 2);
         let mut state = PmtlOracle::new(&[], &[formula]);
         state.update(&[false], 0);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[false], 0);
-        assert!(state.output_guarantees().is_some());
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true], 1);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false], 2);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false], 3);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true], 4);
-        assert!(state.output_guarantees().is_none());
+        assert!(state.final_output_guarantees().any(|b| b));
     }
 }

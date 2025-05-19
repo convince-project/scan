@@ -75,17 +75,13 @@ pub enum RunOutcome {
 pub trait Oracle: Clone + Send + Sync {
     fn update(&mut self, state: &[bool], time: Time);
 
-    fn output_assumes(&self) -> Option<usize>;
+    fn output_assumes(&self) -> impl Iterator<Item = Option<bool>>;
 
-    fn output_guarantees(&self) -> Option<usize>;
+    fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>>;
 
-    fn final_output_assumes(&self) -> Option<usize> {
-        self.output_assumes()
-    }
+    fn final_output_assumes(&self) -> impl Iterator<Item = bool>;
 
-    fn final_output_guarantees(&self) -> Option<usize> {
-        self.output_guarantees()
-    }
+    fn final_output_guarantees(&self) -> impl Iterator<Item = bool>;
 }
 
 #[derive(Clone)]
