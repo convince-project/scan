@@ -116,7 +116,7 @@ use crate::program_graph::{
 use crate::{Time, grammar::*};
 pub use builder::*;
 use rand::rngs::SmallRng;
-use rand::seq::{IteratorRandom, SliceRandom};
+use rand::seq::IteratorRandom;
 use rand::{Rng, SeedableRng};
 use smallvec::SmallVec;
 use std::collections::VecDeque;
@@ -363,16 +363,19 @@ impl<R: Rng> ChannelSystem<R> {
     }
 
     pub(crate) fn montecarlo_execution(&mut self, duration: Time) -> Option<Event> {
-        let mut pg_vec =
-            SmallVec::<[_; 8]>::from_iter((0..self.program_graphs.len() as u16).map(PgId));
+        let pg_vec = Vec::from_iter((0..self.program_graphs.len() as u16).map(PgId));
         let mut rand = SmallRng::from_rng(&mut self.rng);
         while self.time <= duration {
             // Resets PG queue
-            let mut pg_list = pg_vec.as_mut_slice();
+            let mut pg_list = pg_vec.clone();
             while !pg_list.is_empty() {
-                let (select, remainder) = pg_list.partial_shuffle(&mut self.rng, 1);
-                pg_list = remainder;
-                let pg_id = select[0];
+                // Pick a random PG id from the list and remove it
+                let len = pg_list.len();
+                pg_list.swap(self.rng.random_range(0..len), len - 1);
+                let pg_id = pg_list.pop().unwrap();
+
+                // Execute randomly chosen transitions on the picked PG until an event is generated,
+                // or no more transition is possible
                 while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
                     .possible_transitions()
                     .filter_map(|(action, post_state)| {
