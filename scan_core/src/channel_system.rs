@@ -143,6 +143,12 @@ impl From<PgId> for u16 {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Channel(u16);
 
+impl From<Channel> for u16 {
+    fn from(val: Channel) -> Self {
+        val.0
+    }
+}
+
 /// An indexing object for locations in a CS.
 ///
 /// These cannot be directly created or manipulated,
@@ -292,6 +298,10 @@ impl ChannelSystemDef {
             })
             .ok()
     }
+
+    pub fn channels(&self) -> &Vec<(Type, Option<usize>)> {
+        &self.channels
+    }
 }
 
 /// Representation of a CS that can be executed transition-by-transition.
@@ -329,6 +339,10 @@ impl<R: Rng> ChannelSystem<R> {
     #[inline(always)]
     pub fn time(&self) -> Time {
         self.time
+    }
+
+    pub fn channels(&self) -> &Vec<(Type, Option<usize>)> {
+        self.def.channels()
     }
 
     /// Iterates over all transitions that can be admitted in the current state.

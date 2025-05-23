@@ -5,7 +5,7 @@ use super::{
 use crate::grammar::{Type, Val};
 use log::info;
 use rand::{Rng, SeedableRng, rngs::SmallRng};
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 enum Effect {
@@ -33,7 +33,7 @@ impl<R: Rng + 'static> From<Effect> for FnEffect<R> {
     }
 }
 
-type TransitionBuilder = (Action, Location, Option<PgExpression>, Vec<TimeConstraint>);
+type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
 #[derive(Clone)]
@@ -42,8 +42,7 @@ pub struct ProgramGraphBuilder {
     // Effects are indexed by actions
     effects: Vec<Effect>,
     // Transitions are indexed by locations
-    // We can assume there is at most one condition by logical disjunction
-    locations: Vec<(Vec<TransitionBuilder>, Vec<TimeConstraint>)>,
+    locations: Vec<(Vec<(Action, Vec<TransitionBuilder>)>, Vec<TimeConstraint>)>,
     // Time invariants of each location
     vars: Vec<Val>,
     // Number of clocks
@@ -425,7 +424,11 @@ impl ProgramGraphBuilder {
                     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
-            transitions.push((action, post, guard, constraints));
+            let transition = (post, guard, constraints);
+            match transitions.binary_search_by_key(&action, |(a, _)| *a) {
+                Ok(idx) => transitions[idx].1.push(transition),
+                Err(idx) => transitions.insert(idx, (action, vec![transition])),
+            }
             Ok(())
         }
     }
@@ -516,19 +519,28 @@ impl ProgramGraphBuilder {
         let mut locations = self
             .locations
             .into_iter()
-            .map(|(transitions, mut invariants)| {
-                let mut transitions = transitions
+            .map(|(a_transitions, mut invariants)| {
+                let mut a_transitions = a_transitions
                     .into_iter()
-                    .map(|(a, p, guard, mut c)| {
-                        c.sort_unstable();
-                        (a, p, guard.map(FnExpression::from), c)
+                    .map(|(a, mut loc_transitions)| {
+                        loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
+                        (
+                            a,
+                            loc_transitions
+                                .into_iter()
+                                .map(|(p, guard, mut c)| {
+                                    c.sort_unstable();
+                                    (p, guard.map(FnExpression::from), c)
+                                })
+                                .collect::<Vec<_>>(),
+                        )
                     })
                     .collect::<Vec<_>>();
-                transitions.sort_unstable_by_key(|(a, p, ..)| (*a, *p));
-                transitions.shrink_to_fit();
+                assert!(a_transitions.is_sorted_by_key(|(a, ..)| *a));
+                a_transitions.shrink_to_fit();
                 invariants.sort_unstable();
-                let actions = BTreeSet::from_iter(transitions.iter().map(|(a, ..)| *a));
-                (transitions, invariants, actions)
+                invariants.shrink_to_fit();
+                (a_transitions, invariants)
             })
             .collect::<Vec<_>>();
         locations.shrink_to_fit();
@@ -545,21 +557,11 @@ impl ProgramGraphBuilder {
         };
         self.initial_states.sort_unstable();
         self.initial_states.shrink_to_fit();
-        // Initialize buf
-        let mut buf = BTreeSet::from_iter(
-            (0..def.effects.len() as ActionIdx)
-                .map(Action)
-                .chain([EPSILON]),
-        );
-        for loc in &self.initial_states {
-            buf = &buf & &def.locations[loc.0 as usize].2
-        }
         ProgramGraph {
             current_states: self.initial_states.into(),
             vars: self.vars,
             def: Arc::new(def),
             clocks: vec![0; self.clocks as usize],
-            buf,
         }
     }
 }

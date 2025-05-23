@@ -49,7 +49,7 @@ struct Report {
 #[deny(missing_docs)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    /// Path of model's main XML file
+    /// Path of model's file or folder
     #[arg(value_hint = clap::ValueHint::AnyPath)]
     path: PathBuf,
     /// Format used to specify the model

@@ -1,7 +1,6 @@
 use crate::channel_system::{Channel, ChannelSystem, CsError, Event, EventType};
 use crate::{DummyRng, Expression, FnExpression, Time, TransitionSystem, Val};
 use rand::{Rng, SeedableRng};
-use std::collections::{BTreeMap, btree_map};
 use std::sync::Arc;
 
 /// An atomic variable for [`Pmtl`] formulae.
@@ -16,7 +15,7 @@ pub enum Atom {
 /// A builder type for [`CsModel`].
 pub struct CsModelBuilder<R: Rng + SeedableRng> {
     cs: ChannelSystem<R>,
-    ports: BTreeMap<Channel, Val>,
+    ports: Vec<Val>,
     predicates: Vec<FnExpression<Atom, DummyRng>>,
 }
 
@@ -25,8 +24,12 @@ impl<R: Rng + SeedableRng> CsModelBuilder<R> {
     pub fn new(initial_state: ChannelSystem<R>) -> Self {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         Self {
+            ports: initial_state
+                .channels()
+                .iter()
+                .map(|(t, ..)| t.default_value())
+                .collect(),
             cs: initial_state,
-            ports: BTreeMap::new(),
             predicates: Vec::new(),
         }
     }
@@ -35,11 +38,7 @@ impl<R: Rng + SeedableRng> CsModelBuilder<R> {
     /// which is given by an [`Channel`] and a default [`Val`] value.
     pub fn add_port(&mut self, channel: Channel, default: Val) {
         // TODO FIXME: error handling and type checking.
-        if let btree_map::Entry::Vacant(e) = self.ports.entry(channel) {
-            e.insert(default);
-        } else {
-            panic!("entry is already taken");
-        }
+        self.ports[u16::from(channel) as usize] = default;
     }
 
     /// Adds a new predicate to the [`CsModelBuilder`],
@@ -48,7 +47,11 @@ impl<R: Rng + SeedableRng> CsModelBuilder<R> {
         let predicate = FnExpression::<Atom, _>::from(predicate);
         let _ = predicate.eval(
             &|port| match port {
-                Atom::State(channel) => self.ports.get(&channel).unwrap().clone(),
+                Atom::State(channel) => self
+                    .ports
+                    .get(u16::from(channel) as usize)
+                    .expect("port")
+                    .clone(),
                 Atom::Event(_event) => Val::Boolean(false),
             },
             &mut DummyRng,
@@ -78,7 +81,7 @@ impl<R: Rng + SeedableRng> CsModelBuilder<R> {
 #[derive(Clone)]
 pub struct CsModel<R: Rng + SeedableRng> {
     cs: ChannelSystem<R>,
-    ports: BTreeMap<Channel, Val>,
+    ports: Vec<Val>,
     // TODO: predicates should not use rng
     predicates: Arc<Vec<FnExpression<Atom, DummyRng>>>,
     last_event: Option<Event>,
@@ -88,10 +91,11 @@ impl<R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<Event, CsError
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {
         let event = self.cs.montecarlo_execution(duration);
         if let Some(ref event) = event {
-            if let btree_map::Entry::Occupied(mut e) = self.ports.entry(event.channel) {
-                if let EventType::Send(ref val) = event.event_type {
-                    e.insert(val.clone());
-                }
+            if let EventType::Send(ref val) = event.event_type {
+                *self
+                    .ports
+                    .get_mut(u16::from(event.channel) as usize)
+                    .expect("port") = val.clone();
             }
         }
         self.last_event = event.clone();
@@ -108,24 +112,23 @@ impl<R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<Event, CsError
             .map(|prop| {
                 if let Val::Boolean(b) = prop.eval(
                     &|port| match port {
-                        Atom::State(channel) => self.ports.get(&channel).unwrap().clone(),
+                        Atom::State(channel) => self.ports[u16::from(channel) as usize].clone(),
                         Atom::Event(event) => {
                             Val::Boolean(self.last_event.as_ref().is_some_and(|e| e == &event))
                         }
                     },
                     &mut DummyRng,
                 ) {
-                    Some(b)
+                    b
                 } else {
-                    None
+                    // FIXME: handle error or guarantee it won't happen
+                    panic!("propositions should evaluate to boolean values")
                 }
             })
-            .collect::<Option<Vec<_>>>()
-            // FIXME: handle error or guarantee it won't happen
-            .unwrap()
+            .collect::<Vec<_>>()
     }
 
     fn state(&self) -> impl Iterator<Item = &Val> {
-        self.ports.values()
+        self.ports.iter()
     }
 }
