@@ -87,7 +87,9 @@ pub struct CsModel<R: Rng + SeedableRng> {
     last_event: Option<Event>,
 }
 
-impl<R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<Event, CsError> for CsModel<R> {
+impl<R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<Event> for CsModel<R> {
+    type Err = CsError;
+
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {
         let event = self.cs.montecarlo_execution(duration);
         if let Some(ref event) = event {

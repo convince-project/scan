@@ -9,12 +9,12 @@ pub use builder::JaniModelData;
 use builder::build;
 use log::info;
 use parser::Model;
-use scan_core::program_graph::{Action, PgError};
+use scan_core::program_graph::Action;
 use scan_core::{MtlOracle, PgModel, Scan};
 use std::{fs::File, io::Read, path::Path};
 pub use tracer::TracePrinter;
 
-pub type JaniScan = Scan<Action, PgError, PgModel, MtlOracle>;
+pub type JaniScan = Scan<Action, PgModel, MtlOracle>;
 
 pub fn load(path: &Path) -> anyhow::Result<(JaniScan, JaniModelData)> {
     let time = std::time::Instant::now();

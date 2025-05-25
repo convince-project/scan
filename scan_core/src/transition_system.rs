@@ -25,8 +25,10 @@ pub trait Tracer<A>: Clone + Send + Sync {
     fn finalize(self, outcome: RunOutcome);
 }
 
-pub trait TransitionSystem<Event, Err: Error>: Clone + Send + Sync {
-    fn transition(&mut self, duration: Time) -> Result<Option<Event>, Err>;
+pub trait TransitionSystem<Event>: Clone + Send + Sync {
+    type Err: Error;
+
+    fn transition(&mut self, duration: Time) -> Result<Option<Event>, Self::Err>;
 
     fn time(&self) -> Time;
 
@@ -41,7 +43,7 @@ pub trait TransitionSystem<Event, Err: Error>: Clone + Send + Sync {
         mut oracle: O,
         mut tracer: Option<P>,
         running: Arc<AtomicBool>,
-    ) -> Result<RunOutcome, Err>
+    ) -> Result<RunOutcome, Self::Err>
     where
         P: Tracer<Event>,
     {

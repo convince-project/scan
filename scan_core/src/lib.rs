@@ -26,7 +26,6 @@ use rand::RngCore;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
-    error::Error,
     marker::PhantomData,
     sync::{
         Arc, Mutex,
@@ -85,10 +84,9 @@ pub trait Oracle: Clone + Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct Scan<Event, Err, Ts, O>
+pub struct Scan<Event, Ts, O>
 where
-    Err: Error,
-    Ts: TransitionSystem<Event, Err>,
+    Ts: TransitionSystem<Event>,
     O: Oracle,
 {
     ts: Arc<Ts>,
@@ -98,14 +96,12 @@ where
     failures: Arc<AtomicU32>,
     violations: Arc<Mutex<Vec<u32>>>,
     _event: PhantomData<Event>,
-    _err: PhantomData<Err>,
 }
 
-impl<Event, Err, T, O> Scan<Event, Err, T, O>
+impl<Event, T, O> Scan<Event, T, O>
 where
     Event: Sync,
-    Err: Error + Sync,
-    T: TransitionSystem<Event, Err> + 'static,
+    T: TransitionSystem<Event> + 'static,
     O: Oracle + 'static,
 {
     pub fn new(ts: T, oracle: O) -> Self {
@@ -117,7 +113,6 @@ where
             failures: Arc::new(AtomicU32::new(0)),
             violations: Arc::new(Mutex::new(Vec::new())),
             _event: PhantomData,
-            _err: PhantomData,
         }
     }
 

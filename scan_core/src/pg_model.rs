@@ -47,7 +47,9 @@ impl Clone for PgModel {
     }
 }
 
-impl TransitionSystem<Action, PgError> for PgModel {
+impl TransitionSystem<Action> for PgModel {
+    type Err = PgError;
+
     fn transition(&mut self, _duration: crate::Time) -> Result<Option<Action>, PgError> {
         Ok(self.pg.montecarlo(&mut self.rng))
     }

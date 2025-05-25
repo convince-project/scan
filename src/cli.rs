@@ -123,16 +123,15 @@ impl Cli {
         self.run_scan(scan, guarantees, tracer)
     }
 
-    fn run_scan<E, Err, Ts, Tr, O>(
+    fn run_scan<E, Ts, Tr, O>(
         self,
-        scan: Scan<E, Err, Ts, O>,
+        scan: Scan<E, Ts, O>,
         guarantees: Vec<String>,
         tracer: Option<Tr>,
     ) -> anyhow::Result<()>
     where
-        Ts: scan_core::TransitionSystem<E, Err> + 'static,
+        Ts: scan_core::TransitionSystem<E> + 'static,
         Tr: scan_core::Tracer<E> + 'static,
-        Err: std::error::Error + Clone + Send + Sync + 'static,
         E: Clone + Send + Sync + 'static,
         O: Oracle + 'static,
     {
@@ -180,14 +179,13 @@ impl Cli {
         Ok(())
     }
 
-    fn json_report<E, Err, Ts, O>(
+    fn json_report<E, Ts, O>(
         &self,
-        scan: &Scan<E, Err, Ts, O>,
+        scan: &Scan<E, Ts, O>,
         guarantees: Vec<String>,
     ) -> anyhow::Result<String>
     where
-        Ts: scan_core::TransitionSystem<E, Err> + 'static,
-        Err: std::error::Error + Send + Sync,
+        Ts: scan_core::TransitionSystem<E> + 'static,
         E: Send + Sync,
         O: Oracle + 'static,
     {
@@ -212,14 +210,13 @@ impl Cli {
         serde_json::ser::to_string_pretty(&report).context(anyhow!("failed report serialization"))
     }
 
-    fn print_report<E, Err, Ts, O>(
+    fn print_report<E, Ts, O>(
         &self,
-        scan: &Scan<E, Err, Ts, O>,
+        scan: &Scan<E, Ts, O>,
         guarantees: &[String],
         model_name: String,
     ) where
-        Ts: scan_core::TransitionSystem<E, Err> + 'static,
-        Err: std::error::Error + Send + Sync,
+        Ts: scan_core::TransitionSystem<E> + 'static,
         E: Send + Sync,
         O: Oracle + 'static,
     {
@@ -255,16 +252,15 @@ impl Cli {
     }
 }
 
-fn print_progress_bar<E, Err, Ts, O>(
+fn print_progress_bar<E, Ts, O>(
     bar: Bar,
     confidence: f64,
     precision: f64,
     guarantees: &[String],
-    scan: &Scan<E, Err, Ts, O>,
+    scan: &Scan<E, Ts, O>,
     model_name: String,
 ) where
-    Ts: scan_core::TransitionSystem<E, Err> + 'static,
-    Err: std::error::Error + Send + Sync,
+    Ts: scan_core::TransitionSystem<E> + 'static,
     E: Send + Sync,
     O: Oracle + 'static,
 {
