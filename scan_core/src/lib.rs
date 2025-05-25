@@ -100,9 +100,8 @@ where
 
 impl<Event, T, O> Scan<Event, T, O>
 where
-    Event: Sync,
-    T: TransitionSystem<Event> + 'static,
-    O: Oracle + 'static,
+    T: TransitionSystem<Event>,
+    O: Oracle,
 {
     pub fn new(ts: T, oracle: O) -> Self {
         Self {

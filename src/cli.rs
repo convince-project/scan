@@ -185,9 +185,9 @@ impl Cli {
         guarantees: Vec<String>,
     ) -> anyhow::Result<String>
     where
-        Ts: scan_core::TransitionSystem<E> + 'static,
+        Ts: scan_core::TransitionSystem<E>,
         E: Send + Sync,
-        O: Oracle + 'static,
+        O: Oracle,
     {
         let successes = scan.successes();
         let failures = scan.failures();
@@ -216,9 +216,9 @@ impl Cli {
         guarantees: &[String],
         model_name: String,
     ) where
-        Ts: scan_core::TransitionSystem<E> + 'static,
+        Ts: scan_core::TransitionSystem<E>,
         E: Send + Sync,
-        O: Oracle + 'static,
+        O: Oracle,
     {
         // Magnitude of precision, to round results to sensible number of digits
         let mag = (self.precision.log10().abs().ceil() as usize).max(2);
@@ -260,9 +260,9 @@ fn print_progress_bar<E, Ts, O>(
     scan: &Scan<E, Ts, O>,
     model_name: String,
 ) where
-    Ts: scan_core::TransitionSystem<E> + 'static,
+    Ts: scan_core::TransitionSystem<E>,
     E: Send + Sync,
-    O: Oracle + 'static,
+    O: Oracle,
 {
     const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
     const ASCII_BAR: &str = "#--";
