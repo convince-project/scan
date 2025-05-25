@@ -293,57 +293,73 @@ impl JaniBuilder {
                     });
 
                     // Update syncs with new action (has to synchronise like original one)
-                    for e_idx in 0..jani_model.system.elements.len() {
-                        if jani_model.system.elements[e_idx].automaton == automaton.name {
-                            // add new syncs for newly generated action
-                            let to_add = jani_model
-                                .system
-                                .syncs
-                                .iter()
-                                .filter(|sync| {
-                                    sync.synchronise[e_idx]
-                                        .as_ref()
-                                        .is_some_and(|a| *a == edge_action)
-                                })
-                                .map(|sync| {
-                                    let mut synchronise = sync.synchronise.clone();
-                                    let _ = synchronise[e_idx].insert(action.clone());
-                                    // Generate new unique result action
-                                    let result = sync.result.clone().unwrap_or_default()
-                                        + Self::GEN
-                                        + &idx.to_string();
-                                    idx += 1;
-                                    Sync {
-                                        synchronise,
-                                        result: Some(result),
-                                        _comment: String::new(),
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-                            jani_model.system.syncs.extend(to_add);
-
-                            // If original action did not appear in syncs it means that it does not sync between automata.
-                            // We still want to keep track of it esplicitely.
-                            if jani_model.system.syncs.iter().all(|sync| {
+                    for e_idx in (0..jani_model.system.elements.len()).filter(|e_idx| {
+                        jani_model.system.elements[*e_idx].automaton == automaton.name
+                    }) {
+                        // add new syncs for newly generated action
+                        let to_add = jani_model
+                            .system
+                            .syncs
+                            .iter()
+                            .filter(|sync| {
                                 sync.synchronise[e_idx]
                                     .as_ref()
-                                    .is_none_or(|a| *a != edge_action)
-                            }) {
-                                let mut synchronise = vec![None; jani_model.system.elements.len()];
-                                synchronise[e_idx] = Some(action.clone());
-                                // ensure result is unique
-                                let result = action.clone() + Self::GEN + &idx.to_string();
+                                    .is_some_and(|a| *a == edge_action)
+                            })
+                            .map(|sync| {
+                                let mut synchronise = sync.synchronise.clone();
+                                let _ = synchronise[e_idx].insert(action.clone());
+                                // Generate new unique result action
+                                let result = sync.result.clone().unwrap_or_default()
+                                    + Self::GEN
+                                    + &idx.to_string();
                                 idx += 1;
-                                jani_model.system.syncs.push(Sync {
+                                Sync {
                                     synchronise,
                                     result: Some(result),
                                     _comment: String::new(),
-                                });
-                            }
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        jani_model.system.syncs.extend(to_add);
+
+                        // If original action did not appear in syncs it means that it does not sync between automata.
+                        // We still want to keep track of it esplicitely.
+                        if jani_model.system.syncs.iter().all(|sync| {
+                            sync.synchronise[e_idx]
+                                .as_ref()
+                                .is_none_or(|a| *a != edge_action)
+                        }) {
+                            let mut synchronise = vec![None; jani_model.system.elements.len()];
+                            synchronise[e_idx] = Some(action.clone());
+                            // ensure result is unique
+                            let result = action.clone() + Self::GEN + &idx.to_string();
+                            idx += 1;
+                            jani_model.system.syncs.push(Sync {
+                                synchronise,
+                                result: Some(result),
+                                _comment: String::new(),
+                            });
                         }
                     }
                 }
             }
+            // Keep only syncs that are actually used
+            jani_model.system.syncs.retain(|sync| {
+                jani_model
+                    .system
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.automaton == automaton.name)
+                    .all(|(e_idx, _)| {
+                        sync.synchronise[e_idx].as_ref().is_none_or(|a| {
+                            new_edges
+                                .iter()
+                                .any(|edge| edge.action.as_ref().unwrap() == a)
+                        })
+                    })
+            });
             // Replace edges with new ones
             automaton.edges = new_edges;
         }
@@ -771,7 +787,7 @@ impl JaniBuilder {
                             PgExpression::Opposite(Box::new(right)),
                         ])),
                         parser::IntOp::Mult => Ok(PgExpression::Mult(vec![left, right])),
-                        parser::IntOp::IntDiv => todo!(),
+                        parser::IntOp::IntDiv => Ok(PgExpression::Div(Box::new((left, right)))),
                     }
                 } else {
                     bail!(TypeError::TypeMismatch)
