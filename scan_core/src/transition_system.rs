@@ -22,81 +22,101 @@ pub trait Tracer<A>: Clone + Send + Sync {
     /// Finalize and close streaming.
     ///
     /// This method needs to be called at the end of the execution.
-    fn finalize(self, outcome: RunOutcome);
+    fn finalize(self, outcome: &RunOutcome);
+}
+
+// Dummy Tracer that does nothing
+impl<A> Tracer<A> for () {
+    fn init(&mut self) {}
+
+    fn trace<'a, I: IntoIterator<Item = &'a Val>>(&mut self, _action: &A, _time: Time, _ports: I) {}
+
+    fn finalize(self, _outcome: &RunOutcome) {}
 }
 
 pub trait TransitionSystem<Event>: Clone + Send + Sync {
-    type Err: Error;
+    type Err: Error + Send + Sync;
 
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, Self::Err>;
 
     fn time(&self) -> Time;
 
-    fn labels(&self) -> Vec<bool>;
+    fn labels(&self) -> impl Iterator<Item = bool>;
 
     fn state(&self) -> impl Iterator<Item = &Val>;
 
-    fn experiment<P, O: Oracle>(
+    fn experiment<O: Oracle>(
         mut self,
-        // max_length: usize,
         duration: Time,
         mut oracle: O,
-        mut tracer: Option<P>,
         running: Arc<AtomicBool>,
-    ) -> Result<RunOutcome, Self::Err>
+    ) -> Result<RunOutcome, Self::Err> {
+        // let mut current_len = 0;
+        trace!("new run starting");
+        let mut time;
+        // reuse vector to avoid allocations
+        let mut labels = Vec::new();
+        while let Some(_event) = self.transition(duration)? {
+            // current_len += 1;
+            labels.clear();
+            labels.extend(self.labels());
+            time = self.time();
+            if time >= duration {
+                trace!("run stopped");
+                return Ok(RunOutcome::Incomplete);
+            }
+            oracle.update(&labels, time);
+            if !running.load(Ordering::Relaxed) {
+                trace!("run stopped");
+                return Ok(RunOutcome::Incomplete);
+            } else if oracle.output_guarantees().all(|b| b.is_some()) {
+                trace!("run complete early");
+                let verified = Vec::from_iter(oracle.output_guarantees().map(Option::unwrap));
+                return Ok(RunOutcome::Verified(verified));
+            }
+        }
+        trace!("run complete");
+        let verified = Vec::from_iter(oracle.final_output_guarantees());
+        Ok(RunOutcome::Verified(verified))
+    }
+
+    fn trace<P, O: Oracle>(
+        mut self,
+        duration: Time,
+        mut oracle: O,
+        mut tracer: P,
+    ) -> Result<(), Self::Err>
     where
         P: Tracer<Event>,
     {
         // let mut current_len = 0;
         trace!("new run starting");
-        if let Some(tracer) = tracer.as_mut() {
-            tracer.init();
-        }
-        let result = loop {
-            if let Some(event) = self.transition(duration)? {
-                // current_len += 1;
-                let labels = self.labels();
-                let time = self.time();
-                if let Some(tracer) = tracer.as_mut() {
-                    tracer.trace(&event, time, self.state());
-                }
-                oracle.update(&labels, time);
-                if !running.load(Ordering::Relaxed) {
-                    trace!("run stopped");
-                    return Ok(RunOutcome::Incomplete);
-                } else if oracle.output_assumes().any(|f| f.is_some_and(|a| !a)) {
-                    trace!("run undetermined");
-                    break RunOutcome::Incomplete;
-                } else if let Some(i) = oracle
-                    .output_guarantees()
-                    .enumerate()
-                    .find_map(|(i, f)| f.is_some_and(|a| !a).then_some(i))
-                {
-                    trace!("run fails");
-                    break RunOutcome::Fail(i);
-                } else if oracle.output_guarantees().all(|f| f.is_some_and(|a| a)) {
-                    // Early success if all properties are verified
-                    trace!("run succeeds");
-                    break RunOutcome::Success;
-                }
-            } else if oracle.final_output_assumes().any(|f| !f) {
-                trace!("run undetermined");
-                break RunOutcome::Incomplete;
-            } else if let Some(i) = oracle
-                .final_output_guarantees()
-                .enumerate()
-                .find_map(|(i, f)| (!f).then_some(i))
-            {
-                trace!("run fails");
-                break RunOutcome::Fail(i);
-            } else {
-                trace!("run succeeds");
-                break RunOutcome::Success;
+        let mut time;
+        // reuse vector to avoid allocations
+        let mut labels = Vec::new();
+        tracer.init();
+        while let Some(event) = self.transition(duration)? {
+            // current_len += 1;
+            labels.clear();
+            labels.extend(self.labels());
+            time = self.time();
+            if time >= duration {
+                trace!("run stopped");
+                tracer.finalize(&RunOutcome::Incomplete);
+                return Ok(());
             }
-        };
-        if let Some(tracer) = tracer {
-            tracer.finalize(result);
+            tracer.trace(&event, time, self.state());
+            oracle.update(&labels, time);
+            if oracle.output_guarantees().all(|b| b.is_some()) {
+                trace!("run complete");
+                let verified = Vec::from_iter(oracle.output_guarantees().map(Option::unwrap));
+                tracer.finalize(&RunOutcome::Verified(verified));
+                return Ok(());
+            }
         }
-        Ok(result)
+        trace!("run complete");
+        let verified = Vec::from_iter(oracle.final_output_guarantees());
+        tracer.finalize(&RunOutcome::Verified(verified));
+        Ok(())
     }
 }

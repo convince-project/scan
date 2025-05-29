@@ -22,9 +22,12 @@ pub struct JaniModelData {
     pub guarantees: Vec<String>,
 }
 
-pub(crate) fn build(jani_model: Model) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
+pub(crate) fn build(
+    jani_model: Model,
+    properties: &[String],
+) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
-    builder.build(jani_model)
+    builder.build(jani_model, properties)
 }
 
 #[derive(Default)]
@@ -43,6 +46,7 @@ impl JaniBuilder {
     pub(crate) fn build(
         mut self,
         mut jani_model: Model,
+        properties: &[String],
     ) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
         // WARN Necessary "normalization" process
         self.init(&mut jani_model)?;
@@ -91,6 +95,7 @@ impl JaniBuilder {
         let properties = jani_model
             .properties
             .iter()
+            .filter(|p| properties.is_empty() || properties.contains(&p.name))
             .map(|p| {
                 self.build_property(&p.expression)
                     .map(|p| p.right_or_else(Mtl::Atom))

@@ -377,17 +377,15 @@ impl<R: Rng> ChannelSystem<R> {
     }
 
     pub(crate) fn montecarlo_execution(&mut self, duration: Time) -> Option<Event> {
-        let pg_vec = Vec::from_iter((0..self.program_graphs.len() as u16).map(PgId));
+        let pgs = self.program_graphs.len();
+        let pg_vec = Vec::from_iter((0..pgs as u16).map(PgId));
         let mut rand = SmallRng::from_rng(&mut self.rng);
+        let mut pg_list;
         while self.time <= duration {
             // Resets PG queue
-            let mut pg_list = pg_vec.clone();
-            while !pg_list.is_empty() {
-                // Pick a random PG id from the list and remove it
-                let len = pg_list.len();
-                pg_list.swap(self.rng.random_range(0..len), len - 1);
-                let pg_id = pg_list.pop().unwrap();
-
+            pg_list = pg_vec.clone();
+            pg_list.swap(self.rng.random_range(0..pgs), pgs - 1);
+            while let Some(pg_id) = pg_list.pop() {
                 // Execute randomly chosen transitions on the picked PG until an event is generated,
                 // or no more transition is possible
                 while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
@@ -429,6 +427,11 @@ impl<R: Rng> ChannelSystem<R> {
                     if event.is_some() {
                         return event;
                     }
+                }
+                // Pick a random PG id from the list and move it to the end
+                let len = pg_list.len();
+                if len > 1 {
+                    pg_list.swap(self.rng.random_range(0..len), len - 1);
                 }
             }
             self.wait(1).ok()?;

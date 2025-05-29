@@ -17,7 +17,7 @@ mod smc;
 mod transition_system;
 
 pub use grammar::*;
-use log::{info, trace, warn};
+use log::{info, trace};
 pub use model::*;
 pub use mtl::*;
 pub use pg_model::PgModel;
@@ -56,7 +56,7 @@ impl RngCore for DummyRng {
 }
 
 /// The possible outcomes of a model execution.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum RunOutcome {
     /// The run was not completed.
     /// This can happen because:
@@ -65,10 +65,8 @@ pub enum RunOutcome {
     /// - Execution exceeded maximum duration; or
     /// - Execution violated an assume.
     Incomplete,
-    /// The run completed successfully.
-    Success,
-    /// The run failed by violating the guarantee corresponding to the given index.
-    Fail(usize),
+    /// The run failed by violating the guarantees corresponding to the given index.
+    Verified(Vec<bool>),
 }
 
 pub trait Oracle: Clone + Send + Sync {
@@ -102,6 +100,7 @@ impl<Event, T, O> Scan<Event, T, O>
 where
     T: TransitionSystem<Event>,
     O: Oracle,
+    Event: Sync,
 {
     pub fn new(ts: T, oracle: O) -> Self {
         Self {
@@ -134,17 +133,14 @@ where
     /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
     /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
     /// and a state [`Mutex`] to be updated with the results as they are produced.
-    pub fn adaptive<P>(
+    pub fn adaptive(
         &self,
         confidence: f64,
         precision: f64,
         // length: usize,
         duration: Time,
-        tracer: Option<P>,
         single_thread: bool,
-    ) where
-        P: Tracer<Event> + 'static,
-    {
+    ) -> Result<(), T::Err> {
         self.successes.store(0, Ordering::Relaxed);
         self.failures.store(0, Ordering::Relaxed);
         self.violations.lock().unwrap().clear();
@@ -161,40 +157,39 @@ where
             let local_successes;
             let local_failures;
 
-            match ts.as_ref().clone().experiment(
+            let result = ts.as_ref().clone().experiment(
                 duration,
                 oracle.as_ref().clone(),
-                tracer.clone(),
                 running.clone(),
-            ) {
-                Ok(result) => {
-                    if !running.load(Ordering::Relaxed) {
-                        return false;
-                    }
-                    match result {
-                        RunOutcome::Success => {
-                            local_successes = successes.fetch_add(1, Ordering::Relaxed);
-                            local_failures = failures.load(Ordering::Relaxed);
-                            // If all guarantees are satisfied, the execution is successful
-                            trace!("runs: {} successes", local_successes);
-                        }
-                        RunOutcome::Fail(guarantee) => {
-                            local_successes = successes.load(Ordering::Relaxed);
-                            local_failures = failures.fetch_add(1, Ordering::Relaxed);
-                            let violations = &mut *violations.lock().unwrap();
-                            violations.resize(violations.len().max(guarantee + 1), 0);
-                            violations[guarantee] += 1;
-                            // If guarantee is violated, we have found a counter-example!
-                            trace!("runs: {} failures", local_failures);
-                        }
-                        RunOutcome::Incomplete => return true,
+            )?;
+            if !running.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            match result {
+                RunOutcome::Verified(guarantees) => {
+                    if guarantees.iter().all(|b| *b) {
+                        local_successes = successes.fetch_add(1, Ordering::Relaxed);
+                        local_failures = failures.load(Ordering::Relaxed);
+                        // If all guarantees are satisfied, the execution is successful
+                        trace!("runs: {} successes", local_successes);
+                    } else {
+                        local_successes = successes.load(Ordering::Relaxed);
+                        local_failures = failures.fetch_add(1, Ordering::Relaxed);
+                        let violations = &mut *violations.lock().unwrap();
+                        violations.resize(violations.len().max(guarantees.len()), 0);
+                        guarantees.iter().zip(violations.iter_mut()).for_each(
+                            |(success, violations)| {
+                                if !success {
+                                    *violations += 1;
+                                }
+                            },
+                        );
+                        // If guarantee is violated, we have found a counter-example!
+                        trace!("runs: {} failures", local_failures);
                     }
                 }
-                Err(err) => {
-                    warn!("run returned error: {err}");
-                    return true;
-                }
-            };
+                RunOutcome::Incomplete => return Ok(()),
+            }
             let runs = local_successes + local_failures;
             // Avoid division by 0
             let avg = if runs == 0 {
@@ -205,10 +200,8 @@ where
             if adaptive_bound(avg, confidence, precision) <= runs as f64 {
                 info!("adaptive bound satisfied");
                 running.store(false, Ordering::Relaxed);
-                false
-            } else {
-                true
             }
+            Ok(())
         };
 
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
@@ -216,16 +209,59 @@ where
         let start_time = Instant::now();
 
         if single_thread {
-            (0..usize::MAX).take_while(|_| verification()).count();
+            (0..usize::MAX)
+                .map(|_| verification())
+                .take_while(|_| running.load(Ordering::Relaxed))
+                .try_for_each(|b| b.map(|_| ()))?;
+            // .take_while(|b| *b)
+            // .count();
         } else {
             (0..usize::MAX)
                 .into_par_iter()
-                .take_any_while(|_| verification())
-                .count();
+                .map(|_| verification())
+                .take_any_while(|_| running.load(Ordering::Relaxed))
+                .try_for_each(|b| b.map(|_| ()))?;
         }
 
         let elapsed = start_time.elapsed();
         info!("verification time elapsed: {elapsed:0.2?}");
         info!("verification terminating");
+        Ok(())
+    }
+
+    pub fn trace<P>(
+        &self,
+        runs: usize,
+        tracer: P,
+        duration: Time,
+        single_thread: bool,
+    ) -> Result<(), T::Err>
+    where
+        P: Tracer<Event> + 'static,
+    {
+        let ts = self.ts.clone();
+        let oracle = self.oracle.clone();
+        let tracer = tracer.clone();
+
+        let verification = || {
+            ts.as_ref()
+                .clone()
+                .trace(duration, oracle.as_ref().clone(), tracer.clone())
+        };
+
+        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
+        info!("verification starting");
+        let start_time = Instant::now();
+
+        if single_thread {
+            (0..runs).try_for_each(|_| verification())?;
+        } else {
+            (0..runs).into_par_iter().try_for_each(|_| verification())?;
+        }
+
+        let elapsed = start_time.elapsed();
+        info!("verification time elapsed: {elapsed:0.2?}");
+        info!("verification terminating");
+        Ok(())
     }
 }

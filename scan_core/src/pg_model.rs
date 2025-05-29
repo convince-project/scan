@@ -58,17 +58,14 @@ impl TransitionSystem<Action> for PgModel {
         0
     }
 
-    fn labels(&self) -> Vec<bool> {
-        self.predicates
-            .iter()
-            .map(|p| {
-                if let Val::Boolean(b) = self.pg.eval(p) {
-                    b
-                } else {
-                    panic!("non-bool pred")
-                }
-            })
-            .collect()
+    fn labels(&self) -> impl Iterator<Item = bool> {
+        self.predicates.iter().map(|p| {
+            if let Val::Boolean(b) = self.pg.eval(p) {
+                b
+            } else {
+                panic!("non-bool pred")
+            }
+        })
     }
 
     fn state(&self) -> impl Iterator<Item = &crate::Val> {
