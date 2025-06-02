@@ -66,7 +66,7 @@ fn elif() -> anyhow::Result<()> {
 }
 
 fn test(path: &Path) -> anyhow::Result<()> {
-    let (scan, ..) = scan_scxml::load(path)?;
-    scan.adaptive::<scan_scxml::TracePrinter>(0.95, 0.01, 100, None, true);
+    let (scan, ..) = scan_scxml::load(path, &[])?;
+    scan.adaptive(0.95, 0.01, 100, true).expect("verification");
     Ok(())
 }
