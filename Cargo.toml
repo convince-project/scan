@@ -2,6 +2,18 @@
 name = "scan"
 version = "0.1.0"
 edition = "2024"
+description = "SCAN (StatistiCal ANalyzer) is a statistical model checker designed to verify large concurrent systems for which standard verification techniques do not scale."
+documentation = "https://convince-project.github.io/scan/crates/scan/index.html"
+homepage = "https://convince-project.github.io/scan/"
+repository = "https://github.com/convince-project/scan"
+license = "Apache-2.0"
+
+[lib]
+name = "scan"     # The name of the target.
+crate-type = ["lib"]   # The crate types to generate.
+
+[[bin]]
+name = "scan"     # The name of the target.
 
 [profile.release]
 lto = "fat"
@@ -35,3 +47,4 @@ indicatif = { version = "0.17.11", features = ["improved_unicode"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap-verbosity-flag = "3.0.3"
+human-panic = "2.0.2"

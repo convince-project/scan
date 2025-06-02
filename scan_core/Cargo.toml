@@ -2,6 +2,10 @@
 name = "scan_core"
 version = "0.1.0"
 edition = "2024"
+documentation = "https://convince-project.github.io/scan/crates/scan_core/index.html"
+homepage = "https://convince-project.github.io/scan/"
+repository = "https://github.com/convince-project/scan"
+license = "Apache-2.0"
 
 [lib]
 name = "scan_core"     # The name of the target.
