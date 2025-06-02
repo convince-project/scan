@@ -15,6 +15,18 @@ pub(crate) struct Report {
     pub(crate) property_failures: HashMap<String, u32>,
 }
 
+impl Report {
+    pub(crate) fn print(&self, json: bool) {
+        if json {
+            let report = serde_json::ser::to_string_pretty(&self).expect("report serialization");
+            println!("{report}");
+        } else {
+            // Print final report
+            println!("{self}");
+        };
+    }
+}
+
 impl Display for Report {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Magnitude of precision, to round results to sensible number of digits

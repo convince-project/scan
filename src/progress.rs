@@ -3,13 +3,13 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use scan_core::{Oracle, Scan, adaptive_bound, okamoto_bound};
 
 /// Verification progress bar
-#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[deny(missing_docs)]
 pub(crate) enum Bar {
-    /// Fancy Unicode progress bars
-    #[default]
-    Unicode,
-    /// Basic ASCII progress bars
-    Ascii,
+    /// Colorful Unicode progress bars
+    Fancy,
+    /// Plain ASCII progress bars
+    Plain,
 }
 
 impl Bar {
@@ -32,7 +32,7 @@ impl Bar {
         let bars = MultiProgress::new();
 
         // Spinner
-        let spinner_style = if let Bar::Ascii = self {
+        let spinner_style = if let Bar::Plain = self {
             ProgressStyle::with_template("{elapsed_precise} {spinner} {msg}")
                 .unwrap()
                 .tick_chars(ASCII_SPINNER)
@@ -49,7 +49,7 @@ impl Bar {
 
         // Progress bar
         let bound = okamoto_bound(confidence, precision).ceil() as u64;
-        let progress_style = if let Bar::Ascii = self {
+        let progress_style = if let Bar::Plain = self {
             ProgressStyle::with_template("{bar:50} {percent:>3}% ({pos}/{len}) ETA: {eta}")
                 .unwrap()
                 .progress_chars(ASCII_BAR)
@@ -72,7 +72,7 @@ impl Bar {
         };
 
         // Property bars
-        let prop_style = if let Bar::Ascii = self {
+        let prop_style = if let Bar::Plain = self {
             ProgressStyle::with_template("{bar:50} {percent:>3}% {prefix} {msg}")
                 .unwrap()
                 .progress_chars(ASCII_BAR)

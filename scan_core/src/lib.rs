@@ -141,6 +141,10 @@ where
         duration: Time,
         single_thread: bool,
     ) -> Result<(), T::Err> {
+        // Cannot return as a T::Err, don't want to include anyhow in scan_core
+        assert!(0f64 < confidence && confidence < 1f64);
+        assert!(0f64 < precision && precision < 1f64);
+
         self.successes.store(0, Ordering::Relaxed);
         self.failures.store(0, Ordering::Relaxed);
         self.violations.lock().unwrap().clear();
@@ -243,7 +247,7 @@ where
         let oracle = self.oracle.clone();
         let tracer = tracer.clone();
 
-        let verification = || {
+        let trace = || {
             ts.as_ref()
                 .clone()
                 .trace(duration, oracle.as_ref().clone(), tracer.clone())
@@ -254,9 +258,9 @@ where
         let start_time = Instant::now();
 
         if single_thread {
-            (0..runs).try_for_each(|_| verification())?;
+            (0..runs).try_for_each(|_| trace())?;
         } else {
-            (0..runs).into_par_iter().try_for_each(|_| verification())?;
+            (0..runs).into_par_iter().try_for_each(|_| trace())?;
         }
 
         let elapsed = start_time.elapsed();
