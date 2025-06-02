@@ -1,6 +1,4 @@
-use anyhow::Context;
-use anyhow::anyhow;
-use anyhow::bail;
+use anyhow::{Context, anyhow, bail};
 use clap::{Parser, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use scan_core::{Oracle, Scan, adaptive_bound, okamoto_bound};
@@ -16,6 +14,7 @@ enum Format {
     Jani,
 }
 
+/// Type of verification report
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Output {
     /// Human-readable report
@@ -24,6 +23,7 @@ enum Output {
     Json,
 }
 
+/// Verification progress bar
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Bar {
     /// Fancy Unicode progress bars
@@ -49,8 +49,8 @@ struct Report {
 #[deny(missing_docs)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    /// Path of model's main XML file
-    #[arg(value_hint = clap::ValueHint::AnyPath, default_value = ".")]
+    /// Path of model's file or folder
+    #[arg(value_hint = clap::ValueHint::AnyPath)]
     path: PathBuf,
     /// Format used to specify the model
     #[arg(value_enum, short, long)]
@@ -67,6 +67,9 @@ pub struct Cli {
     /// Saves execution traces in gz-compressed csv format
     #[arg(long = "traces", default_value = "false")]
     traces: bool,
+    /// Run the verification on a single thread
+    #[arg(long = "single-thread", default_value = "false")]
+    single_thread: bool,
     /// Output format of verification report
     #[arg(short, long, default_value = "human")]
     out: Output,
@@ -120,16 +123,15 @@ impl Cli {
         self.run_scan(scan, guarantees, tracer)
     }
 
-    fn run_scan<E, Err, Ts, Tr, O>(
+    fn run_scan<E, Ts, Tr, O>(
         self,
-        scan: Scan<E, Err, Ts, O>,
+        scan: Scan<E, Ts, O>,
         guarantees: Vec<String>,
         tracer: Option<Tr>,
     ) -> anyhow::Result<()>
     where
-        Ts: scan_core::TransitionSystem<E, Err> + 'static,
+        Ts: scan_core::TransitionSystem<E> + 'static,
         Tr: scan_core::Tracer<E> + 'static,
-        Err: std::error::Error + Clone + Send + Sync + 'static,
         E: Clone + Send + Sync + 'static,
         O: Oracle + 'static,
     {
@@ -154,7 +156,13 @@ impl Cli {
                 );
             }));
         }
-        scan.adaptive(self.confidence, self.precision, self.duration, tracer);
+        scan.adaptive(
+            self.confidence,
+            self.precision,
+            self.duration,
+            tracer,
+            self.single_thread,
+        );
         if let Some(handle) = handle {
             handle.join().expect("terminate process");
         }
@@ -171,16 +179,15 @@ impl Cli {
         Ok(())
     }
 
-    fn json_report<E, Err, Ts, O>(
+    fn json_report<E, Ts, O>(
         &self,
-        scan: &Scan<E, Err, Ts, O>,
+        scan: &Scan<E, Ts, O>,
         guarantees: Vec<String>,
     ) -> anyhow::Result<String>
     where
-        Ts: scan_core::TransitionSystem<E, Err> + 'static,
-        Err: std::error::Error + Send + Sync,
+        Ts: scan_core::TransitionSystem<E>,
         E: Send + Sync,
-        O: Oracle + 'static,
+        O: Oracle,
     {
         let successes = scan.successes();
         let failures = scan.failures();
@@ -203,16 +210,15 @@ impl Cli {
         serde_json::ser::to_string_pretty(&report).context(anyhow!("failed report serialization"))
     }
 
-    fn print_report<E, Err, Ts, O>(
+    fn print_report<E, Ts, O>(
         &self,
-        scan: &Scan<E, Err, Ts, O>,
+        scan: &Scan<E, Ts, O>,
         guarantees: &[String],
         model_name: String,
     ) where
-        Ts: scan_core::TransitionSystem<E, Err> + 'static,
-        Err: std::error::Error + Send + Sync,
+        Ts: scan_core::TransitionSystem<E>,
         E: Send + Sync,
-        O: Oracle + 'static,
+        O: Oracle,
     {
         // Magnitude of precision, to round results to sensible number of digits
         let mag = (self.precision.log10().abs().ceil() as usize).max(2);
@@ -246,18 +252,17 @@ impl Cli {
     }
 }
 
-fn print_progress_bar<E, Err, Ts, O>(
+fn print_progress_bar<E, Ts, O>(
     bar: Bar,
     confidence: f64,
     precision: f64,
     guarantees: &[String],
-    scan: &Scan<E, Err, Ts, O>,
+    scan: &Scan<E, Ts, O>,
     model_name: String,
 ) where
-    Ts: scan_core::TransitionSystem<E, Err> + 'static,
-    Err: std::error::Error + Send + Sync,
+    Ts: scan_core::TransitionSystem<E>,
     E: Send + Sync,
-    O: Oracle + 'static,
+    O: Oracle,
 {
     const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
     const ASCII_BAR: &str = "#--";

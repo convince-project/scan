@@ -68,6 +68,19 @@ impl NumSet {
             }
     }
 
+    pub(super) fn contains_since(&self, val: DenseTime) -> bool {
+        // special case: (0, 0) cannot belong to any (left-open) interval
+        match self.0.binary_search_by_key(&val, |(bound, _)| *bound) {
+            Ok(idx) | Err(idx) => {
+                self.0[idx..].iter().all(|(_, b)| *b)
+                    && self
+                        .0
+                        .last()
+                        .is_some_and(|(v, _)| *v == (Time::MAX, Time::MAX))
+            }
+        }
+    }
+
     #[inline(always)]
     fn hinted_insert_bound(&mut self, bound: DenseTime, hint: usize) -> usize {
         match self.0[hint..].binary_search_by_key(&bound, |(bound, _)| *bound) {
@@ -325,6 +338,13 @@ mod tests {
         );
         let sset = set.simplify();
         assert_eq!(sset.bounds(), &[((1, 1), false), ((3, 3), true)]);
+    }
+
+    #[test]
+    fn simplify_3() {
+        let set = NumSet::full();
+        let sset = set.simplify();
+        assert_eq!(sset.bounds(), &[((Time::MAX, Time::MAX), true)]);
     }
 
     #[test]

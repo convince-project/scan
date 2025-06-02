@@ -1,11 +1,11 @@
 use super::{
-    Action, Clock, EPSILON, FnEffect, FnExpression, Location, PgError, PgExpression, ProgramGraph,
-    ProgramGraphDef, TimeConstraint, Var,
+    Action, ActionIdx, Clock, EPSILON, FnEffect, FnExpression, Location, LocationIdx, PgError,
+    PgExpression, ProgramGraph, ProgramGraphDef, TimeConstraint, Var,
 };
 use crate::grammar::{Type, Val};
 use log::info;
 use rand::{Rng, SeedableRng, rngs::SmallRng};
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 enum Effect {
@@ -33,7 +33,7 @@ impl<R: Rng + 'static> From<Effect> for FnEffect<R> {
     }
 }
 
-type TransitionBuilder = (Action, Location, Option<PgExpression>, Vec<TimeConstraint>);
+type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
 #[derive(Clone)]
@@ -42,8 +42,7 @@ pub struct ProgramGraphBuilder {
     // Effects are indexed by actions
     effects: Vec<Effect>,
     // Transitions are indexed by locations
-    // We can assume there is at most one condition by logical disjunction
-    locations: Vec<(Vec<TransitionBuilder>, Vec<TimeConstraint>)>,
+    locations: Vec<(Vec<(Action, Vec<TransitionBuilder>)>, Vec<TimeConstraint>)>,
     // Time invariants of each location
     vars: Vec<Val>,
     // Number of clocks
@@ -154,7 +153,7 @@ impl ProgramGraphBuilder {
     pub fn new_action(&mut self) -> Action {
         let idx = self.effects.len();
         self.effects.push(Effect::Effects(Vec::new(), Vec::new()));
-        Action(idx as u16)
+        Action(idx as ActionIdx)
     }
 
     /// Associates a clock reset to an action.
@@ -258,7 +257,7 @@ impl ProgramGraphBuilder {
         // Actions are indexed progressively
         let idx = self.effects.len();
         self.effects.push(Effect::Send(msg));
-        Ok(Action(idx as u16))
+        Ok(Action(idx as ActionIdx))
     }
 
     pub(crate) fn new_receive(&mut self, var: Var) -> Result<Action, PgError> {
@@ -268,7 +267,7 @@ impl ProgramGraphBuilder {
             // Actions are indexed progressively
             let idx = self.effects.len();
             self.effects.push(Effect::Receive(var));
-            Ok(Action(idx as u16))
+            Ok(Action(idx as ActionIdx))
         }
     }
 
@@ -291,7 +290,7 @@ impl ProgramGraphBuilder {
             // Locations are indexed progressively
             let idx = self.locations.len();
             self.locations.push((Vec::new(), invariants));
-            Ok(Location(idx as u16))
+            Ok(Location(idx as LocationIdx))
         }
     }
 
@@ -403,11 +402,11 @@ impl ProgramGraphBuilder {
         constraints: Vec<TimeConstraint>,
     ) -> Result<(), PgError> {
         // Check 'pre' and 'post' locations exists
-        if self.locations.len() as u16 <= pre.0 {
+        if self.locations.len() as LocationIdx <= pre.0 {
             Err(PgError::MissingLocation(pre))
-        } else if self.locations.len() as u16 <= post.0 {
+        } else if self.locations.len() as LocationIdx <= post.0 {
             Err(PgError::MissingLocation(post))
-        } else if action != EPSILON && self.effects.len() as u16 <= action.0 {
+        } else if action != EPSILON && self.effects.len() as ActionIdx <= action.0 {
             // Check 'action' exists
             Err(PgError::MissingAction(action))
         } else if guard
@@ -425,7 +424,11 @@ impl ProgramGraphBuilder {
                     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
-            transitions.push((action, post, guard, constraints));
+            let transition = (post, guard, constraints);
+            match transitions.binary_search_by_key(&action, |(a, _)| *a) {
+                Ok(idx) => transitions[idx].1.push(transition),
+                Err(idx) => transitions.insert(idx, (action, vec![transition])),
+            }
             Ok(())
         }
     }
@@ -516,19 +519,28 @@ impl ProgramGraphBuilder {
         let mut locations = self
             .locations
             .into_iter()
-            .map(|(transitions, mut invariants)| {
-                let mut transitions = transitions
+            .map(|(a_transitions, mut invariants)| {
+                let mut a_transitions = a_transitions
                     .into_iter()
-                    .map(|(a, p, guard, mut c)| {
-                        c.sort_unstable();
-                        (a, p, guard.map(FnExpression::from), c)
+                    .map(|(a, mut loc_transitions)| {
+                        loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
+                        (
+                            a,
+                            loc_transitions
+                                .into_iter()
+                                .map(|(p, guard, mut c)| {
+                                    c.sort_unstable();
+                                    (p, guard.map(FnExpression::from), c)
+                                })
+                                .collect::<Vec<_>>(),
+                        )
                     })
                     .collect::<Vec<_>>();
-                transitions.sort_unstable_by_key(|(a, p, ..)| (*a, *p));
-                transitions.shrink_to_fit();
+                assert!(a_transitions.is_sorted_by_key(|(a, ..)| *a));
+                a_transitions.shrink_to_fit();
                 invariants.sort_unstable();
-                let actions = BTreeSet::from_iter(transitions.iter().map(|(a, ..)| *a));
-                (transitions, invariants, actions)
+                invariants.shrink_to_fit();
+                (a_transitions, invariants)
             })
             .collect::<Vec<_>>();
         locations.shrink_to_fit();
@@ -545,18 +557,11 @@ impl ProgramGraphBuilder {
         };
         self.initial_states.sort_unstable();
         self.initial_states.shrink_to_fit();
-        // Initialize buf
-        let mut buf =
-            BTreeSet::from_iter((0..def.effects.len() as u16).map(Action).chain([EPSILON]));
-        for loc in &self.initial_states {
-            buf = &buf & &def.locations[loc.0 as usize].2
-        }
         ProgramGraph {
             current_states: self.initial_states.into(),
             vars: self.vars,
             def: Arc::new(def),
             clocks: vec![0; self.clocks as usize],
-            buf,
         }
     }
 }

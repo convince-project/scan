@@ -124,6 +124,8 @@ pub(crate) enum BoolOp {
     And,
     #[serde(rename = "∨")]
     Or,
+    #[serde(rename = "⇒")]
+    Implies,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

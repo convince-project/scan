@@ -82,26 +82,31 @@ use crate::{DummyRng, Time, grammar::*};
 pub use builder::*;
 use rand::{Rng, SeedableRng, rngs::SmallRng, seq::IteratorRandom};
 use smallvec::SmallVec;
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 use thiserror::Error;
+
+pub type LocationIdx = u32;
 
 /// An indexing object for locations in a PG.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Location(u16);
+pub struct Location(LocationIdx);
+
+pub type ActionIdx = u32;
 
 /// An indexing object for actions in a PG.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Action(u16);
+
+pub struct Action(ActionIdx);
 
 /// Epsilon action to enable autonomous transitions.
 /// It cannot have effects.
-const EPSILON: Action = Action(u16::MAX);
+const EPSILON: Action = Action(ActionIdx::MAX);
 
 /// An indexing object for typed variables in a PG.
 ///
@@ -190,11 +195,11 @@ enum FnEffect<R: Rng> {
 
 type Guard = FnExpression<Var, DummyRng>;
 
-type Transition = (Action, Location, Option<Guard>, Vec<TimeConstraint>);
+type Transition = (Location, Option<Guard>, Vec<TimeConstraint>);
 
 struct ProgramGraphDef<R: Rng> {
     effects: Vec<FnEffect<R>>,
-    locations: Vec<(Vec<Transition>, Vec<TimeConstraint>, BTreeSet<Action>)>,
+    locations: Vec<(Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>)>,
 }
 
 impl<R: Rng> ProgramGraphDef<R> {
@@ -208,12 +213,22 @@ impl<R: Rng> ProgramGraphDef<R> {
         action: Action,
         post_state: Location,
     ) -> impl Iterator<Item = (&Option<Guard>, &Vec<TimeConstraint>)> {
-        let (transitions, ..) = &self.locations[pre_state.0 as usize];
-        let part = transitions.partition_point(|(a, p, ..)| (*a, *p) < (action, post_state));
-        transitions[part..]
-            .iter()
-            .take_while(move |(a, p, ..)| (*a, *p) == (action, post_state))
-            .map(|(_, _, g, c)| (g, c))
+        let (a_transitions, ..) = &self.locations[pre_state.0 as usize];
+        a_transitions
+            .binary_search_by_key(&action, |(a, ..)| *a)
+            .into_iter()
+            .flat_map(move |transitions_idx| {
+                let post_idx_lb = a_transitions[transitions_idx]
+                    .1
+                    .partition_point(|(p, ..)| *p < post_state);
+                // let post_idx_ub = a_transitions[transitions_idx].1[post_idx_lb..]
+                //     .partition_point(|(p, ..)| *p == post_state)
+                //     + post_idx_lb;
+                a_transitions[transitions_idx].1[post_idx_lb..]
+                    .iter()
+                    .take_while(move |(p, ..)| *p == post_state)
+                    .map(|(_, g, c)| (g, c))
+            })
     }
 }
 
@@ -233,7 +248,6 @@ pub struct ProgramGraph<R: Rng> {
     vars: Vec<Val>,
     clocks: Vec<Time>,
     def: Arc<ProgramGraphDef<R>>,
-    buf: BTreeSet<Action>,
 }
 
 impl<R: Rng> ProgramGraph<R> {
@@ -260,17 +274,6 @@ impl<R: Rng> ProgramGraph<R> {
         &self.current_states
     }
 
-    #[inline(always)]
-    fn update_buf(&mut self) {
-        if self.current_states.len() > 1 {
-            self.buf = &self.def.locations[self.current_states[0].0 as usize].2
-                & &self.def.locations[self.current_states[1].0 as usize].2;
-            for loc in &self.current_states[2..] {
-                self.buf = &self.buf & &self.def.locations[loc.0 as usize].2;
-            }
-        }
-    }
-
     /// Iterates over all transitions that can be admitted in the current state.
     ///
     /// An admittable transition is characterized by the required action and the post-state
@@ -284,60 +287,96 @@ impl<R: Rng> ProgramGraph<R> {
             impl Iterator<Item = impl Iterator<Item = Location> + use<'_, R>> + use<'_, R>,
         ),
     > + use<'_, R> {
-        if self.current_states.len() == 1 {
-            &self.def.locations[self.current_states[0].0 as usize].2
-        } else {
-            &self.buf
-        }
-        .iter()
-        .map(|action| (*action, self.possible_transitions_action(*action)))
+        // static EMPTY: Vec<(Action, Vec<Transition>)> = Vec::new();
+        // self.current_states
+        //     .first()
+        //     .map(|loc| &self.def.locations[loc.0 as usize].0)
+        //     .unwrap_or_else(|| &EMPTY)
+        self.def.locations[self.current_states[0].0 as usize]
+            .0
+            .iter()
+            .enumerate()
+            .map(|(idx, (action, ..))| {
+                (
+                    *action,
+                    self.possible_transitions_action(*action, Some(idx)),
+                )
+            })
+        // .chain(
+        //     if self.current_states.is_empty() {
+        //         0..self.def.effects.len()
+        //     } else {
+        //         std::ops::Range::default()
+        //     }
+        //     .map(|idx| {
+        //         (
+        //             Action(idx as ActionIdx),
+        //             self.possible_transitions_action(Action(idx as ActionIdx), None),
+        //         )
+        //     }),
+        // )
     }
 
     #[inline(always)]
     fn possible_transitions_action(
         &self,
         action: Action,
+        mut hint: Option<usize>,
     ) -> impl Iterator<Item = impl Iterator<Item = Location> + use<'_, R>> + use<'_, R> {
         self.current_states
             .iter()
-            .map(move |loc| self.possible_transitions_action_loc(action, *loc))
+            .map(move |loc| self.possible_transitions_action_loc(action, *loc, hint.take()))
     }
 
     fn possible_transitions_action_loc(
         &self,
         action: Action,
         current_state: Location,
+        hint: Option<usize>,
     ) -> impl Iterator<Item = Location> + use<'_, R> {
-        let ppoint = self.def.locations[current_state.0 as usize]
-            .0
-            .partition_point(|(a, ..)| *a < action);
         let mut last_post_state: Option<Location> = None;
-        self.def.locations[current_state.0 as usize].0[ppoint..]
-            .iter()
-            .take_while(move |(a, ..)| *a == action)
-            .filter_map(move |(_, post_state, guard, constraints)| {
-                // post_states could be duplicated waistfully
-                if last_post_state.is_some_and(|s| s == *post_state) {
-                    return None;
-                }
-                let (_, ref invariants, _) = self.def.locations[post_state.0 as usize];
-                if if action == EPSILON {
-                    self.active_autonomous_transition(guard.as_ref(), constraints, invariants)
-                } else {
-                    match self.def.effects[action.0 as usize] {
-                        FnEffect::Effects(_, ref resets) => {
-                            self.active_transition(guard.as_ref(), constraints, invariants, resets)
-                        }
-                        FnEffect::Send(_) | FnEffect::Receive(_) => self
-                            .active_autonomous_transition(guard.as_ref(), constraints, invariants),
+        hint.or_else(|| {
+            self.def.locations[current_state.0 as usize]
+                .0
+                .binary_search_by_key(&action, |(a, ..)| *a)
+                .ok()
+        })
+        .into_iter()
+        .flat_map(move |action_idx| {
+            self.def.locations[current_state.0 as usize].0[action_idx]
+                .1
+                .iter()
+                .filter_map(move |(post_state, guard, constraints)| {
+                    // prevent post_states to be duplicated waistfully
+                    if last_post_state.is_some_and(|s| s == *post_state) {
+                        return None;
                     }
-                } {
-                    last_post_state = Some(*post_state);
-                    last_post_state
-                } else {
-                    None
-                }
-            })
+                    let (_, ref invariants) = self.def.locations[post_state.0 as usize];
+                    if if action == EPSILON {
+                        self.active_autonomous_transition(guard.as_ref(), constraints, invariants)
+                    } else {
+                        match self.def.effects[action.0 as usize] {
+                            FnEffect::Effects(_, ref resets) => self.active_transition(
+                                guard.as_ref(),
+                                constraints,
+                                invariants,
+                                resets,
+                            ),
+                            FnEffect::Send(_) | FnEffect::Receive(_) => self
+                                .active_autonomous_transition(
+                                    guard.as_ref(),
+                                    constraints,
+                                    invariants,
+                                ),
+                        }
+                    } {
+                        last_post_state = Some(*post_state);
+                        last_post_state
+                    } else {
+                        None
+                    }
+                })
+        })
     }
 
     fn active_transition(
@@ -445,7 +484,7 @@ impl<R: Rng> ProgramGraph<R> {
         }
         if let Some(ps) = post_states
             .iter()
-            .find(|ps| ps.0 >= self.def.locations.len() as u16)
+            .find(|ps| ps.0 >= self.def.locations.len() as LocationIdx)
         {
             return Err(PgError::MissingLocation(*ps));
         }
@@ -453,7 +492,7 @@ impl<R: Rng> ProgramGraph<R> {
             if !self.active_autonomous_transitions(post_states) {
                 return Err(PgError::UnsatisfiedGuard);
             }
-        } else if action.0 >= self.def.effects.len() as u16 {
+        } else if action.0 >= self.def.effects.len() as LocationIdx {
             return Err(PgError::MissingAction(action));
         } else if let FnEffect::Effects(ref effects, ref resets) =
             self.def.effects[action.0 as usize]
@@ -473,7 +512,6 @@ impl<R: Rng> ProgramGraph<R> {
             return Err(PgError::Communication(action));
         }
         self.current_states.copy_from_slice(post_states);
-        self.update_buf();
         Ok(())
     }
 
@@ -514,8 +552,6 @@ impl<R: Rng> ProgramGraph<R> {
             if let FnEffect::Send(effect) = &self.def.effects[action.0 as usize] {
                 let val = effect.eval(&|var| self.vars[var.0 as usize].clone(), rng);
                 self.current_states.copy_from_slice(post_states);
-                // self.current_states = post_states;
-                self.update_buf();
                 Ok(val)
             } else {
                 Err(PgError::NotSend(action))
@@ -540,7 +576,7 @@ impl<R: Rng> ProgramGraph<R> {
                     *var_content = val;
                     self.current_states.copy_from_slice(post_states);
                     // self.current_states = post_states;
-                    self.update_buf();
+                    // self.update_buf();
                     Ok(())
                 } else {
                     Err(PgError::TypeMismatch)

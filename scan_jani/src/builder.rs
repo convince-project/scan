@@ -1,7 +1,7 @@
 use super::Model;
 use crate::parser::{
-    self, Automaton, BoolOp, ConstantDeclaration, Edge, Expression, Guard, Location, NumCompOp,
-    PropertyExpression, Sync, VariableDeclaration,
+    self, Automaton, BoolOp, ConstantDeclaration, Destination, Edge, Expression, Guard, Location,
+    NumCompOp, PropertyExpression, Sync, VariableDeclaration,
 };
 use anyhow::{Context, anyhow, bail};
 use either::Either;
@@ -30,20 +30,24 @@ pub(crate) fn build(jani_model: Model) -> anyhow::Result<(PgModel, MtlOracle, Ja
 #[derive(Default)]
 struct JaniBuilder {
     system_actions: HashMap<String, program_graph::Action>,
-    global_vars: BTreeMap<String, (Var, Type)>,
+    // Associating name to variable, initial value and type.
+    global_vars: BTreeMap<String, (Var, Val, Type)>,
     global_constants: HashMap<String, Val>,
 }
 
 impl JaniBuilder {
     const RNG: &str = "__RNG__";
     const GEN: &str = "__GEN__";
+    const INITIAL: &str = "__INITIAL__";
 
     pub(crate) fn build(
         mut self,
         mut jani_model: Model,
     ) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
         // WARN Necessary "normalization" process
-        self.normalize(&mut jani_model);
+        self.init(&mut jani_model)?;
+        self.normalize(&mut jani_model)
+            .context("JANI normalization pre-process failes")?;
 
         let mut pgb = ProgramGraphBuilder::new();
 
@@ -65,7 +69,6 @@ impl JaniBuilder {
             .iter()
             .try_for_each(|var| self.add_global_var(&mut pgb, var))?;
 
-        let init = pgb.new_action();
         jani_model
             .system
             .elements
@@ -80,7 +83,7 @@ impl JaniBuilder {
                         "element '{}' is not a known automaton",
                         element.automaton
                     ))?;
-                self.build_automaton(&jani_model, &mut pgb, automaton, init, e_idx)
+                self.build_automaton(&jani_model, &mut pgb, automaton, e_idx)
                     .with_context(|| format!("failed to build automaton '{}'", element.automaton))
             })?;
 
@@ -126,7 +129,7 @@ impl JaniBuilder {
         let global_vars = self
             .global_vars
             .values()
-            .map(|(var, _)| var)
+            .map(|(var, ..)| var)
             .copied()
             .collect();
 
@@ -136,6 +139,49 @@ impl JaniBuilder {
         let data = self.data(jani_model);
 
         Ok((pg_model, oracle, data))
+    }
+
+    fn init(&mut self, jani_model: &mut Model) -> anyhow::Result<()> {
+        // New initial action sync over all elements
+        let sync_initial = Sync {
+            synchronise: vec![Some(String::from(Self::INITIAL)); jani_model.system.elements.len()],
+            result: Some(String::from(Self::INITIAL)),
+            _comment: String::new(),
+        };
+        jani_model.system.syncs.push(sync_initial);
+
+        for automaton in &mut jani_model.automata {
+            // New "real" initial location, needed to instantiate automaton's initial locations
+            let gen_initial = Location {
+                name: String::from(Self::INITIAL),
+                transient_values: Vec::new(),
+                _comment: String::new(),
+            };
+            automaton.locations.push(gen_initial);
+
+            let init_edge = Edge {
+                location: String::from(Self::INITIAL),
+                action: Some(String::from(Self::INITIAL)),
+                guard: None,
+                destinations: automaton
+                    .initial_locations
+                    .iter()
+                    .cloned()
+                    .map(|location| Destination {
+                        location,
+                        probability: None,
+                        assignments: Vec::new(),
+                        _comment: String::new(),
+                    })
+                    .collect(),
+                _comment: String::new(),
+            };
+            automaton.edges.push(init_edge);
+
+            // Replace initial location
+            automaton.initial_locations = vec![String::from(Self::INITIAL)];
+        }
+        Ok(())
     }
 
     // An action in JANI doesn not carry effects,
@@ -148,7 +194,7 @@ impl JaniBuilder {
     //   (if action a is duplicated to a', all syncs containing a are duplicated with a' and a new result
     //   so that result corresponds to a unique set of assignments, union of all the assignments of each of its actions).
     // - Probability is encoded in guard
-    fn normalize(&mut self, jani_model: &mut Model) {
+    fn normalize(&mut self, jani_model: &mut Model) -> anyhow::Result<()> {
         // index is global so there is no risk of name-clash
         let mut idx = 0;
         let rng = Expression::Identifier(String::from(Self::RNG));
@@ -230,14 +276,10 @@ impl JaniBuilder {
                             _comment: String::new(),
                         });
                     }
-                    let action;
-                    if dest.assignments.is_empty() {
-                        // If there are no assignments we don't need a new name.
-                        action = edge_action.clone();
-                    } else {
-                        action = edge_action.clone() + Self::GEN + &idx.to_string();
-                        idx += 1;
-                    }
+
+                    // actions need new unique names (tracking when new name is not necessary is difficult because of transient variables)
+                    let action = edge_action.clone() + Self::GEN + &idx.to_string();
+                    idx += 1;
 
                     new_edges.push(Edge {
                         location: edge.location.clone(),
@@ -251,62 +293,77 @@ impl JaniBuilder {
                     });
 
                     // Update syncs with new action (has to synchronise like original one)
-                    for e_idx in 0..jani_model.system.elements.len() {
-                        if jani_model.system.elements[e_idx].automaton == automaton.name {
-                            // Only add new syncs if new action was generated
-                            if action != edge_action {
-                                let to_add = jani_model
-                                    .system
-                                    .syncs
-                                    .iter()
-                                    .filter(|sync| {
-                                        sync.synchronise[e_idx]
-                                            .as_ref()
-                                            .is_some_and(|a| *a == edge_action)
-                                    })
-                                    .map(|sync| {
-                                        let mut synchronise = sync.synchronise.clone();
-                                        let _ = synchronise[e_idx].insert(action.clone());
-                                        // Generate new unique result action
-                                        let result = sync.result.clone().unwrap_or_default()
-                                            + Self::GEN
-                                            + &idx.to_string();
-                                        idx += 1;
-                                        Sync {
-                                            synchronise,
-                                            result: Some(result),
-                                            _comment: String::new(),
-                                        }
-                                    })
-                                    .collect::<Vec<_>>();
-                                jani_model.system.syncs.extend(to_add);
-                            }
-
-                            // If original action did not appear in syncs it means that it does not sync between automata.
-                            // We still want to keep track of it esplicitely.
-                            if jani_model.system.syncs.iter().all(|sync| {
+                    for e_idx in (0..jani_model.system.elements.len()).filter(|e_idx| {
+                        jani_model.system.elements[*e_idx].automaton == automaton.name
+                    }) {
+                        // add new syncs for newly generated action
+                        let to_add = jani_model
+                            .system
+                            .syncs
+                            .iter()
+                            .filter(|sync| {
                                 sync.synchronise[e_idx]
                                     .as_ref()
-                                    .is_none_or(|a| *a != edge_action)
-                            }) {
-                                let mut synchronise = vec![None; jani_model.system.elements.len()];
-                                synchronise[e_idx] = Some(action.clone());
-                                // ensure result is unique
-                                let result = action.clone() + Self::GEN + &idx.to_string();
+                                    .is_some_and(|a| *a == edge_action)
+                            })
+                            .map(|sync| {
+                                let mut synchronise = sync.synchronise.clone();
+                                let _ = synchronise[e_idx].insert(action.clone());
+                                // Generate new unique result action
+                                let result = sync.result.clone().unwrap_or_default()
+                                    + Self::GEN
+                                    + &idx.to_string();
                                 idx += 1;
-                                jani_model.system.syncs.push(Sync {
+                                Sync {
                                     synchronise,
                                     result: Some(result),
                                     _comment: String::new(),
-                                });
-                            }
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        jani_model.system.syncs.extend(to_add);
+
+                        // If original action did not appear in syncs it means that it does not sync between automata.
+                        // We still want to keep track of it esplicitely.
+                        if jani_model.system.syncs.iter().all(|sync| {
+                            sync.synchronise[e_idx]
+                                .as_ref()
+                                .is_none_or(|a| *a != edge_action)
+                        }) {
+                            let mut synchronise = vec![None; jani_model.system.elements.len()];
+                            synchronise[e_idx] = Some(action.clone());
+                            // ensure result is unique
+                            let result = action.clone() + Self::GEN + &idx.to_string();
+                            idx += 1;
+                            jani_model.system.syncs.push(Sync {
+                                synchronise,
+                                result: Some(result),
+                                _comment: String::new(),
+                            });
                         }
                     }
                 }
             }
+            // Keep only syncs that are actually used
+            jani_model.system.syncs.retain(|sync| {
+                jani_model
+                    .system
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.automaton == automaton.name)
+                    .all(|(e_idx, _)| {
+                        sync.synchronise[e_idx].as_ref().is_none_or(|a| {
+                            new_edges
+                                .iter()
+                                .any(|edge| edge.action.as_ref().unwrap() == a)
+                        })
+                    })
+            });
             // Replace edges with new ones
             automaton.edges = new_edges;
         }
+        Ok(())
     }
 
     fn add_global_var(
@@ -331,9 +388,10 @@ impl JaniBuilder {
                     parser::Type::Continuous(_) => todo!(),
                 })
             });
-        let t = init.r#type()?;
+        let val = init.eval_constant()?;
+        let t = val.r#type();
         let var_id = pgb.new_var(init)?;
-        self.global_vars.insert(var.name.clone(), (var_id, t));
+        self.global_vars.insert(var.name.clone(), (var_id, val, t));
         Ok(())
     }
 
@@ -356,7 +414,7 @@ impl JaniBuilder {
         &self,
         pgb: &mut ProgramGraphBuilder,
         var: &VariableDeclaration,
-        local_vars: &mut HashMap<String, (Var, Type)>,
+        local_vars: &mut HashMap<String, (Var, Val, Type)>,
     ) -> anyhow::Result<()> {
         // TODO WARN FIXME: in JANI initial values are random?
         let init = var
@@ -376,9 +434,10 @@ impl JaniBuilder {
                     parser::Type::Continuous(_) => todo!(),
                 })
             });
-        let t = init.r#type()?;
+        let val = init.eval_constant()?;
+        let t = val.r#type();
         let var_id = pgb.new_var(init)?;
-        local_vars.insert(var.name.clone(), (var_id, t));
+        local_vars.insert(var.name.clone(), (var_id, val, t));
         Ok(())
     }
 
@@ -392,7 +451,7 @@ impl JaniBuilder {
             ports: self
                 .global_vars
                 .into_iter()
-                .map(|(name, (_, t))| (name, t))
+                .map(|(name, (_, _, t))| (name, t))
                 .collect(),
             guarantees: jani_model
                 .properties
@@ -407,31 +466,44 @@ impl JaniBuilder {
         jani_model: &Model,
         pgb: &mut ProgramGraphBuilder,
         automaton: &Automaton,
-        init: Action,
         e_idx: usize,
     ) -> anyhow::Result<()> {
-        // Add local variables
-        let mut local_vars: HashMap<String, (Var, Type)> = HashMap::new();
-        let mut locations: HashMap<String, scan_core::program_graph::Location> = HashMap::new();
-        let mut rng_actions = HashSet::new();
-        let pg_initial = pgb.new_initial_location();
+        // Initialize RNG
         let rng = pgb.new_var(PgExpression::from(0.)).expect("new var");
-        pgb.add_effect(init, rng, PgExpression::RandFloat(0., 1.))
-            .expect("add effect");
+        automaton
+            .edges
+            .iter()
+            .filter(|edge| edge.location.as_str() == Self::INITIAL)
+            .for_each(|edge| {
+                // For all edges starting from the unique initial locations,
+                // get the corresponding action and add RNG assignment as an effect.
+                let system_action = jani_model
+                    .system
+                    .syncs
+                    .iter()
+                    .find(|sync| {
+                        sync.synchronise[e_idx]
+                            .as_ref()
+                            .is_some_and(|a| a == edge.action.as_ref().expect("init action"))
+                    })
+                    .expect("sync")
+                    .result
+                    .as_ref()
+                    .expect("no silent result");
+                let init_action = *self.system_actions.get(system_action).expect("exist");
+                pgb.add_effect(init_action, rng, PgExpression::RandFloat(0., 1.))
+                    .expect("add effect");
+            });
+
         // Add locations
+        let mut locations: HashMap<String, scan_core::program_graph::Location> = HashMap::new();
         for location in &automaton.locations {
             self.build_location(jani_model, pgb, location, e_idx, &mut locations)
                 .with_context(|| format!("failed building location: {}", &location.name))?;
         }
-        // Connect initial location of PG with initial location(s) of the JANI model
-        for initial in &automaton.initial_locations {
-            let jani_initial = locations
-                .get(initial)
-                .ok_or_else(|| anyhow!("missing initial location {}", initial))?;
-            pgb.add_transition(pg_initial, init, *jani_initial, None)
-                .expect("add transition");
-        }
 
+        // Add local variables
+        let mut local_vars: HashMap<String, (Var, Val, Type)> = HashMap::new();
         automaton
             .variables
             .iter()
@@ -439,9 +511,11 @@ impl JaniBuilder {
             .context("failed adding local variables")?;
 
         // Add edges
+        let mut rng_actions = HashSet::new();
         for (n_edge, edge) in automaton.edges.iter().enumerate() {
             self.build_edge(
                 jani_model,
+                automaton,
                 pgb,
                 edge,
                 e_idx,
@@ -450,7 +524,13 @@ impl JaniBuilder {
                 &mut rng_actions,
                 rng,
             )
-            .with_context(|| format!("failed building {n_edge}-th edge for action"))?;
+            .with_context(|| {
+                format!(
+                    "failed building {}-th edge for action {}",
+                    n_edge + 1,
+                    edge.action.clone().unwrap_or(String::from("silent"))
+                )
+            })?;
         }
         Ok(())
     }
@@ -464,6 +544,10 @@ impl JaniBuilder {
         locations: &mut HashMap<String, scan_core::program_graph::Location>,
     ) -> anyhow::Result<()> {
         let loc = pgb.new_location();
+        // Initial location has to be the start of the new process
+        if location.name.as_str() == Self::INITIAL {
+            pgb.new_process(loc).expect("new process");
+        }
         assert!(locations.insert(location.name.clone(), loc).is_none());
         // For every action that is **NOT** synchronised on this automaton,
         // allow action with no change in state.
@@ -483,10 +567,11 @@ impl JaniBuilder {
     fn build_edge(
         &mut self,
         jani_model: &Model,
+        automaton: &Automaton,
         pgb: &mut ProgramGraphBuilder,
         edge: &Edge,
         e_idx: usize,
-        local_vars: &HashMap<String, (Var, Type)>,
+        local_vars: &HashMap<String, (Var, Val, Type)>,
         locations: &HashMap<String, scan_core::program_graph::Location>,
         rng_actions: &mut HashSet<Action>,
         rng: Var,
@@ -530,16 +615,61 @@ impl JaniBuilder {
                             .expect("effect");
                         rng_actions.insert(*action);
                     }
-                    for assignment in &dest.assignments {
-                        let (var, _) = local_vars
+                    // Set transient variables' values as their initial values before transition from pre location
+                    for transient_value in automaton
+                        .locations
+                        .iter()
+                        .find(|loc| loc.name == edge.location)
+                        .map(|loc| &loc.transient_values)
+                        .ok_or(anyhow!(
+                            "post-transition location {} not found",
+                            edge.location
+                        ))?
+                    {
+                        let r#ref = &transient_value.r#ref;
+                        let (var, val, _) = local_vars
+                            .get(r#ref)
+                            .or_else(|| self.global_vars.get(r#ref))
+                            .ok_or(anyhow!("variable {} not found", r#ref))?;
+                        let expr = scan_core::Expression::Const(val.clone());
+                        pgb.add_effect(*action, *var, expr).context(
+                            "failed setting transient variable {r#ref} to initial value",
+                        )?;
+                    }
+                    // Apply assignments
+                    for (n, assignment) in dest.assignments.iter().enumerate() {
+                        let (var, ..) = local_vars
                             .get(&assignment.r#ref)
                             .or_else(|| self.global_vars.get(&assignment.r#ref))
                             .ok_or_else(|| anyhow!("unknown id `{}`", &assignment.r#ref))?;
                         let expr = self
                             .build_expression(&assignment.value, local_vars, Some(rng))
                             .context("failed building expression")?;
-                        pgb.add_effect(*action, *var, expr)
-                            .context("failed adding effect to action")?;
+                        pgb.add_effect(*action, *var, expr).with_context(|| {
+                            format!("failed adding {}-th assignment to action", n + 1)
+                        })?;
+                    }
+                    // Set transient variables' values for destination location
+                    for transient_value in automaton
+                        .locations
+                        .iter()
+                        .find(|loc| loc.name == dest.location)
+                        .map(|loc| &loc.transient_values)
+                        .ok_or(anyhow!(
+                            "post-transition location {} not found",
+                            dest.location
+                        ))?
+                    {
+                        let r#ref = &transient_value.r#ref;
+                        let (var, ..) = local_vars
+                            .get(r#ref)
+                            .or_else(|| self.global_vars.get(r#ref))
+                            .ok_or(anyhow!("variable {} not found", r#ref))?;
+                        let expr =
+                            self.build_expression(&transient_value.value, local_vars, Some(rng))?;
+                        pgb.add_effect(*action, *var, expr).context(
+                            "failed setting transient variable {r#ref} to transient value",
+                        )?;
                     }
                     pgb.add_transition(*pre, *action, *post, guard.clone())
                         .context("failed adding transition")
@@ -553,7 +683,7 @@ impl JaniBuilder {
     fn build_expression(
         &self,
         expr: &Expression,
-        local_vars: &HashMap<String, (Var, Type)>,
+        local_vars: &HashMap<String, (Var, Val, Type)>,
         rng: Option<Var>,
     ) -> anyhow::Result<PgExpression> {
         match expr {
@@ -572,7 +702,7 @@ impl JaniBuilder {
             Expression::Identifier(id) => local_vars
                 .get(id)
                 .or_else(|| self.global_vars.get(id))
-                .map(|(var, t)| PgExpression::Var(*var, t.clone()))
+                .map(|(var, _, t)| PgExpression::Var(*var, t.clone()))
                 .or_else(|| {
                     self.global_constants
                         .get(id)
@@ -599,6 +729,7 @@ impl JaniBuilder {
                 match op {
                     BoolOp::And => PgExpression::and(vec![left, right]),
                     BoolOp::Or => PgExpression::or(vec![left, right]),
+                    BoolOp::Implies => Ok(PgExpression::Implies(Box::new((left, right)))),
                 }
                 .map_err(|err| err.into())
             }
@@ -656,7 +787,7 @@ impl JaniBuilder {
                             PgExpression::Opposite(Box::new(right)),
                         ])),
                         parser::IntOp::Mult => Ok(PgExpression::Mult(vec![left, right])),
-                        parser::IntOp::IntDiv => todo!(),
+                        parser::IntOp::IntDiv => Ok(PgExpression::Div(Box::new((left, right)))),
                     }
                 } else {
                     bail!(TypeError::TypeMismatch)
@@ -710,7 +841,7 @@ impl JaniBuilder {
             PropertyExpression::Identifier(id) => self
                 .global_vars
                 .get(id)
-                .map(|(var, t)| PgExpression::Var(*var, t.clone()))
+                .map(|(var, _, t)| PgExpression::Var(*var, t.clone()))
                 .or_else(|| {
                     self.global_constants
                         .get(id)
@@ -739,6 +870,7 @@ impl JaniBuilder {
                 match op {
                     BoolOp::And => PgExpression::and(vec![left, right]).map_err(|err| err.into()),
                     BoolOp::Or => PgExpression::or(vec![left, right]).map_err(|err| err.into()),
+                    BoolOp::Implies => Ok(PgExpression::Implies(Box::new((left, right)))),
                 }
                 .map(Either::Left)
             }
