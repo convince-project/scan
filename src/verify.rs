@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use clap::Parser;
 use scan_core::{Oracle, Scan, Time, TransitionSystem};
 
-use crate::report::Report;
+use super::report::Report;
 
 const NO_PROPS_ERR: &str = "missing properties to verify.
 Pass a (space-separated) list of one or more properties specified in the model to be verified.

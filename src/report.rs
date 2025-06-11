@@ -33,18 +33,13 @@ impl Display for Report {
         let mag = (self.precision.log10().abs().ceil() as usize).max(2);
         writeln!(
             f,
-            "SCAN results for {} (confidence {}, precision {})",
-            self.model, self.confidence, self.precision
-        )?;
-        writeln!(
-            f,
-            "Completed {} runs with {} successes, {} failures)",
+            "Completed {} runs with {} successes and {} failures",
             self.runs, self.successes, self.failures
         )?;
         for (property, &violations) in self.property_failures.iter() {
             write!(
                 f,
-                "{property} success rate: {0:.1$}",
+                "Property {property} success rate: {0:.1$}",
                 ((self.runs - violations) as f64) / (self.runs as f64),
                 mag,
             )?;

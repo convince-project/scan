@@ -97,14 +97,16 @@ enum Commands {
     Trace(TraceArgs),
 }
 
-/// A statistical model checker for large concurrent systems.
-///
+const LONG_ABOUT: &str = "SCAN (StatistiCal ANalyzer) is a statistical model checker \
+designed to verify large concurrent systems \
+for which standard verification techniques do not scale.";
+
 /// SCAN (StatistiCal ANalyzer) is a statistical model checker
 /// designed to verify large concurrent systems
 /// for which standard verification techniques do not scale.
 #[derive(Parser)]
 #[deny(missing_docs)]
-#[command(version, about, long_about)]
+#[command(version, about, long_about=LONG_ABOUT)]
 pub struct Cli {
     /// Path of model's file or folder,
     /// depending on the used specification format.
@@ -130,10 +132,9 @@ pub struct Cli {
 
 impl Cli {
     pub fn run(self) -> anyhow::Result<()> {
-        let model = self
-            .model
+        let model = std::path::absolute(&self.model)?
             .file_name()
-            .map(|os_str| os_str.to_str().expect("path is valid Unicode"))
+            .and_then(std::ffi::OsStr::to_str)
             .unwrap_or("model")
             .to_owned();
 
@@ -170,7 +171,7 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                eprint!("Processing model...");
+                eprint!("Processing {model}...");
                 let (scan, scxml_model) = load(&self.model, &args.properties)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
@@ -180,14 +181,14 @@ impl Cli {
                 run_verification(model, args, progress, scan)?.print(json);
             }
             Commands::Validate => {
-                eprint!("Processing model, please wait...");
+                eprint!("Processing {model}...");
                 let (_scan, _scxml_model) = load(&self.model, &[])?;
                 // At this point the model has been validated
                 eprintln!(" done");
-                println!("model '{model}' successfully validated");
+                println!("Model {model} successfully validated");
             }
             Commands::Trace(args) => {
-                eprint!("Processing model, please wait...");
+                eprint!("Processing {model}...");
                 let (scan, scxml_model) = load(&self.model, &[])?;
                 eprintln!(" done");
                 let scxml_model = Arc::new(scxml_model);
@@ -210,7 +211,7 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                eprint!("Processing model, please wait...");
+                eprint!("Processing {model}...");
                 let (scan, jani_model) = load(&self.model, &args.properties)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &jani_model.guarantees)?;
@@ -220,13 +221,13 @@ impl Cli {
                 run_verification(model, args, progress, scan)?.print(json);
             }
             Commands::Validate => {
-                eprint!("Processing model, please wait...");
+                eprint!("Processing {model}...");
                 let (_scan, _jani_model) = load(&self.model, &[])?;
                 eprintln!(" done");
-                println!("model '{model}' successfully validated");
+                println!("Model {model} successfully validated");
             }
             Commands::Trace(args) => {
-                eprint!("Processing model, please wait...");
+                eprint!("Processing {model}...");
                 let (scan, jani_model) = load(&self.model, &[])?;
                 eprintln!(" done");
                 let jani_model = Arc::new(jani_model);
@@ -262,21 +263,27 @@ where
     O: Oracle + 'static,
 {
     if let Some(bar) = progress {
-        let model_clone = model.to_owned();
+        eprintln!(
+            "Verifying {model} (-p {} -c {} -d {}) {:?}",
+            args.precision, args.confidence, args.duration, args.properties
+        );
         let scan_clone = scan.clone();
         let confidence = args.confidence;
         let precision = args.precision;
         let guarantees = args.properties.clone();
         let handle = std::thread::spawn(move || {
-            bar.print_progress_bar(confidence, precision, guarantees, scan_clone, model_clone);
+            bar.print_progress_bar(confidence, precision, guarantees, scan_clone);
         });
         let report = args.verify(model.to_owned(), scan)?;
         handle.join().expect("terminate process");
         Ok(report)
     } else {
-        eprint!("Verification in progress...");
+        eprint!(
+            "Verifying {model} (-p {} -c {} -d {}) {:?}...",
+            args.precision, args.confidence, args.duration, args.properties
+        );
         let report = args.verify(model, scan)?;
-        eprintln!(" done!");
+        eprintln!(" done");
         Ok(report)
     }
 }
