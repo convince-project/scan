@@ -13,11 +13,19 @@ Do not forget to set your `PATH` correctly, if required.
 To install and use SCAN on your system,
 the easiest way is to use the `cargo install` command, with:
 
-```
-cargo install --git https://github.com/convince-project/scan
+```bash
+$ cargo install --git https://github.com/convince-project/scan
 ```
 
 Cargo will build and install SCAN on your system,
 after which it can be used as a command-line tool.
+The same command updates SCAN to the latest version.
 
-Successively, the same command updates SCAN to the latest version.
+After installation, type
+
+```bash
+$ scan
+```
+
+to verify that the installation completed successfully
+by displaying the in-line help.

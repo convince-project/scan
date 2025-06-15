@@ -4,16 +4,16 @@ SCAN provides a command line interface.
 
 To print the help screen, use
 
-```
-scan --help
+```bash
+$ scan --help
 ```
 
 which will show the available functionalities and commands' syntax.
 
 The general syntax to run SCAN is
 
-```
-scan [OPTIONS] <MODEL> <COMMAND>
+```bash
+$ scan [OPTIONS] <MODEL> <COMMAND>
 ```
 
 where `MODEL` can be:
@@ -40,12 +40,13 @@ SCAN accepts the following global flags:
 - `--format` sets which model specification format is being used.
 Possible values: `[scxml|jani]`.
 - `--verbose` increases the log verbosity (can be invoked multiple times as `-vv` or `-vvv` etc.).
+  Normally, this is unnecessary save for debugging purposes.
 - `--quiet` disables logging completely.
 
 An alternative way to set the logging level is to use:
 
-```
-RUST_LOG=<LOG_LEVEL> scan [OPTIONS] [MODEL]
+```bash
+$ RUST_LOG=<LOG_LEVEL> scan [OPTIONS] [MODEL]
 ```
 
 where `LOG_LEVEL=[error|warn|info|debug|trace]`
@@ -58,8 +59,8 @@ it just parses the model specification and builds the internal model representat
 to check that there are no issues with the specification.
 Just run it with:
 
-```
-scan <MODEL> validate
+```bash
+$ scan <MODEL> validate
 ```
 
 ## Verify
@@ -68,13 +69,20 @@ The command runs a verification task on the input model and uses statistical met
 
 The syntax for `verify` is:
 
-```
-scan [GLOBAL_OPTIONS] <MODEL> verify [OPTIONS] [PROPERTIES]...
+```bash
+$ scan [GLOBAL_OPTIONS] <MODEL> verify [OPTIONS] [PROPERTIES]...
 ```
 
 where `PROPERTIES` is a list of space-separated properties to verify (as named in the model specification).
 A most useful flag is `--all` in alternative to the list of properties,
 which triggers verification of all properties specified in the model.
+
+__Example:__ The simplest way to verify all specified properties of an SCXML model contained in a directory
+is to enter the directory containing the model and call the following command.
+
+```bash
+user@host:path/to/model$ scan . verify --all
+```
 
 The following flags control the statistical parameters of the verification:
 
@@ -117,8 +125,8 @@ This command executes the model and saves the execution traces to disk as gz-com
 
 The syntax for `trace` is
 
-```
-scan [GLOBAL_OPTIONS] <MODEL> trace [OPTIONS] <TRACES>
+```bash
+$ scan [GLOBAL_OPTIONS] <MODEL> trace [OPTIONS] <TRACES>
 ```
 
 where `TRACES` is the number of traces that are requested.
