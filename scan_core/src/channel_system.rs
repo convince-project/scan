@@ -341,7 +341,7 @@ impl<R: Rng> ChannelSystem<R> {
         self.time
     }
 
-    pub fn channels(&self) -> &Vec<(Type, Option<usize>)> {
+    pub(crate) fn channels(&self) -> &Vec<(Type, Option<usize>)> {
         self.def.channels()
     }
 

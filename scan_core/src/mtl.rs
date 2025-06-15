@@ -1,11 +1,17 @@
 use crate::{Oracle, Time};
 
+/// An Metric Temporal Logic (MTL) formula.
 #[derive(Clone)]
 pub enum Mtl<V: Clone> {
+    /// An atomic proposition in an [`Mtl`] formula.
     Atom(V),
+    /// An [`Mtl`] formula of the form `p U q`.
     Until(V, V),
 }
 
+/// An oracle for (simple) [`Mtl`] properties.
+///
+/// Currently limited to properties of the form `p U q`.
 #[derive(Default, Clone)]
 pub struct MtlOracle {
     assumes: Vec<(Mtl<usize>, Option<bool>)>,
@@ -13,10 +19,12 @@ pub struct MtlOracle {
 }
 
 impl MtlOracle {
+    /// Add a new guarantee property to the [`Oracle`].
     pub fn add_guarantee(&mut self, mtl: Mtl<usize>) {
         self.guarantees.push((mtl, None));
     }
 
+    /// Add a new assume property to the [`Oracle`].
     pub fn add_assume(&mut self, mtl: Mtl<usize>) {
         self.guarantees.push((mtl, None));
     }

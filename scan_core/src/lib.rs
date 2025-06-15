@@ -3,7 +3,7 @@
 //!
 //! [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
 
-// #![warn(missing_docs)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod channel_system;
@@ -69,18 +69,32 @@ pub enum RunOutcome {
     Verified(Vec<bool>),
 }
 
+/// Implementators are induced by a temporal property.
+/// They can update their internal state when fed a new state of a trace,
+/// and establish whether their corresponding property holds on such trace.
 pub trait Oracle: Clone + Send + Sync {
+    /// Update the internal state of the [`Oracle`] with the latest state of a temporal trace.
     fn update(&mut self, state: &[bool], time: Time);
 
+    /// Returns the values of the "assume" properties,
+    /// if already determined.
     fn output_assumes(&self) -> impl Iterator<Item = Option<bool>>;
 
+    /// Returns the values of the "guarantee" properties,
+    /// if already determined.
     fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>>;
 
+    /// As the trace ends, the values of the "assume" properties is determined to be either true or false.
     fn final_output_assumes(&self) -> impl Iterator<Item = bool>;
 
+    /// As the trace ends, the values of the "guarantee" properties is determined to be either true or false.
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool>;
 }
 
+/// The main type to interface with the verification capabilities of SCAN.
+/// [`Scan`] holds the model, properties and other data necessary to run the verification process.
+/// The type of models and properties is abstracted through the [`TransitionSystem`] and [`Oracle`] traits,
+/// to provide a unified interface.
 #[derive(Clone)]
 pub struct Scan<Event, Ts, O>
 where
@@ -102,6 +116,7 @@ where
     O: Oracle,
     Event: Sync,
 {
+    /// Creadte a new [`Scan`] object with the given [`TransitionSystem`] and [`Oracle`].
     pub fn new(ts: T, oracle: O) -> Self {
         Self {
             ts: Arc::new(ts),
@@ -114,18 +129,22 @@ where
         }
     }
 
+    /// Tells whether a verification task is currently running.
     pub fn running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
 
+    /// Returns the number of successful executions in the current verification run.
     pub fn successes(&self) -> u32 {
         self.successes.load(Ordering::Relaxed)
     }
 
+    /// Returns the number of failed executions in the current verification run.
     pub fn failures(&self) -> u32 {
         self.failures.load(Ordering::Relaxed)
     }
 
+    /// Returns a vector where each entry contains the number of violations of the associated property in the current verification run.
     pub fn violations(&self) -> Vec<u32> {
         self.violations.lock().expect("lock").clone()
     }
@@ -233,6 +252,7 @@ where
         Ok(())
     }
 
+    /// Produces and saves the traces for the given number of runs.
     pub fn trace<P>(
         &self,
         runs: usize,

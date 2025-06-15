@@ -3,7 +3,7 @@ use crate::{DummyRng, Expression, FnExpression, Time, TransitionSystem, Val};
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
-/// An atomic variable for [`Pmtl`] formulae.
+/// An atomic variable for [`crate::Pmtl`] formulae.
 #[derive(Debug, Clone)]
 pub enum Atom {
     /// A predicate.

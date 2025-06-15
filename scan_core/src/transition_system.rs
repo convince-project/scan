@@ -34,17 +34,27 @@ impl<A> Tracer<A> for () {
     fn finalize(self, _outcome: &RunOutcome) {}
 }
 
+/// Trait for types that can execute like a transition system.
+///
+/// Together with an [`Oracle`], it provides a verifiable system.
 pub trait TransitionSystem<Event>: Clone + Send + Sync {
+    /// The Error type for the [`TransitionSystem`].
     type Err: Error + Send + Sync;
 
+    /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
+    /// unless the execution is terminated and no further events can happen.
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, Self::Err>;
 
+    /// Current time of the [`TransitionSystem`] (for timed systems).
     fn time(&self) -> Time;
 
+    /// The current values of the [`TransitionSystem`]'s labels.
     fn labels(&self) -> impl Iterator<Item = bool>;
 
+    /// The current internal state of the [`TransitionSystem`].
     fn state(&self) -> impl Iterator<Item = &Val>;
 
+    /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
     fn experiment<O: Oracle>(
         mut self,
         duration: Time,
@@ -80,6 +90,8 @@ pub trait TransitionSystem<Event>: Clone + Send + Sync {
         Ok(RunOutcome::Verified(verified))
     }
 
+    /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
+    /// and process the execution trace via the given [`Tracer`].
     fn trace<P, O: Oracle>(
         mut self,
         duration: Time,

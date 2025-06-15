@@ -185,6 +185,9 @@ where
     // -----
     // Flow
     // -----
+    /// If-Then-Else construct, where If must be a boolean expression,
+    /// Then and Else must have the same type,
+    /// and this is also the type of the whole expression.
     Ite(Box<(Expression<V>, Expression<V>, Expression<V>)>),
 }
 

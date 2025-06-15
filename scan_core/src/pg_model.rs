@@ -7,6 +7,7 @@ use crate::{
     program_graph::{Action, PgError, PgExpression, ProgramGraph, Var},
 };
 
+/// A [`ProgramGraph`]-based model implementing [`TransitionSystem`] with synchronous concurrency.
 pub struct PgModel {
     pg: ProgramGraph<SmallRng>,
     rng: SmallRng,
@@ -15,6 +16,7 @@ pub struct PgModel {
 }
 
 impl PgModel {
+    /// Create a new [`PgModel`] from the given [`ProgramGraph`] and predicates over its internal state.
     pub fn new(
         pg: ProgramGraph<SmallRng>,
         rng: SmallRng,
