@@ -9,21 +9,27 @@ use super::report::Report;
 const NO_PROPS_ERR: &str = "missing properties to verify.
 Pass a (space-separated) list of one or more properties specified in the model to be verified.
 Alternatively, use the flag --all to verify all properties at once.\n
-EXAMPLE: scan PATH/TO/MODEL verify PROPERTY ANOTHER_PROPERTY
-EXAMPLE: scan PATH/TO/MODEL verify --all";
+Examples:
+'scan PATH/TO/MODEL verify PROPERTY' verifies the property PROPERTY over the model
+'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' verifies the properties PROPERTY_1 and PROPERTY_2 together over the model
+'scan PATH/TO/MODEL verify --all' verifies all specified properties together over the model";
 
 const ALL_PROPS_ERR: &str =
     "the --all flag is incompatible with individually-specified properties.\n
-EXAMPLE: scan PATH/TO/MODEL verify PROPERTY ANOTHER_PROPERTY
-EXAMPLE: scan PATH/TO/MODEL verify --all";
+Examples:
+'scan PATH/TO/MODEL verify PROPERTY' verifies the property PROPERTY over the model
+'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' verifies the properties PROPERTY_1 and PROPERTY_2 together over the model
+'scan PATH/TO/MODEL verify --all' verifies all specified properties together over the model";
 
 const BAD_CONFIDENCE: &str =
     "confidence has to be a value strictly greater than 0 and strictly less than 1.\n
-EXAMPLE: scan PATH/TO/MODEL verify --confidence 0.98 PROPERTY";
+Example:
+'scan PATH/TO/MODEL verify --confidence 0.98 PROPERTY' verifies the property PROPERTY with confidence 0.98 (i.e., 98%)";
 
 const BAD_PRECISION: &str =
     "precision has to be a value strictly greater than 0 and strictly less than 1.\n
-EXAMPLE: scan PATH/TO/MODEL verify --precision 0.005 PROPERTY";
+Example:
+'scan PATH/TO/MODEL verify --precision 0.005 PROPERTY' verifies the property PROPERTY with precision 0.005 (i.e., 0.5%)";
 
 /// Verify the model
 #[derive(Debug, Clone, Parser)]

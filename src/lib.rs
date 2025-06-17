@@ -68,11 +68,12 @@ enum Format {
 enum Commands {
     /// Validate the syntactical and semantical correctness of the model, without running it.
     Validate,
-    /// Verify properties of the given model
+    /// Verify properties of the given model.
     ///
-    /// EXAMPLE: scan PATH/TO/MODEL verify PROPERTY
-    /// EXAMPLE: scan PATH/TO/MODEL verify PROPERTY ANOTHER_PROPERTY
-    /// EXAMPLE: scan PATH/TO/MODEL verify --all
+    /// Examples:
+    /// 'scan PATH/TO/MODEL verify PROPERTY' verifies the property PROPERTY over the model
+    /// 'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' verifies the properties PROPERTY_1 and PROPERTY_2 together over the model
+    /// 'scan PATH/TO/MODEL verify --all' verifies all specified properties together over the model
     #[clap(verbatim_doc_comment)]
     Verify {
         /// Args for model verification.
