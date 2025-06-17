@@ -4,10 +4,13 @@ SCAN (StatistiCal ANalyzer) is a statistical model checker
 designed to verify large concurrent systems
 for which standard verification techniques do not scale.
 
-It features:
-- SCXML as input language (support for other languages is underway)
-- Past MTL as property specification language
-- State/event dense time traces
+SCAN has a modular architecture that supports multiple frontends,
+allowing multiple modeling and property specification languages.
+Currently, and with different levels of maturity, SCAN supports:
+- SCXML as modeling language, with past MTL as property specification language and state/event dense time traces.
+- JANI as modeling language, with (limited) LTL as property specification language.
+- PROMELA as modelling language (in developement).
+- ... (support for other languages is underway)
 
 SCAN is currently under developement at DIBRIS, University of Genoa
 in the context of the [CONVINCE project](https://convince-project.eu/).

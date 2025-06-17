@@ -112,7 +112,7 @@ impl Tracer<Action> for TracePrinter {
             .expect("write record");
     }
 
-    fn finalize(self, outcome: RunOutcome) {
+    fn finalize(self, outcome: &RunOutcome) {
         let mut writer = self.writer.unwrap();
         writer.flush().expect("flush csv content");
         writer
@@ -127,13 +127,16 @@ impl Tracer<Action> for TracePrinter {
         // pop temp folder
         new_path.pop();
         match outcome {
-            RunOutcome::Success => new_path.push(Self::SUCCESSES),
-            RunOutcome::Fail(_violation) => {
-                new_path.push(Self::FAILURES);
-                // new_path.push(self.model.guarantees.get(violation).unwrap());
-                // This path might not exist yet
-                if !exists(new_path.as_path()).expect("check folder") {
-                    create_dir_all(new_path.clone()).expect("create missing folder");
+            RunOutcome::Verified(verified) => {
+                if verified.iter().all(|b| *b) {
+                    new_path.push(Self::SUCCESSES);
+                } else {
+                    new_path.push(Self::FAILURES);
+                    // new_path.push(self.model.guarantees.get(violation).unwrap());
+                    // This path might not exist yet
+                    if !exists(new_path.as_path()).expect("check folder") {
+                        create_dir_all(new_path.clone()).expect("create missing folder");
+                    }
                 }
             }
             RunOutcome::Incomplete => {

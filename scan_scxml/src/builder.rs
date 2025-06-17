@@ -100,6 +100,7 @@ impl ModelBuilder {
     /// or references to non-existing items.
     pub fn build(
         mut parser: Parser,
+        properties: &[String],
     ) -> anyhow::Result<(CsModel<SmallRng>, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
@@ -113,7 +114,7 @@ impl ModelBuilder {
         }
 
         model_builder.build_ports(&parser)?;
-        model_builder.build_properties(&parser)?;
+        model_builder.build_properties(&parser, properties)?;
 
         let model = model_builder.build_model();
 
@@ -1557,7 +1558,7 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_properties(&mut self, parser: &Parser) -> anyhow::Result<()> {
+    fn build_properties(&mut self, parser: &Parser, properties: &[String]) -> anyhow::Result<()> {
         for predicate in parser.properties.predicates.iter() {
             let predicate = self.expression(
                 predicate,
@@ -1581,7 +1582,13 @@ impl ModelBuilder {
             )?;
             self.predicates.push(predicate);
         }
-        self.guarantees = parser.properties.guarantees.clone();
+        self.guarantees = parser
+            .properties
+            .guarantees
+            .iter()
+            .filter(|(name, _)| properties.is_empty() || properties.contains(name))
+            .cloned()
+            .collect();
         self.assumes = parser.properties.assumes.clone();
         Ok(())
     }

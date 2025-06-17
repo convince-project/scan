@@ -85,6 +85,7 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 use thiserror::Error;
 
+/// The index for [`Location`]s in a [`ProgramGraph`].
 pub type LocationIdx = u32;
 
 /// An indexing object for locations in a PG.
@@ -94,6 +95,7 @@ pub type LocationIdx = u32;
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Location(LocationIdx);
 
+/// The index for [`Action`]s in a [`ProgramGraph`].
 pub type ActionIdx = u32;
 
 /// An indexing object for actions in a PG.

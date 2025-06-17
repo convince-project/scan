@@ -18,7 +18,7 @@ API docs for the library crates: [https://convince-project.github.io/scan/crates
 ## Formalism
 
 Internally, SCAN uses Channel Systems (CS) as models,[^1]
-and Metric Temporal Logic (MTL) as property specification language.
+and past Metric Temporal Logic (pMTL) as property specification language.
 
 [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
 
@@ -27,7 +27,7 @@ At the moment the following languages are planned or (partially) implemented:
 
 - [x] State Charts specified in [SCXML format](https://www.w3.org/TR/scxml/).
 - [ ] [Promela](https://spinroot.com/spin/Man/Manual.html)
-- [ ] [JANI](https://jani-spec.org/)
+- [x] [JANI](https://jani-spec.org/)
 
 ## Build prerequisites
 
@@ -61,20 +61,21 @@ scan --help
 
 which will show the available functionalities and commands' syntax.
 
-The general syntax to run SCAN is
+To verify all specified properties over a model, for example, use:
 
 ```
-scan <MODEL>
+scan <MODEL> verify --all
 ```
 
 where `MODEL` is the path to your model file or folder.
 
 It can be helpful to run SCAN with logging activated.
-Use
+Use the `--verbose` flag (even multiple times) to increase the verbosity level, or
 
 ```
 RUST_LOG=<LOG_LEVEL> scan <MODEL>
 ```
+
 where `LOG_LEVEL=error|warn|info|debug|trace`.
 
 ## Development

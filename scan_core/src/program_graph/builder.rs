@@ -58,7 +58,6 @@ impl Default for ProgramGraphBuilder {
 impl ProgramGraphBuilder {
     /// Creates a new [`ProgramGraphBuilder`].
     /// At creation, this will only have the inital location with no variables, no actions and no transitions.
-    /// The initial location can be retreived by [`ProgramGraphBuilder::initial_location`]
     pub fn new() -> Self {
         Self {
             initial_states: Vec::new(),

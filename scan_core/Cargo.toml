@@ -2,6 +2,10 @@
 name = "scan_core"
 version = "0.1.0"
 edition = "2024"
+documentation = "https://convince-project.github.io/scan/crates/scan_core/index.html"
+homepage = "https://convince-project.github.io/scan/"
+repository = "https://github.com/convince-project/scan"
+license = "Apache-2.0"
 
 [lib]
 name = "scan_core"     # The name of the target.
@@ -12,7 +16,7 @@ thiserror = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
 rayon = "1.10.0"
-smallvec = "1.15.0"
+smallvec = "1.15.1"
 
 [dev-dependencies]
 criterion = "0.6.0"

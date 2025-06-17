@@ -7,6 +7,7 @@ use crate::{
     program_graph::{Action, PgError, PgExpression, ProgramGraph, Var},
 };
 
+/// A [`ProgramGraph`]-based model implementing [`TransitionSystem`] with synchronous concurrency.
 pub struct PgModel {
     pg: ProgramGraph<SmallRng>,
     rng: SmallRng,
@@ -15,6 +16,7 @@ pub struct PgModel {
 }
 
 impl PgModel {
+    /// Create a new [`PgModel`] from the given [`ProgramGraph`] and predicates over its internal state.
     pub fn new(
         pg: ProgramGraph<SmallRng>,
         rng: SmallRng,
@@ -58,17 +60,14 @@ impl TransitionSystem<Action> for PgModel {
         0
     }
 
-    fn labels(&self) -> Vec<bool> {
-        self.predicates
-            .iter()
-            .map(|p| {
-                if let Val::Boolean(b) = self.pg.eval(p) {
-                    b
-                } else {
-                    panic!("non-bool pred")
-                }
-            })
-            .collect()
+    fn labels(&self) -> impl Iterator<Item = bool> {
+        self.predicates.iter().map(|p| {
+            if let Val::Boolean(b) = self.pg.eval(p) {
+                b
+            } else {
+                panic!("non-bool pred")
+            }
+        })
     }
 
     fn state(&self) -> impl Iterator<Item = &crate::Val> {

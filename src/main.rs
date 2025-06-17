@@ -1,9 +1,11 @@
 use clap::Parser;
-use env_logger::Env;
 use scan::Cli;
 
 fn main() -> anyhow::Result<()> {
-    let env = Env::default().default_filter_or("off");
-    env_logger::Builder::from_env(env).init();
-    Cli::parse().run()
+    human_panic::setup_panic!();
+    let cli = Cli::parse();
+    env_logger::Builder::new()
+        .filter_level(cli.verbosity.log_level_filter())
+        .init();
+    cli.run()
 }
