@@ -22,7 +22,7 @@ where `MODEL` can be:
 - For JANI models, the path to the JANI model's file.
 
 SCAN tries to auto-detect the model format,
-but the `--format [scxml|jani]` flag can be used to specify it explicitely.
+but the `--format [scxml|jani]` flag can be used to specify it explicitly.
 
 Available commands are:
 
@@ -89,7 +89,7 @@ The following flags control the statistical parameters of the verification:
 - `--confidence` sets the statistical confidence that the produced result is accurate.
 - `--precision` sets the target precision of the result.
 
-Toghether, `--confidence` and `--precision` also determine how many executions are required to be performed,
+Together, `--confidence` and `--precision` also determine how many executions are required to be performed,
 via the new adaptive sampling method.
 This determines the number of necessary samples also based on the outcomes of the previous samples,
 so that this number cannot be known a-priori but has to be continually recalculated during the verification task.
@@ -139,4 +139,4 @@ with `NN` progressive indexing,
 and further classified into `success/`, `failure/` and `undetermined/` sub-directories based on the outcome of the execution.
 Traces are saved into `gz`-compressed `csv` format.
 Since traces can take up a large amount of disk space,
-care is reccommended when running this command.
+care is recommended when running this command.
