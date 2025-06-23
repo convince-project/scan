@@ -34,12 +34,20 @@ impl<A> Tracer<A> for () {
     fn finalize(self, _outcome: &RunOutcome) {}
 }
 
+pub trait TransitionSystemDef<Event> {
+    type Ts<'def>: TransitionSystem<'def, Event>
+    where
+        Self: 'def;
+
+    fn new_instance<'def>(&'def self) -> Self::Ts<'def>;
+}
+
 /// Trait for types that can execute like a transition system.
 ///
 /// Together with an [`Oracle`], it provides a verifiable system.
-pub trait TransitionSystem<Event>: Clone + Send + Sync {
+pub trait TransitionSystem<'def, Event>: Clone + Send + Sync {
     /// The Error type for the [`TransitionSystem`].
-    type Err: Error + Send + Sync;
+    type Err: Error + Clone + Send + Sync + 'static;
 
     /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
     /// unless the execution is terminated and no further events can happen.

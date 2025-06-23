@@ -101,7 +101,7 @@ impl ModelBuilder {
     pub fn build(
         mut parser: Parser,
         properties: &[String],
-    ) -> anyhow::Result<(CsModel<SmallRng>, PmtlOracle, ScxmlModel)> {
+    ) -> anyhow::Result<(CsModelDef<SmallRng>, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
         model_builder.prebuild_processes(&mut parser)?;
@@ -1593,8 +1593,8 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(self) -> (CsModel<SmallRng>, PmtlOracle, ScxmlModel) {
-        let mut model = CsModelBuilder::new(self.cs.build());
+    fn build_model(self) -> (CsModelDef<SmallRng>, PmtlOracle, ScxmlModel) {
+        let mut model = CsModelDef::new(self.cs.build());
         let mut ports = Vec::new();
         for (port_name, (atom, init)) in self.ports {
             // TODO FIXME handle error.
@@ -1622,7 +1622,7 @@ impl ModelBuilder {
             .collect();
 
         (
-            model.build(),
+            model,
             oracle,
             ScxmlModel {
                 fsm_names: self.fsm_names,

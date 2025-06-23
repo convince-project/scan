@@ -11,9 +11,10 @@ use log::info;
 pub use print_trace::TracePrinter;
 use rand::rngs::SmallRng;
 pub use scan_core;
-use scan_core::{CsModel, PmtlOracle, Scan, channel_system::Event};
+use scan_core::{CsModelDef, PmtlOracle, ScanDef, channel_system::Event};
 
-pub type ScxmlScan = Scan<Event, CsModel<SmallRng>, PmtlOracle>;
+pub type ScxmlScan = ScanDef<Event, CsModelDef<SmallRng>, PmtlOracle>;
+
 pub fn load(path: &Path, properties: &[String]) -> anyhow::Result<(ScxmlScan, ScxmlModel)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parse SCXML model");
@@ -24,6 +25,6 @@ pub fn load(path: &Path, properties: &[String]) -> anyhow::Result<(ScxmlScan, Sc
     info!(target: "build", "building SCXML model");
     let (cs, oracle, model) = builder::ModelBuilder::build(parser, properties)?;
     info!("building model completed in {:?}", time.elapsed());
-    let scan = Scan::new(cs, oracle);
+    let scan = ScanDef::new(cs, oracle);
     Ok((scan, model))
 }

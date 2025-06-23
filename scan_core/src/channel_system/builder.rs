@@ -1,14 +1,13 @@
 use super::{
-    Action, Channel, ChannelSystem, ChannelSystemDef, Clock, CsError, Location, Message, PgError,
-    PgExpression, PgId, ProgramGraph, ProgramGraphBuilder, TimeConstraint, Var,
+    Action, Channel, ChannelSystemDef, Clock, CsError, Location, Message, PgError, PgExpression,
+    PgId, ProgramGraphBuilder, TimeConstraint, Var,
 };
 use crate::Expression;
 use crate::grammar::Type;
+use crate::program_graph::ProgramGraphDef;
 use log::info;
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use rand::Rng;
+use std::collections::HashMap;
 
 /// An expression using CS's [`Var`] as variables.
 pub type CsExpression = Expression<Var>;
@@ -114,23 +113,13 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
 }
 
 /// The object used to define and build a CS.
-#[derive(Clone)]
 pub struct ChannelSystemBuilder<R: Rng> {
-    program_graphs: Vec<ProgramGraphBuilder>,
+    program_graphs: Vec<ProgramGraphBuilder<R>>,
     channels: Vec<(Type, Option<usize>)>,
     communications: HashMap<Action, (Channel, Message)>,
-    rng: R,
 }
 
-impl ChannelSystemBuilder<SmallRng> {
-    /// Create a new [`ProgramGraphBuilder`] with a default RNG (see also `ChannelSystemBuilder::new_with_rng`).
-    /// At creation, this will be completely empty.
-    pub fn new() -> Self {
-        Self::new_with_rng(SmallRng::from_os_rng())
-    }
-}
-
-impl Default for ChannelSystemBuilder<SmallRng> {
+impl<R: Rng + 'static> Default for ChannelSystemBuilder<R> {
     fn default() -> Self {
         Self::new()
     }
@@ -139,12 +128,11 @@ impl Default for ChannelSystemBuilder<SmallRng> {
 impl<R: Rng + 'static> ChannelSystemBuilder<R> {
     /// Create a new [`ProgramGraphBuilder`] with the given RNG (see also `ChannelSystemBuilder::new`).
     /// At creation, this will be completely empty.
-    pub fn new_with_rng(rng: R) -> Self {
+    pub fn new() -> Self {
         Self {
             program_graphs: Vec::new(),
             channels: Vec::new(),
             communications: HashMap::new(),
-            rng,
         }
     }
 
@@ -168,7 +156,7 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
             .ok_or(CsError::MissingPg(pg_id))?;
         let init = PgExpression::try_from((pg_id, init))?;
         let var = pg
-            .new_var_with_rng(init, &mut self.rng)
+            .new_var(init)
             .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
         Ok(Var(pg_id, var))
     }
@@ -493,7 +481,7 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
         }
     }
 
-    /// Adds an autonomous timed transition to the PG with the given time constrints.
+    /// Adds an autonomous timed transition to the PG with the given time constraints.
     ///
     /// Fails if the CS contains no such PG, or if the given variable or locations do not belong to it.
     ///
@@ -673,13 +661,13 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
     }
 
     /// Produces a [`ChannelSystem`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
-    pub fn build(mut self) -> ChannelSystem<R> {
+    pub fn build(mut self) -> ChannelSystemDef<R> {
         info!(
             "create Channel System with:\n{} Program Graphs\n{} channels",
             self.program_graphs.len(),
             self.channels.len(),
         );
-        let mut program_graphs: Vec<ProgramGraph<R>> = self
+        let mut program_graphs: Vec<ProgramGraphDef<R>> = self
             .program_graphs
             .into_iter()
             .map(|builder| builder.build())
@@ -716,30 +704,11 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
         }
         assert_eq!(communications_pg_idxs.len(), program_graphs.len() + 1);
 
-        let message_queue = self
-            .channels
-            .iter()
-            .map(|(_, cap)| {
-                if let Some(cap) = cap {
-                    VecDeque::with_capacity(*cap)
-                } else {
-                    VecDeque::default()
-                }
-            })
-            .collect();
-
-        let def = ChannelSystemDef {
+        ChannelSystemDef {
             channels: self.channels,
             communications,
             communications_pg_idxs,
-        };
-
-        ChannelSystem {
-            rng: self.rng,
-            time: 0,
             program_graphs,
-            message_queue,
-            def: Arc::new(def),
         }
     }
 }

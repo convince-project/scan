@@ -13,14 +13,14 @@ pub(crate) enum Bar {
 }
 
 impl Bar {
-    pub(crate) fn print_progress_bar<E, Ts, O>(
+    pub(crate) fn print_progress_bar<'def, E, Ts, O>(
         &self,
         confidence: f64,
         precision: f64,
-        guarantees: Vec<String>,
-        scan: Scan<E, Ts, O>,
+        guarantees: &[String],
+        scan: &Scan<'def, E, Ts, O>,
     ) where
-        Ts: scan_core::TransitionSystem<E>,
+        Ts: scan_core::TransitionSystem<'def, E>,
         E: Send + Sync,
         O: Oracle,
     {
