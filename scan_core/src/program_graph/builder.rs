@@ -57,7 +57,7 @@ impl Default for ProgramGraphBuilder {
 
 impl ProgramGraphBuilder {
     /// Creates a new [`ProgramGraphBuilder`].
-    /// At creation, this will only have the inital location with no variables, no actions and no transitions.
+    /// At creation, this will only have the initial location with no variables, no actions and no transitions.
     pub fn new() -> Self {
         Self {
             initial_states: Vec::new(),
@@ -504,7 +504,7 @@ impl ProgramGraphBuilder {
     /// Since the construction of the builder is already checked ad every step,
     /// this method cannot fail.
     pub fn build<R: Rng + 'static>(mut self) -> ProgramGraph<R> {
-        // Since vectors of effects and transitions will become unmutable,
+        // Since vectors of effects and transitions will become immutable,
         // they should be shrunk to take as little space as possible
         self.effects.iter_mut().for_each(|effect| {
             if let Effect::Effects(_, resets) = effect {
@@ -512,7 +512,7 @@ impl ProgramGraphBuilder {
             }
         });
         self.effects.shrink_to_fit();
-        // Vars are not going to be unmutable,
+        // Vars are not going to be immutable,
         // but their number will be constant anyway
         self.vars.shrink_to_fit();
         let mut locations = self

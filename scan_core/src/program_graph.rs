@@ -4,9 +4,9 @@
 //!
 //! - a finite set `L` of _locations_;
 //! - a finite set `A` of _actions_;
-//! - a finite set `V` of _typed variebles_;
+//! - a finite set `V` of _typed variables_;
 //! - a _transition relation_ that associates pairs of locations (pre-location and post-location) and an action with a Boolean expression (the _guard_ of the transition);
-//! - for each actions, a set of _effects_, i.e., a variabe `x` from `V` and an expression in the variables of `V` of the same type as `x`.
+//! - for each actions, a set of _effects_, i.e., a variable `x` from `V` and an expression in the variables of `V` of the same type as `x`.
 //!
 //! The state of a PG is given by its current location and the value assigned to each variable.
 //! The PG's state evolves by non-deterministically choosing a transition whose pre-state is the current state,
@@ -278,7 +278,7 @@ impl<R: Rng> ProgramGraph<R> {
 
     /// Iterates over all transitions that can be admitted in the current state.
     ///
-    /// An admittable transition is characterized by the required action and the post-state
+    /// An admissible transition is characterized by the required action and the post-state
     /// (the pre-state being necessarily the current state of the machine).
     /// The guard (if any) is guaranteed to be satisfied.
     pub fn possible_transitions(

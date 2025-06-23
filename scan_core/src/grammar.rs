@@ -128,7 +128,7 @@ where
     // -------------
     // Random values
     // -------------
-    /// A Bernulli distribution with the given probability.
+    /// A Bernoulli distribution with the given probability.
     RandBool(f64),
     /// A random integer between a lower bound (included) and an upper bound (excluded).
     RandInt(Integer, Integer),
@@ -137,9 +137,9 @@ where
     // -----------------
     // Logical operators
     // -----------------
-    /// n-uary logical conjunction.
+    /// n-ary logical conjunction.
     And(Vec<Expression<V>>),
-    /// n-uary logical disjunction.
+    /// n-ary logical disjunction.
     Or(Vec<Expression<V>>),
     /// Logical implication.
     Implies(Box<(Expression<V>, Expression<V>)>),
@@ -163,13 +163,13 @@ where
     // ------------
     /// Equality of numerical expressions.
     Equal(Box<(Expression<V>, Expression<V>)>),
-    /// Disequality of numerical expressions: LHS greater than RHS.
+    /// Inequality of numerical expressions: LHS greater than RHS.
     Greater(Box<(Expression<V>, Expression<V>)>),
-    /// Disequality of numerical expressions: LHS greater than, or equal to,  RHS.
+    /// Inequality of numerical expressions: LHS greater than, or equal to,  RHS.
     GreaterEq(Box<(Expression<V>, Expression<V>)>),
-    /// Disequality of numerical expressions: LHS less than RHS.
+    /// Inequality of numerical expressions: LHS less than RHS.
     Less(Box<(Expression<V>, Expression<V>)>),
-    /// Disequality of numerical expressions: LHS less than, or equal to, RHS.
+    /// Inequality of numerical expressions: LHS less than, or equal to, RHS.
     LessEq(Box<(Expression<V>, Expression<V>)>),
     // -----
     // Lists

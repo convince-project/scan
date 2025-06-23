@@ -134,7 +134,7 @@ impl ModelBuilder {
                     for (index, (field_id, field_type)) in fields.iter().enumerate() {
                         self.structs
                             .insert((name.to_owned(), field_id.to_owned()), index);
-                        // NOTE: fields must have an already known type, to aviod recursion.
+                        // NOTE: fields must have an already known type, to avoid recursion.
                         let (_, field_type) = self.types.get(field_type).ok_or(anyhow!(
                             "unknown type {} of field {} in struct {}",
                             field_type,
@@ -659,7 +659,7 @@ impl ModelBuilder {
             }
             // Keep track of all known events.
             let mut known_events = Vec::new();
-            // Retreive external event's parameters
+            // Retrieve external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
             // from any possible other fsm,
             // and for any parameter of the event.
@@ -714,7 +714,7 @@ impl ModelBuilder {
                         .expect("has to work");
                 }
             }
-            // Proceed if event is unknown (without retreiving parameters).
+            // Proceed if event is unknown (without retrieving parameters).
             let unknown_event = if known_events.is_empty() {
                 None
             } else {
@@ -1014,7 +1014,7 @@ impl ModelBuilder {
                     Ok(done_loc)
                 } else {
                     // WARN: This behavior is non-compliant with the SCXML specification
-                    // An event sent without specifiying the target is sent to all FSMs that can process it
+                    // An event sent without specifying the target is sent to all FSMs that can process it
                     let targets = self.events[event_idx]
                         .receivers
                         .iter()
@@ -1267,7 +1267,7 @@ impl ModelBuilder {
                         }
                     }
                     BinaryOp::Relational(rel_bin) => {
-                        // Type inference is not possible as muliple types are possible
+                        // Type inference is not possible as multiple types are possible
                         let lhs =
                             self.expression(bin.lhs(), interner, vars, origin, params, None)?;
                         let rhs =

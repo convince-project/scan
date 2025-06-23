@@ -493,7 +493,7 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
         }
     }
 
-    /// Adds an autonomous timed transition to the PG with the given time constrints.
+    /// Adds an autonomous timed transition to the PG with the given time constraints.
     ///
     /// Fails if the CS contains no such PG, or if the given variable or locations do not belong to it.
     ///

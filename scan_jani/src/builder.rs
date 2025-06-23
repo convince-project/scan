@@ -51,7 +51,7 @@ impl JaniBuilder {
         // WARN Necessary "normalization" process
         self.init(&mut jani_model)?;
         self.normalize(&mut jani_model)
-            .context("JANI normalization pre-process failes")?;
+            .context("JANI normalization pre-process fails")?;
 
         let mut pgb = ProgramGraphBuilder::new();
 
@@ -329,7 +329,7 @@ impl JaniBuilder {
                         jani_model.system.syncs.extend(to_add);
 
                         // If original action did not appear in syncs it means that it does not sync between automata.
-                        // We still want to keep track of it esplicitely.
+                        // We still want to keep track of it explicitly.
                         if jani_model.system.syncs.iter().all(|sync| {
                             sync.synchronise[e_idx]
                                 .as_ref()
