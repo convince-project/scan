@@ -251,7 +251,6 @@ impl Tracer<Event> for TracePrinter {
                     new_path.push(Self::SUCCESSES);
                 } else {
                     new_path.push(Self::FAILURES);
-                    // new_path.push(self.model.guarantees.get(violation).unwrap());
                     // This path might not exist yet
                     if !exists(new_path.as_path()).expect("check folder") {
                         create_dir_all(new_path.clone()).expect("create missing folder");
