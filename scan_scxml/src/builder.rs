@@ -3,7 +3,7 @@
 use crate::parser::{Executable, If, OmgType, OmgTypes, Param, Parser, Scxml, Send, Target};
 use anyhow::{Context, anyhow};
 use boa_interner::{Interner, ToInternedString};
-use log::{info, trace};
+use log::{info, trace, warn};
 use rand::rngs::SmallRng;
 use scan_core::{channel_system::*, *};
 use std::{
@@ -110,7 +110,7 @@ impl ModelBuilder {
         for (id, fsm) in parser.process_list.iter() {
             model_builder
                 .build_fsm(fsm, &mut parser.interner)
-                .with_context(|| format!("failed building fsm '{id}'"))?;
+                .with_context(|| format!("failed building FSM '{id}'"))?;
         }
 
         model_builder.build_ports(&parser)?;
@@ -244,7 +244,15 @@ impl ModelBuilder {
                 location: _,
                 expr: _,
             } => Ok(()),
-            Executable::Raise { event: _ } => Ok(()),
+            Executable::Raise { event } => {
+                // Treat raised events as sent and received by the FSM itself.
+                // Raised events cannot have params.
+                let event_index = self.event_index(event);
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.senders.insert(pg_id);
+                builder.receivers.insert(pg_id);
+                Ok(())
+            }
             Executable::Send(Send {
                 event,
                 target: _,
@@ -259,7 +267,7 @@ impl ModelBuilder {
                     let param_type = param_type
                         .or_else(|| self.infer_type(&param.expr, types, interner).ok())
                         .ok_or(anyhow!("missing type annotation for param {}", param.name))?;
-                    // Update omg_type value so that it contains its type for sure
+                    // Update OMG_type value so that it contains its type for sure
                     param.omg_type = Some(param_type.to_owned());
                     let builder = self.events.get_mut(event_index).expect("index must exist");
                     let prev_type = builder
@@ -379,8 +387,8 @@ impl ModelBuilder {
     }
 
     fn build_fsm(&mut self, scxml: &Scxml, interner: &mut Interner) -> anyhow::Result<()> {
-        trace!(target: "build", "build fsm {}", scxml.name);
-        // Initialize fsm.
+        trace!(target: "build", "build FSM {}", scxml.name);
+        // Initialize FSM.
         let pg_builder = self
             .fsm_builders
             .get(&scxml.name)
@@ -441,7 +449,7 @@ impl ModelBuilder {
         } else {
             initial_state = initial_loc;
         };
-        // Map fsm's state ids to corresponding CS's locations.
+        // Map FSM's state ids to corresponding CS's locations.
         let mut states = HashMap::new();
         // Conventionally, the entry-point for a state is a location associated to the id of the state.
         states.insert(scxml.initial.to_owned(), initial_state);
@@ -550,7 +558,7 @@ impl ModelBuilder {
                     let chn = self
                         .parameters
                         .entry((sender_id, pg_id, event_index, param_name.to_owned()))
-                        // entry may be present if the sender fsm has been built already,
+                        // entry may be present if the sender FSM has been built already,
                         // and it might be missing otherwise.
                         .or_insert_with(|| self.cs.new_channel(param_type.to_owned(), None));
                     let read = self
@@ -567,7 +575,7 @@ impl ModelBuilder {
         let param_vars = param_vars;
         let param_actions = param_actions;
 
-        // Consider each of the fsm's states
+        // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
             trace!(target: "build", "build state {}", state_id);
             // Each state is modeled by multiple locations connected by transitions
@@ -661,7 +669,7 @@ impl ModelBuilder {
             let mut known_events = Vec::new();
             // Retrieve external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
-            // from any possible other fsm,
+            // from any possible other FSM,
             // and for any parameter of the event.
             for event_builder in self
                 .events
@@ -731,6 +739,20 @@ impl ModelBuilder {
 
             // Consider each of the state's transitions.
             for transition in state.transitions.iter() {
+                // Skip if event is never sent/raised
+                if let Some(ref event_name) = transition.event {
+                    let event_index = *self
+                        .event_indexes
+                        .get(event_name)
+                        .expect("event must be registered");
+                    if self.events[event_index].senders.is_empty() {
+                        warn!(
+                            "event '{event_name}' in FSM '{}' is never sent, skipping",
+                            self.fsm_names.get(&pg_id).expect("PG name")
+                        );
+                        continue;
+                    }
+                }
                 trace!(
                     target: "build",
                     "build {} transition to {}",
