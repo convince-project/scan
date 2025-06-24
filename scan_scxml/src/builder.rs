@@ -101,6 +101,7 @@ impl ModelBuilder {
     pub fn build(
         mut parser: Parser,
         properties: &[String],
+        all_properties: bool,
     ) -> anyhow::Result<(CsModel<SmallRng>, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
@@ -114,7 +115,7 @@ impl ModelBuilder {
         }
 
         model_builder.build_ports(&parser)?;
-        model_builder.build_properties(&parser, properties)?;
+        model_builder.build_properties(&parser, properties, all_properties)?;
 
         let model = model_builder.build_model();
 
@@ -1580,7 +1581,12 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_properties(&mut self, parser: &Parser, properties: &[String]) -> anyhow::Result<()> {
+    fn build_properties(
+        &mut self,
+        parser: &Parser,
+        properties: &[String],
+        all_properties: bool,
+    ) -> anyhow::Result<()> {
         for predicate in parser.properties.predicates.iter() {
             let predicate = self.expression(
                 predicate,
@@ -1608,7 +1614,7 @@ impl ModelBuilder {
             .properties
             .guarantees
             .iter()
-            .filter(|(name, _)| properties.is_empty() || properties.contains(name))
+            .filter(|(name, _)| all_properties || properties.contains(name))
             .cloned()
             .collect();
         self.assumes = parser.properties.assumes.clone();
