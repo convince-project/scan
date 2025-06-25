@@ -181,7 +181,7 @@ impl Parser {
         {
             let path = entry.context("failed to read directory entry")?.path();
             if path.is_dir() {
-                model_found &= self.parse_directory_check(&path)?;
+                model_found |= self.parse_directory_check(&path)?;
             } else {
                 self.parse_file(&path)?;
                 model_found = true;
