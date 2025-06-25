@@ -1628,9 +1628,12 @@ impl ModelBuilder {
             // TODO FIXME handle error.
             if let Atom::State(channel) = atom {
                 model.add_port(channel, init.clone());
-                ports.push((port_name, init.r#type()));
+                ports.push((channel, port_name, init.r#type()));
             }
         }
+        // Ports need to be sorted by channel or will not match state iterator
+        ports.sort_by_key(|(c, ..)| *c);
+        let ports = ports.into_iter().map(|(_, n, t)| (n, t)).collect();
         for pred_expr in self.predicates {
             // TODO FIXME handle error.
             let _id = model.add_predicate(pred_expr);
