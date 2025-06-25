@@ -1,7 +1,7 @@
 //! Model builder for SCAN's XML specification format.
 
 use crate::parser::{Executable, If, OmgType, OmgTypes, Param, Parser, Scxml, Send, Target};
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use boa_interner::{Interner, ToInternedString};
 use log::{info, trace, warn};
 use rand::rngs::SmallRng;
@@ -159,6 +159,7 @@ impl ModelBuilder {
                     }
                     Type::Integer
                 }
+                OmgType::String => Type::Integer,
             };
             self.types
                 .insert(name.to_owned(), (omg_type.to_owned(), scan_type));
@@ -326,10 +327,10 @@ impl ModelBuilder {
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
                 match lit {
-                    Literal::String(_) => todo!(),
+                    Literal::String(_) => Ok(String::from("string")),
                     Literal::Num(_) => Ok(String::from("f64")),
                     Literal::Int(_) => Ok(String::from("int32")),
-                    Literal::BigInt(_) => todo!(),
+                    // Literal::BigInt(_) => todo!(),
                     Literal::Bool(_) => Ok(String::from("bool")),
                     _ => Err(anyhow!(
                         "unable to infer type for literal expression '{lit:?}'"
@@ -1209,7 +1210,15 @@ impl ModelBuilder {
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
                 match lit {
-                    Literal::String(_) => todo!(),
+                    Literal::String(s) => {
+                        let len = self.enums.len() as Integer;
+                        Expression::from(
+                            *self
+                                .enums
+                                .entry(interner.resolve_expect(*s).to_string())
+                                .or_insert(len),
+                        )
+                    }
                     Literal::Num(f) => Expression::from(*f),
                     Literal::Int(i) if expr_type.is_some_and(|t| matches!(t, Type::Float)) => {
                         Expression::from(*i as f64)
@@ -1344,6 +1353,7 @@ impl ModelBuilder {
             }
             boa_ast::Expression::Call(call) => {
                 let fun = call.function();
+                let args = call.args();
                 if let boa_ast::Expression::PropertyAccess(
                     boa_ast::expression::access::PropertyAccess::Simple(property_access),
                 ) = fun
@@ -1361,10 +1371,30 @@ impl ModelBuilder {
                                     .ok_or(anyhow!("unknown symbol {:?}", sym))?
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
-                                if ident == "random" && target == "Math" {
-                                    return Ok(Expression::RandFloat(0., 1.));
+                                if target == "Math" {
+                                    match ident {
+                                        "random" => return Ok(Expression::RandFloat(0., 1.)),
+                                        "floor" => {
+                                            if let [arg] = args {
+                                                let arg = self.expression(
+                                                    arg,
+                                                    interner,
+                                                    vars,
+                                                    origin,
+                                                    params,
+                                                    Some(Type::Float),
+                                                )?;
+                                                return Ok(Expression::Floor(Box::new(arg)));
+                                            } else {
+                                                bail!(
+                                                    "Math.floor() called with wrong number of arguments"
+                                                );
+                                            }
+                                        }
+                                        _ => bail!("unknown call"),
+                                    }
                                 } else {
-                                    return Err(anyhow!("unknown call"));
+                                    bail!("unknown call");
                                 }
                             }
                             boa_ast::expression::access::PropertyAccessField::Expr(expression) => {
@@ -1490,10 +1520,6 @@ impl ModelBuilder {
                                             .ok_or(anyhow!("unknown type {}", type_name))?
                                             .0
                                         {
-                                            OmgType::Boolean => todo!(),
-                                            OmgType::Int32 => todo!(),
-                                            OmgType::F64 => todo!(),
-                                            OmgType::Uri => todo!(),
                                             OmgType::Structure(fields) => {
                                                 let index = *self
                                                     .structs
@@ -1507,7 +1533,7 @@ impl ModelBuilder {
                                                     field_type_name.to_owned(),
                                                 ))
                                             }
-                                            OmgType::Enumeration(_) => todo!(),
+                                            t => bail!("type '{t:?}' has no accessible fields"),
                                         }
                                     }
                                     EcmaObj::Properties(fields) => fields
