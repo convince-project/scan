@@ -1,9 +1,9 @@
 //! Model builder for SCAN's XML specification format.
 
 use crate::parser::{Executable, If, OmgType, OmgTypes, Param, Parser, Scxml, Send, Target};
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use boa_interner::{Interner, ToInternedString};
-use log::{info, trace};
+use log::{info, trace, warn};
 use rand::rngs::SmallRng;
 use scan_core::{channel_system::*, *};
 use std::{
@@ -101,6 +101,7 @@ impl ModelBuilder {
     pub fn build(
         mut parser: Parser,
         properties: &[String],
+        all_properties: bool,
     ) -> anyhow::Result<(CsModelDef<SmallRng>, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
@@ -110,11 +111,11 @@ impl ModelBuilder {
         for (id, fsm) in parser.process_list.iter() {
             model_builder
                 .build_fsm(fsm, &mut parser.interner)
-                .with_context(|| format!("failed building fsm '{id}'"))?;
+                .with_context(|| format!("failed building FSM '{id}'"))?;
         }
 
         model_builder.build_ports(&parser)?;
-        model_builder.build_properties(&parser, properties)?;
+        model_builder.build_properties(&parser, properties, all_properties)?;
 
         let model = model_builder.build_model();
 
@@ -134,7 +135,7 @@ impl ModelBuilder {
                     for (index, (field_id, field_type)) in fields.iter().enumerate() {
                         self.structs
                             .insert((name.to_owned(), field_id.to_owned()), index);
-                        // NOTE: fields must have an already known type, to aviod recursion.
+                        // NOTE: fields must have an already known type, to avoid recursion.
                         let (_, field_type) = self.types.get(field_type).ok_or(anyhow!(
                             "unknown type {} of field {} in struct {}",
                             field_type,
@@ -158,6 +159,7 @@ impl ModelBuilder {
                     }
                     Type::Integer
                 }
+                OmgType::String => Type::Integer,
             };
             self.types
                 .insert(name.to_owned(), (omg_type.to_owned(), scan_type));
@@ -244,7 +246,15 @@ impl ModelBuilder {
                 location: _,
                 expr: _,
             } => Ok(()),
-            Executable::Raise { event: _ } => Ok(()),
+            Executable::Raise { event } => {
+                // Treat raised events as sent and received by the FSM itself.
+                // Raised events cannot have params.
+                let event_index = self.event_index(event);
+                let builder = self.events.get_mut(event_index).expect("index must exist");
+                builder.senders.insert(pg_id);
+                builder.receivers.insert(pg_id);
+                Ok(())
+            }
             Executable::Send(Send {
                 event,
                 target: _,
@@ -259,7 +269,7 @@ impl ModelBuilder {
                     let param_type = param_type
                         .or_else(|| self.infer_type(&param.expr, types, interner).ok())
                         .ok_or(anyhow!("missing type annotation for param {}", param.name))?;
-                    // Update omg_type value so that it contains its type for sure
+                    // Update OMG_type value so that it contains its type for sure
                     param.omg_type = Some(param_type.to_owned());
                     let builder = self.events.get_mut(event_index).expect("index must exist");
                     let prev_type = builder
@@ -317,10 +327,10 @@ impl ModelBuilder {
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
                 match lit {
-                    Literal::String(_) => todo!(),
+                    Literal::String(_) => Ok(String::from("string")),
                     Literal::Num(_) => Ok(String::from("f64")),
                     Literal::Int(_) => Ok(String::from("int32")),
-                    Literal::BigInt(_) => todo!(),
+                    // Literal::BigInt(_) => todo!(),
                     Literal::Bool(_) => Ok(String::from("bool")),
                     _ => Err(anyhow!(
                         "unable to infer type for literal expression '{lit:?}'"
@@ -379,8 +389,8 @@ impl ModelBuilder {
     }
 
     fn build_fsm(&mut self, scxml: &Scxml, interner: &mut Interner) -> anyhow::Result<()> {
-        trace!(target: "build", "build fsm {}", scxml.name);
-        // Initialize fsm.
+        trace!(target: "build", "build FSM {}", scxml.name);
+        // Initialize FSM.
         let pg_builder = self
             .fsm_builders
             .get(&scxml.name)
@@ -441,7 +451,7 @@ impl ModelBuilder {
         } else {
             initial_state = initial_loc;
         };
-        // Map fsm's state ids to corresponding CS's locations.
+        // Map FSM's state ids to corresponding CS's locations.
         let mut states = HashMap::new();
         // Conventionally, the entry-point for a state is a location associated to the id of the state.
         states.insert(scxml.initial.to_owned(), initial_state);
@@ -550,7 +560,7 @@ impl ModelBuilder {
                     let chn = self
                         .parameters
                         .entry((sender_id, pg_id, event_index, param_name.to_owned()))
-                        // entry may be present if the sender fsm has been built already,
+                        // entry may be present if the sender FSM has been built already,
                         // and it might be missing otherwise.
                         .or_insert_with(|| self.cs.new_channel(param_type.to_owned(), None));
                     let read = self
@@ -567,7 +577,7 @@ impl ModelBuilder {
         let param_vars = param_vars;
         let param_actions = param_actions;
 
-        // Consider each of the fsm's states
+        // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
             trace!(target: "build", "build state {}", state_id);
             // Each state is modeled by multiple locations connected by transitions
@@ -659,9 +669,9 @@ impl ModelBuilder {
             }
             // Keep track of all known events.
             let mut known_events = Vec::new();
-            // Retreive external event's parameters
+            // Retrieve external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
-            // from any possible other fsm,
+            // from any possible other FSM,
             // and for any parameter of the event.
             for event_builder in self
                 .events
@@ -714,7 +724,7 @@ impl ModelBuilder {
                         .expect("has to work");
                 }
             }
-            // Proceed if event is unknown (without retreiving parameters).
+            // Proceed if event is unknown (without retrieving parameters).
             let unknown_event = if known_events.is_empty() {
                 None
             } else {
@@ -731,6 +741,20 @@ impl ModelBuilder {
 
             // Consider each of the state's transitions.
             for transition in state.transitions.iter() {
+                // Skip if event is never sent/raised
+                if let Some(ref event_name) = transition.event {
+                    let event_index = *self
+                        .event_indexes
+                        .get(event_name)
+                        .expect("event must be registered");
+                    if self.events[event_index].senders.is_empty() {
+                        warn!(
+                            "event '{event_name}' in FSM '{}' is never sent, skipping",
+                            self.fsm_names.get(&pg_id).expect("PG name")
+                        );
+                        continue;
+                    }
+                }
                 trace!(
                     target: "build",
                     "build {} transition to {}",
@@ -1014,7 +1038,7 @@ impl ModelBuilder {
                     Ok(done_loc)
                 } else {
                     // WARN: This behavior is non-compliant with the SCXML specification
-                    // An event sent without specifiying the target is sent to all FSMs that can process it
+                    // An event sent without specifying the target is sent to all FSMs that can process it
                     let targets = self.events[event_idx]
                         .receivers
                         .iter()
@@ -1186,7 +1210,15 @@ impl ModelBuilder {
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::Literal;
                 match lit {
-                    Literal::String(_) => todo!(),
+                    Literal::String(s) => {
+                        let len = self.enums.len() as Integer;
+                        Expression::from(
+                            *self
+                                .enums
+                                .entry(interner.resolve_expect(*s).to_string())
+                                .or_insert(len),
+                        )
+                    }
                     Literal::Num(f) => Expression::from(*f),
                     Literal::Int(i) if expr_type.is_some_and(|t| matches!(t, Type::Float)) => {
                         Expression::from(*i as f64)
@@ -1267,7 +1299,7 @@ impl ModelBuilder {
                         }
                     }
                     BinaryOp::Relational(rel_bin) => {
-                        // Type inference is not possible as muliple types are possible
+                        // Type inference is not possible as multiple types are possible
                         let lhs =
                             self.expression(bin.lhs(), interner, vars, origin, params, None)?;
                         let rhs =
@@ -1321,6 +1353,7 @@ impl ModelBuilder {
             }
             boa_ast::Expression::Call(call) => {
                 let fun = call.function();
+                let args = call.args();
                 if let boa_ast::Expression::PropertyAccess(
                     boa_ast::expression::access::PropertyAccess::Simple(property_access),
                 ) = fun
@@ -1338,10 +1371,30 @@ impl ModelBuilder {
                                     .ok_or(anyhow!("unknown symbol {:?}", sym))?
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
-                                if ident == "random" && target == "Math" {
-                                    return Ok(Expression::RandFloat(0., 1.));
+                                if target == "Math" {
+                                    match ident {
+                                        "random" => return Ok(Expression::RandFloat(0., 1.)),
+                                        "floor" => {
+                                            if let [arg] = args {
+                                                let arg = self.expression(
+                                                    arg,
+                                                    interner,
+                                                    vars,
+                                                    origin,
+                                                    params,
+                                                    Some(Type::Float),
+                                                )?;
+                                                return Ok(Expression::Floor(Box::new(arg)));
+                                            } else {
+                                                bail!(
+                                                    "Math.floor() called with wrong number of arguments"
+                                                );
+                                            }
+                                        }
+                                        _ => bail!("unknown call"),
+                                    }
                                 } else {
-                                    return Err(anyhow!("unknown call"));
+                                    bail!("unknown call");
                                 }
                             }
                             boa_ast::expression::access::PropertyAccessField::Expr(expression) => {
@@ -1467,10 +1520,6 @@ impl ModelBuilder {
                                             .ok_or(anyhow!("unknown type {}", type_name))?
                                             .0
                                         {
-                                            OmgType::Boolean => todo!(),
-                                            OmgType::Int32 => todo!(),
-                                            OmgType::F64 => todo!(),
-                                            OmgType::Uri => todo!(),
                                             OmgType::Structure(fields) => {
                                                 let index = *self
                                                     .structs
@@ -1484,7 +1533,7 @@ impl ModelBuilder {
                                                     field_type_name.to_owned(),
                                                 ))
                                             }
-                                            OmgType::Enumeration(_) => todo!(),
+                                            t => bail!("type '{t:?}' has no accessible fields"),
                                         }
                                     }
                                     EcmaObj::Properties(fields) => fields
@@ -1558,7 +1607,12 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_properties(&mut self, parser: &Parser, properties: &[String]) -> anyhow::Result<()> {
+    fn build_properties(
+        &mut self,
+        parser: &Parser,
+        properties: &[String],
+        all_properties: bool,
+    ) -> anyhow::Result<()> {
         for predicate in parser.properties.predicates.iter() {
             let predicate = self.expression(
                 predicate,
@@ -1586,7 +1640,7 @@ impl ModelBuilder {
             .properties
             .guarantees
             .iter()
-            .filter(|(name, _)| properties.is_empty() || properties.contains(name))
+            .filter(|(name, _)| all_properties || properties.contains(name))
             .cloned()
             .collect();
         self.assumes = parser.properties.assumes.clone();
@@ -1600,9 +1654,12 @@ impl ModelBuilder {
             // TODO FIXME handle error.
             if let Atom::State(channel) = atom {
                 model.add_port(channel, init.clone());
-                ports.push((port_name, init.r#type()));
+                ports.push((channel, port_name, init.r#type()));
             }
         }
+        // Ports need to be sorted by channel or will not match state iterator
+        ports.sort_by_key(|(c, ..)| *c);
+        let ports = ports.into_iter().map(|(_, n, t)| (n, t)).collect();
         for pred_expr in self.predicates {
             // TODO FIXME handle error.
             let _id = model.add_predicate(pred_expr);

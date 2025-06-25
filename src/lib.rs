@@ -69,11 +69,12 @@ enum Commands {
     /// Validate the syntactical and semantical correctness of the model, without running it.
     Validate,
     /// Verify properties of the given model.
+    /// At least one property has to be verified.
     ///
     /// Examples:
-    /// 'scan PATH/TO/MODEL verify PROPERTY' verifies the property PROPERTY over the model
-    /// 'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' verifies the properties PROPERTY_1 and PROPERTY_2 together over the model
-    /// 'scan PATH/TO/MODEL verify --all' verifies all specified properties together over the model
+    /// 'scan PATH/TO/MODEL verify PROPERTY' verifies the property PROPERTY over the model.
+    /// 'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' verifies the properties PROPERTY_1 and PROPERTY_2 together over the model.
+    /// 'scan PATH/TO/MODEL verify --all' verifies all specified properties together over the model.
     #[clap(verbatim_doc_comment)]
     Verify {
         /// Args for model verification.
@@ -94,7 +95,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Produce execution traces and save them to file in csv format.
+    /// Produce execution traces and save them to file in csv format, separating executions that verify the given properties from those that do not.
+    /// Executions are always run to completion, regardless of verification outcome.
+    /// It is possible to verify no property at all, in which case all executions are successful but still executed to completion.
+    ///
+    /// Examples:
+    /// 'scan PATH/TO/MODEL trace' executes the model once and writes the trace to disk, without verifying any property.
+    /// 'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' executes the model once and writes the trace to disk, classifying it according to verification outcome of the properties PROPERTY_1 and PROPERTY_2 together over the model.
+    /// 'scan PATH/TO/MODEL verify --all' executes the model once and writes the trace to disk, and classifying it according to verification outcome of all specified properties together over the model.
+    #[clap(verbatim_doc_comment)]
     Trace(TraceArgs),
 }
 
@@ -173,7 +182,7 @@ impl Cli {
             } => {
                 args.validate()?;
                 eprint!("Processing {model}...");
-                let (scan_def, scxml_model) = load(&self.model, &args.properties)?;
+                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 if args.all {
@@ -184,15 +193,19 @@ impl Cli {
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
-                let (_scan, _scxml_model) = load(&self.model, &[])?;
+                let (_scan, _scxml_model) = load(&self.model, &[], true)?;
                 // At this point the model has been validated
                 eprintln!(" done");
                 println!("Model {model} successfully validated");
             }
-            Commands::Trace(args) => {
+            Commands::Trace(mut args) => {
                 eprint!("Processing {model}...");
-                let (scan_def, scxml_model) = load(&self.model, &[])?;
+                let (scan_def, scxml_model) = load(&self.model, &[], args.all)?;
                 eprintln!(" done");
+                validate_properties(&args.properties, &scxml_model.guarantees)?;
+                if args.all {
+                    args.properties = scxml_model.guarantees.clone();
+                }
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(scxml_model);
                 eprint!("Trace computation in progress...");
@@ -230,6 +243,7 @@ impl Cli {
                 println!("Model {model} successfully validated");
             }
             Commands::Trace(args) => {
+                args.validate()?;
                 eprint!("Processing {model}...");
                 let (scan, jani_model) = load(&self.model, &[])?;
                 eprintln!(" done");

@@ -158,6 +158,8 @@ where
     Mod(Box<(Expression<V>, Expression<V>)>),
     /// Div operation
     Div(Box<(Expression<V>, Expression<V>)>),
+    /// Floor
+    Floor(Box<Expression<V>>),
     // ------------
     // (In)Equality
     // ------------
@@ -356,6 +358,13 @@ where
                     Err(TypeError::TypeMismatch)
                 }
             }
+            Expression::Floor(expression) => {
+                if matches!(expression.r#type()?, Type::Float) {
+                    Ok(Type::Integer)
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
         }
     }
 
@@ -464,6 +473,13 @@ where
             Expression::Truncate(_expression) => todo!(),
             Expression::Len(_expression) => todo!(),
             Expression::Ite(_) => todo!(),
+            Expression::Floor(expression) => {
+                if let Val::Float(f) = expression.eval_constant()? {
+                    Ok(Val::Integer(f.floor() as Integer))
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
         }
     }
 
@@ -510,6 +526,7 @@ where
                 .context(vars)
                 .and_then(|_| exprs.1.context(vars))
                 .and_then(|_| exprs.2.context(vars)),
+            Expression::Floor(expression) => expression.context(vars),
         }
     }
 
@@ -1031,6 +1048,16 @@ impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
                         } else {
                             r#else.eval(vars, rng)
                         }
+                    } else {
+                        panic!("type mismatch");
+                    }
+                })
+            }
+            Expression::Floor(expression) => {
+                let f = FnExpression::from(*expression);
+                Box::new(move |vars, rng| {
+                    if let Val::Float(f) = f.eval(vars, rng) {
+                        Val::Integer(f.floor() as Integer)
                     } else {
                         panic!("type mismatch");
                     }

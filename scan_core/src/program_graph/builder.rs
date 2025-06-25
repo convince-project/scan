@@ -513,7 +513,7 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
                                 .into_iter()
                                 .map(|(p, guard, mut c)| {
                                     c.sort_unstable();
-                                    (p, guard.map(FnExpression::from), c)
+                                    (p, guard, c)
                                 })
                                 .collect::<Vec<_>>(),
                         )

@@ -15,7 +15,11 @@ use scan_core::{CsModelDef, PmtlOracle, ScanDef, channel_system::Event};
 
 pub type ScxmlScan = ScanDef<Event, CsModelDef<SmallRng>, PmtlOracle>;
 
-pub fn load(path: &Path, properties: &[String]) -> anyhow::Result<(ScxmlScan, ScxmlModel)> {
+pub fn load(
+    path: &Path,
+    properties: &[String],
+    all_properties: bool,
+) -> anyhow::Result<(ScxmlScan, ScxmlModel)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parse SCXML model");
     let parser = parser::Parser::parse(path)?;
@@ -23,7 +27,7 @@ pub fn load(path: &Path, properties: &[String]) -> anyhow::Result<(ScxmlScan, Sc
 
     let time = std::time::Instant::now();
     info!(target: "build", "building SCXML model");
-    let (cs, oracle, model) = builder::ModelBuilder::build(parser, properties)?;
+    let (cs, oracle, model) = builder::ModelBuilder::build(parser, properties, all_properties)?;
     info!("building model completed in {:?}", time.elapsed());
     let scan = ScanDef::new(cs, oracle);
     Ok((scan, model))

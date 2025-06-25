@@ -20,6 +20,7 @@ pub enum OmgType {
     Int32,
     F64,
     Uri,
+    String,
     Structure(HashMap<String, String>),
     Enumeration(Vec<String>),
 }
@@ -30,13 +31,14 @@ pub struct OmgTypes {
 }
 
 impl OmgTypes {
-    pub const BASE_TYPES: [(&'static str, OmgType); 9] = [
+    pub const BASE_TYPES: [(&'static str, OmgType); 10] = [
         ("boolean", OmgType::Boolean),
         ("bool", OmgType::Boolean),
         ("int8", OmgType::Int32),
         ("int16", OmgType::Int32),
         ("int32", OmgType::Int32),
         ("int64", OmgType::Int32),
+        ("string", OmgType::String),
         ("float32", OmgType::F64),
         ("float64", OmgType::F64),
         ("URI", OmgType::Uri),
@@ -90,7 +92,7 @@ impl OmgTypes {
                                 .push((id.to_owned(), OmgType::Structure(HashMap::new())));
                             stack.push(ConvinceTag::Structure(id));
                         }
-                        // Unknown tag: skip till maching end tag
+                        // Unknown tag: skip till matching end tag
                         _ => {
                             warn!("unknown or unexpected tag {tag_name}, skipping");
                             reader.read_to_end_into(tag.to_end().into_owned().name(), &mut buf)?;
@@ -151,7 +153,7 @@ impl OmgTypes {
                                 }
                             }
                         }
-                        // Unknown tag: skip till maching end tag
+                        // Unknown tag: skip till matching end tag
                         _ => {
                             warn!("unknown or unexpected tag {tag_name:?}, skipping");
                             continue;

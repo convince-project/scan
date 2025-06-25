@@ -127,12 +127,6 @@ pub trait TransitionSystem<'def, Event>: Clone + Send + Sync {
             }
             tracer.trace(&event, time, self.state());
             oracle.update(&labels, time);
-            if oracle.output_guarantees().all(|b| b.is_some()) {
-                trace!("run complete");
-                let verified = Vec::from_iter(oracle.output_guarantees().map(Option::unwrap));
-                tracer.finalize(&RunOutcome::Verified(verified));
-                return Ok(());
-            }
         }
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
