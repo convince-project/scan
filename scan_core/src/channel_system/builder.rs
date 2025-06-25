@@ -109,6 +109,9 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
                 (pg_id, exprs.1).try_into()?,
                 (pg_id, exprs.2).try_into()?,
             )))),
+            Expression::Floor(expression) => Ok(Expression::Floor(Box::new(
+                (pg_id, *expression).try_into()?,
+            ))),
         }
     }
 }
