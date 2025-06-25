@@ -116,7 +116,7 @@ where
     O: Oracle,
     Event: Sync,
 {
-    /// Creadte a new [`Scan`] object with the given [`TransitionSystem`] and [`Oracle`].
+    /// Create a new [`Scan`] object with the given [`TransitionSystem`] and [`Oracle`].
     pub fn new(ts: T, oracle: O) -> Self {
         Self {
             ts: Arc::new(ts),
