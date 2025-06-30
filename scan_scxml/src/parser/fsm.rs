@@ -332,7 +332,6 @@ pub(super) fn parse<R: BufRead>(
 ) -> anyhow::Result<Scxml> {
     let mut buf = Vec::new();
     let mut stack: Vec<ScxmlTag> = Vec::new();
-    // let mut type_annotation: Option<(String, String)> = None;
     let mut type_annotation: Option<String> = None;
     info!(target: "parser", "parsing fsm");
     loop {
@@ -351,7 +350,6 @@ pub(super) fn parse<R: BufRead>(
             }
             Event::End(tag) => {
                 let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
-                // if let Some(tag) = stack.pop().is_some_and(|tag| <&str>::from(tag) == tag_name) {
                 if let Some(tag) = stack.pop() {
                     if <&str>::from(&tag) != tag_name {
                         error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
