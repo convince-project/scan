@@ -21,6 +21,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::collections::HashMap;
 use std::io::BufRead;
+use std::io::Read;
 use std::io::Seek;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -228,7 +229,7 @@ impl Parser {
                         })?;
                 }
                 _ => {
-                    warn!(target: "parser", "unknown file extension '{}'", ext);
+                    warn!(target: "parser", "unknown file extension '{ext}'");
                 }
             }
         }
@@ -251,13 +252,17 @@ impl Parser {
                     let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
                     trace!(target: "parser", "start tag '{tag_name}'");
                     let new_tag = match tag_name {
-                        TAG_SPECIFICATION if stack.is_empty() => {
-                            ConvinceTag::Specification
-                        }
-                        TAG_MODEL if stack.last().is_some_and(|e| *e == ConvinceTag::Specification) => {
+                        TAG_SPECIFICATION if stack.is_empty() => ConvinceTag::Specification,
+                        TAG_MODEL
+                            if stack
+                                .last()
+                                .is_some_and(|e| *e == ConvinceTag::Specification) =>
+                        {
                             ConvinceTag::Model
                         }
-                        TAG_PROCESS_LIST if stack.last().is_some_and(|e| *e == ConvinceTag::Model) => {
+                        TAG_PROCESS_LIST
+                            if stack.last().is_some_and(|e| *e == ConvinceTag::Model) =>
+                        {
                             ConvinceTag::ProcessList
                         }
                         _ => {
@@ -269,8 +274,11 @@ impl Parser {
                 }
                 Event::End(tag) => {
                     let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
-                    if stack.pop().is_some_and(|state| Into::<&str>::into(state) == tag_name) {
-                        trace!(target: "parser", "end tag '{}'", tag_name);
+                    if stack
+                        .pop()
+                        .is_some_and(|state| Into::<&str>::into(state) == tag_name)
+                    {
+                        trace!(target: "parser", "end tag '{tag_name}'");
                     } else {
                         error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
                         bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
@@ -280,24 +288,30 @@ impl Parser {
                     let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
                     trace!(target: "parser", "empty tag '{tag_name}'");
                     match tag_name {
-                        TAG_TYPES if stack.last().is_some_and(|e| *e == ConvinceTag::Specification) => {
-                            let attrs = attrs(
-                                tag,
-                                &[ATTR_PATH],
-                                &[],
-                            )
-                            .context("failed to parse 'types' tag attributes")?;
+                        TAG_TYPES
+                            if stack
+                                .last()
+                                .is_some_and(|e| *e == ConvinceTag::Specification) =>
+                        {
+                            let attrs = attrs(tag, &[ATTR_PATH], &[])
+                                .context("failed to parse 'types' tag attributes")?;
                             let mut path = parent.to_owned();
                             path.extend(&PathBuf::from(attrs.get(ATTR_PATH).unwrap()));
-                            info!(
-                                "creating reader from file '{}'",
-                                path.display()
-                            );
+                            info!("creating reader from file '{}'", path.display());
                             let mut reader = Reader::from_file(path.clone())?;
-                            self.types.parse(&mut reader)
-                                .with_context(|| format!("failed to parse types specification at line {} in '{}'", count_lines(reader), path.display()))?;
+                            self.types.parse(&mut reader).with_context(|| {
+                                format!(
+                                    "failed to parse types specification at line {} in '{}'",
+                                    count_lines(reader),
+                                    path.display()
+                                )
+                            })?;
                         }
-                        TAG_PROPERTIES if stack.last().is_some_and(|e| *e == ConvinceTag::Specification) => {
+                        TAG_PROPERTIES
+                            if stack
+                                .last()
+                                .is_some_and(|e| *e == ConvinceTag::Specification) =>
+                        {
                             let attrs = attrs(tag, &[ATTR_PATH], &[])
                                 .context("failed to parse 'properties' tag attributes")?;
                             let mut path = parent.to_owned();
@@ -306,22 +320,21 @@ impl Parser {
                             let mut reader = Reader::from_file(&path).with_context(|| {
                                 format!("failed to create reader from file '{}'", path.display())
                             })?;
-                            self.properties.parse(&mut reader, &mut self.interner)
-                                    .with_context(|| {
-                                        format!(
-                                            "failed to parse properties at line {} in '{}'",
-                                            count_lines(reader),
-                                            path.display(),
-                                        )
-                                    })?;
+                            self.properties
+                                .parse(&mut reader, &mut self.interner)
+                                .with_context(|| {
+                                    format!(
+                                        "failed to parse properties at line {} in '{}'",
+                                        count_lines(reader),
+                                        path.display(),
+                                    )
+                                })?;
                         }
-                        TAG_PROCESS if stack.last().is_some_and(|e| *e == ConvinceTag::ProcessList) => {
-                            let attrs = attrs(
-                                tag,
-                                &[ATTR_ID, ATTR_PATH],
-                                &[ATTR_MOC],
-                            )
-                            .context("failed to parse 'process' tag attributes")?;
+                        TAG_PROCESS
+                            if stack.last().is_some_and(|e| *e == ConvinceTag::ProcessList) =>
+                        {
+                            let attrs = attrs(tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC])
+                                .context("failed to parse 'process' tag attributes")?;
                             if let Some(moc) = attrs.get(ATTR_MOC) {
                                 if moc != "fsm" {
                                     bail!("unknown moc {moc}");
@@ -338,8 +351,14 @@ impl Parser {
                                 path.display()
                             );
                             let mut reader = Reader::from_file(path.clone())?;
-                            let fsm = fsm::parse(&mut reader, &mut self.interner)
-                                .with_context(|| format!("failed to parse fsm at line {} in '{}'", count_lines(reader), path.display()))?;
+                            let fsm =
+                                fsm::parse(&mut reader, &mut self.interner).with_context(|| {
+                                    format!(
+                                        "failed to parse fsm at line {} in '{}'",
+                                        count_lines(reader),
+                                        path.display()
+                                    )
+                                })?;
                             // Add process to list and check that no process was already in the list under the same name
                             if self.process_list.insert(process_id.clone(), fsm).is_some() {
                                 panic!("process added to list multiple times");
@@ -351,33 +370,34 @@ impl Parser {
                         }
                     }
                 }
-                // Ignore comments
-                Event::Comment(_)
-                // Ignore XML declaration
-                | Event::Decl(_) => continue,
-                Event::Text(t) => {
-                    let text = &*reader.decoder().decode(t.as_ref())?;
+                Event::Text(text) => {
+                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
+                    let text = String::from_utf8(text)?;
                     if !text.trim().is_empty() {
-                        error!(target: "parser", "text content not supported");
-                        bail!("text content not supported");
+                        error!(target: "parser", "text elements not allowed, ignoring");
                     }
+                    continue;
                 }
+                Event::Comment(_comment) => continue,
                 Event::CData(_) => {
-                    error!(target: "parser", "CData not supported");
-                    bail!("CData not supported");
+                    return Err(anyhow!("CData not supported"));
                 }
+                Event::Decl(_) => continue,
                 Event::PI(_) => {
-                    error!(target: "parser", "Processing Instructions not supported");
-                    bail!("Processing Instructions not supported");
+                    return Err(anyhow!("Processing Instructions not supported"));
                 }
                 Event::DocType(_) => {
-                    error!(target: "parser", "DocType not supported");
-                    bail!("DocType not supported");
+                    return Err(anyhow!("DocType not supported"));
                 }
-                // exits the loop when reaching end of file
                 Event::Eof => {
-                    info!(target: "parser", "parsing completed");
+                    info!("parsing completed");
+                    if !stack.is_empty() {
+                        return Err(anyhow!(ParserError::UnclosedTags,));
+                    }
                     break;
+                }
+                Event::GeneralRef(_bytes_ref) => {
+                    return Err(anyhow!("General References not supported"));
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low

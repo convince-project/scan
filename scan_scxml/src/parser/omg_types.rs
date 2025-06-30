@@ -1,4 +1,7 @@
-use std::{collections::HashMap, io::BufRead};
+use std::{
+    collections::HashMap,
+    io::{BufRead, Read},
+};
 
 use anyhow::anyhow;
 use log::{error, info, trace, warn};
@@ -73,9 +76,7 @@ impl OmgTypes {
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
-                            let id = self
-                                .parse_id(tag)
-                                .map_err(|err| err.context(reader.error_position()))?;
+                            let id = self.parse_id(tag)?;
                             self.types
                                 .push((id.to_owned(), OmgType::Enumeration(Vec::new())));
                             stack.push(ConvinceTag::Enumeration(id));
@@ -85,9 +86,7 @@ impl OmgTypes {
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
-                            let id = self
-                                .parse_id(tag)
-                                .map_err(|err| err.context(reader.error_position()))?;
+                            let id = self.parse_id(tag)?;
                             self.types
                                 .push((id.to_owned(), OmgType::Structure(HashMap::new())));
                             stack.push(ConvinceTag::Structure(id));
@@ -123,9 +122,7 @@ impl OmgTypes {
                                 .is_some_and(|tag| matches!(*tag, ConvinceTag::Enumeration(_))) =>
                         {
                             if let Some(ConvinceTag::Enumeration(id)) = stack.last() {
-                                let label = self
-                                    .parse_id(tag)
-                                    .map_err(|err| err.context(reader.error_position()))?;
+                                let label = self.parse_id(tag)?;
                                 let (enum_id, omg_type) = self.types.last_mut().unwrap();
                                 assert_eq!(id, enum_id);
                                 if let OmgType::Enumeration(labels) = omg_type {
@@ -141,9 +138,7 @@ impl OmgTypes {
                                 .is_some_and(|tag| matches!(*tag, ConvinceTag::Structure(_))) =>
                         {
                             if let Some(ConvinceTag::Structure(id)) = stack.last() {
-                                let (field_id, field_type) = self
-                                    .parse_struct(tag)
-                                    .map_err(|err| err.context(reader.error_position()))?;
+                                let (field_id, field_type) = self.parse_struct(tag)?;
                                 let (struct_id, omg_type) = self.types.last_mut().unwrap();
                                 assert_eq!(id, struct_id);
                                 if let OmgType::Structure(fields) = omg_type {
@@ -160,19 +155,34 @@ impl OmgTypes {
                         }
                     }
                 }
-                Event::Text(_) => continue,
-                Event::Comment(_) => continue,
-                Event::CData(_) => todo!(),
-                Event::Decl(_) => todo!(), // parser.parse_xml_declaration(tag)?,
-                Event::PI(_) => todo!(),
-                Event::DocType(_) => todo!(),
-                // exits the loop when reaching end of file
+                Event::Text(text) => {
+                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
+                    let text = String::from_utf8(text)?;
+                    if !text.trim().is_empty() {
+                        error!(target: "parser", "text elements not allowed, ignoring");
+                    }
+                    continue;
+                }
+                Event::Comment(_comment) => continue,
+                Event::CData(_) => {
+                    return Err(anyhow!("CData not supported"));
+                }
+                Event::Decl(_) => continue,
+                Event::PI(_) => {
+                    return Err(anyhow!("Processing Instructions not supported"));
+                }
+                Event::DocType(_) => {
+                    return Err(anyhow!("DocType not supported"));
+                }
                 Event::Eof => {
                     info!("parsing completed");
                     if !stack.is_empty() {
                         return Err(anyhow!(ParserError::UnclosedTags,));
                     }
                     break;
+                }
+                Event::GeneralRef(_bytes_ref) => {
+                    return Err(anyhow!("General References not supported"));
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low

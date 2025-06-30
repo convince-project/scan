@@ -579,7 +579,7 @@ impl ModelBuilder {
 
         // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
-            trace!(target: "build", "build state {}", state_id);
+            trace!(target: "build", "build state {state_id}");
             // Each state is modeled by multiple locations connected by transitions
             // A starting location is used as a point-of-entry to the execution of the state.
             let start_loc = *states

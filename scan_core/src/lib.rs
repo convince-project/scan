@@ -194,7 +194,7 @@ where
                         local_successes = successes.fetch_add(1, Ordering::Relaxed);
                         local_failures = failures.load(Ordering::Relaxed);
                         // If all guarantees are satisfied, the execution is successful
-                        trace!("runs: {} successes", local_successes);
+                        trace!("runs: {local_successes} successes");
                     } else {
                         local_successes = successes.load(Ordering::Relaxed);
                         local_failures = failures.fetch_add(1, Ordering::Relaxed);
@@ -208,7 +208,7 @@ where
                             },
                         );
                         // If guarantee is violated, we have found a counter-example!
-                        trace!("runs: {} failures", local_failures);
+                        trace!("runs: {local_failures} failures");
                     }
                 }
                 RunOutcome::Incomplete => return Ok(()),
