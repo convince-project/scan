@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{Oracle, Scan, TransitionSystem};
+use scan_core::{Oracle, ScanDef, TransitionSystemDef};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -150,11 +150,11 @@ impl Cli {
 
         if let Some(format) = self.format {
             match format {
-                Format::Scxml => self.run_scxml(model),
-                Format::Jani => self.run_jani(model),
+                Format::Scxml => self.run_scxml(&model),
+                Format::Jani => self.run_jani(&model),
             }
         } else if self.model.is_dir() {
-            self.run_scxml(model)
+            self.run_scxml(&model)
         } else {
             let ext = self
                 .model
@@ -164,14 +164,14 @@ impl Cli {
                 .to_str()
                 .ok_or(anyhow!("file extension not recognized"))?
             {
-                "xml" => self.run_scxml(model),
-                "jani" => self.run_jani(model),
+                "xml" => self.run_scxml(&model),
+                "jani" => self.run_jani(&model),
                 _ => bail!("unsupported file format"),
             }
         }
     }
 
-    fn run_scxml(self, model: String) -> anyhow::Result<()> {
+    fn run_scxml(self, model: &str) -> anyhow::Result<()> {
         use scan_scxml::*;
 
         match self.command {
@@ -182,13 +182,14 @@ impl Cli {
             } => {
                 args.validate()?;
                 eprint!("Processing {model}...");
-                let (scan, scxml_model) = load(&self.model, &args.properties, args.all)?;
+                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 if args.all {
                     args.properties = scxml_model.guarantees.clone();
                 }
-                run_verification(model, args, progress, scan)?.print(json);
+                let report = run_verification(model, &args, progress, &scan_def)?;
+                report.print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -199,7 +200,7 @@ impl Cli {
             }
             Commands::Trace(mut args) => {
                 eprint!("Processing {model}...");
-                let (scan, scxml_model) = load(&self.model, &args.properties, args.all)?;
+                let (scan_def, scxml_model) = load(&self.model, &[], args.all)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 if args.all {
@@ -208,14 +209,14 @@ impl Cli {
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(scxml_model);
                 eprint!("Trace computation in progress...");
-                args.trace(scan, tracer)?;
+                args.trace(&scan_def, tracer)?;
                 eprintln!(" done");
             }
         }
         Ok(())
     }
 
-    fn run_jani(self, model: String) -> anyhow::Result<()> {
+    fn run_jani(self, model: &str) -> anyhow::Result<()> {
         use scan_jani::*;
 
         match self.command {
@@ -226,13 +227,14 @@ impl Cli {
             } => {
                 args.validate()?;
                 eprint!("Processing {model}...");
-                let (scan, jani_model) = load(&self.model, &args.properties)?;
+                let properties = args.properties.clone();
+                let (scan, jani_model) = load(&self.model, &properties)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 if args.all {
                     args.properties = jani_model.guarantees;
                 }
-                run_verification(model, args, progress, scan)?.print(json);
+                run_verification(model, &args, progress, &scan)?.print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -248,7 +250,7 @@ impl Cli {
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
                 eprint!("Trace computation in progress...");
-                args.trace(scan, tracer)?;
+                args.trace(&scan, tracer)?;
                 eprintln!(" done");
             }
         }
@@ -267,37 +269,35 @@ fn validate_properties(props: &[String], all_props: &[String]) -> anyhow::Result
 }
 
 fn run_verification<E, Ts, O>(
-    model: String,
-    args: VerifyArgs,
+    model: &str,
+    args: &VerifyArgs,
     progress: Option<Bar>,
-    scan: Scan<E, Ts, O>,
+    scan_def: &ScanDef<E, Ts, O>,
 ) -> anyhow::Result<Report>
 where
-    Ts: TransitionSystem<E> + 'static,
+    Ts: TransitionSystemDef<E> + 'static,
     E: Clone + Send + Sync + 'static,
     O: Oracle + 'static,
 {
+    let scan = scan_def.new_instance();
     if let Some(bar) = progress {
         eprintln!(
             "Verifying {model} (-p {} -c {} -d {}) {:?}",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let scan_clone = scan.clone();
-        let confidence = args.confidence;
-        let precision = args.precision;
-        let guarantees = args.properties.clone();
-        let handle = std::thread::spawn(move || {
-            bar.print_progress_bar(confidence, precision, guarantees, scan_clone);
-        });
-        let report = args.verify(model.to_owned(), scan)?;
-        handle.join().expect("terminate process");
+        let report = std::thread::scope(|s| {
+            s.spawn(|| {
+                bar.print_progress_bar(args.confidence, args.precision, &args.properties, &scan);
+            });
+            args.verify(model.to_owned(), &scan)
+        })?;
         Ok(report)
     } else {
         eprint!(
             "Verifying {model} (-p {} -c {} -d {}) {:?}...",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let report = args.verify(model, scan)?;
+        let report = args.verify(model.to_owned(), &scan)?;
         eprintln!(" done");
         Ok(report)
     }

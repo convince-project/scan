@@ -81,15 +81,15 @@ impl VerifyArgs {
         }
     }
 
-    pub(crate) fn verify<E, Ts, O>(
+    pub(crate) fn verify<'def, E, Ts, O>(
         &self,
         model: String,
-        scan: Scan<E, Ts, O>,
+        scan: &Scan<'def, E, Ts, O>,
     ) -> anyhow::Result<Report>
     where
-        Ts: TransitionSystem<E> + 'static,
-        E: Clone + Send + Sync + 'static,
-        O: Oracle + 'static,
+        Ts: TransitionSystem<'def, E>,
+        E: Clone + Send + Sync,
+        O: Oracle,
     {
         scan.adaptive(
             self.confidence,

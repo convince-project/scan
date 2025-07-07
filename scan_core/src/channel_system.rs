@@ -120,7 +120,6 @@ use rand::seq::IteratorRandom;
 use rand::{Rng, SeedableRng};
 use smallvec::SmallVec;
 use std::collections::VecDeque;
-use std::sync::Arc;
 use thiserror::Error;
 
 /// An indexing object for PGs in a CS.
@@ -276,14 +275,37 @@ pub enum EventType {
     ProbeFullQueue,
 }
 
-#[derive(Clone)]
-struct ChannelSystemDef {
+pub struct ChannelSystemDef<R: Rng> {
     channels: Vec<(Type, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
     communications_pg_idxs: Vec<u16>,
+    program_graphs: Vec<ProgramGraphDef<R>>,
 }
 
-impl ChannelSystemDef {
+impl<R: Rng> ChannelSystemDef<R> {
+    pub fn new_instance<'def>(&'def self, rng: R) -> ChannelSystem<'def, R> {
+        let message_queue = self
+            .channels
+            .iter()
+            .map(|(_, cap)| {
+                if let Some(cap) = cap {
+                    VecDeque::with_capacity(*cap)
+                } else {
+                    VecDeque::default()
+                }
+            })
+            .collect();
+        ChannelSystem {
+            rng,
+            time: 0,
+            program_graphs: Vec::from_iter(
+                self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
+            ),
+            message_queue,
+            def: self,
+        }
+    }
+
     #[inline(always)]
     fn communication(&self, action: Action) -> Option<(Channel, Message)> {
         let pg_id = action.0;
@@ -314,27 +336,27 @@ impl ChannelSystemDef {
 /// The only way to produce a [`ChannelSystem`] is through a [`ChannelSystemBuilder`].
 /// This guarantees that there are no type errors involved in the definition of its PGs,
 /// and thus the CS will always be in a consistent state.
-pub struct ChannelSystem<R: Rng> {
+pub struct ChannelSystem<'def, R: Rng> {
     rng: R,
     time: Time,
-    program_graphs: Vec<ProgramGraph<R>>,
     message_queue: Vec<VecDeque<Val>>,
-    def: Arc<ChannelSystemDef>,
+    program_graphs: Vec<ProgramGraph<'def, R>>,
+    def: &'def ChannelSystemDef<R>,
 }
 
-impl<R: Rng + Clone + SeedableRng> Clone for ChannelSystem<R> {
+impl<'def, R: Rng + Clone + SeedableRng> Clone for ChannelSystem<'def, R> {
     fn clone(&self) -> Self {
         Self {
             rng: R::from_os_rng(),
             time: self.time,
             program_graphs: self.program_graphs.clone(),
             message_queue: self.message_queue.clone(),
-            def: Arc::clone(&self.def),
+            def: self.def,
         }
     }
 }
 
-impl<R: Rng> ChannelSystem<R> {
+impl<'def, R: Rng> ChannelSystem<'def, R> {
     /// Returns the current time of the CS.
     #[inline(always)]
     pub fn time(&self) -> Time {
@@ -622,6 +644,8 @@ impl<R: Rng> ChannelSystem<R> {
 
 #[cfg(test)]
 mod tests {
+    use crate::DummyRng;
+
     use super::*;
 
     #[test]
@@ -724,7 +748,8 @@ mod tests {
         let _ = cs.new_receive(pg2, ch, var2)?;
         cs.add_transition(pg2, initial2, receive, post2, None)?;
 
-        let mut cs = cs.build();
+        let cs_def = cs.build();
+        let mut cs = cs_def.new_instance(DummyRng);
         assert_eq!(cs.possible_transitions().count(), 1);
         assert_eq!(cs.def.communications_pg_idxs, vec![0, 2, 5]);
 

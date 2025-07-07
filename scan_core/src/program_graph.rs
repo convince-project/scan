@@ -80,9 +80,8 @@ mod builder;
 
 use crate::{DummyRng, Time, grammar::*};
 pub use builder::*;
-use rand::{Rng, SeedableRng, rngs::SmallRng, seq::IteratorRandom};
+use rand::{Rng, SeedableRng, seq::IteratorRandom};
 use smallvec::SmallVec;
-use std::sync::Arc;
 use thiserror::Error;
 
 /// The index for [`Location`]s in a [`ProgramGraph`].
@@ -188,23 +187,33 @@ pub enum PgError {
 }
 
 #[derive(Debug)]
-enum FnEffect<R: Rng> {
+enum Effect<R: Rng> {
     // NOTE: Could use a SmallVec for clock resets
     Effects(Vec<(Var, FnExpression<Var, R>)>, Vec<Clock>),
     Send(FnExpression<Var, R>),
     Receive(Var),
 }
 
-type Guard = FnExpression<Var, DummyRng>;
-
-type Transition = (Location, Option<Guard>, Vec<TimeConstraint>);
-
-struct ProgramGraphDef<R: Rng> {
-    effects: Vec<FnEffect<R>>,
+pub struct ProgramGraphDef<R: Rng> {
+    initial_states: SmallVec<[Location; 8]>,
+    effects: Vec<Effect<R>>,
     locations: Vec<(Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>)>,
+    // Time invariants of each location
+    vars: Vec<Val>,
+    // Number of clocks
+    clocks: u16,
 }
 
 impl<R: Rng> ProgramGraphDef<R> {
+    pub fn new_instance<'def>(&'def self) -> ProgramGraph<'def, R> {
+        ProgramGraph {
+            current_states: self.initial_states.clone(),
+            vars: self.vars.clone(),
+            def: self,
+            clocks: vec![0; self.clocks as usize],
+        }
+    }
+
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
     // Returns error if the transition does not exist.
@@ -245,14 +254,14 @@ impl<R: Rng> ProgramGraphDef<R> {
 /// This guarantees that there are no type errors involved in the definition of action's effects and transitions' guards,
 /// and thus the PG will always be in a consistent state.
 #[derive(Clone)]
-pub struct ProgramGraph<R: Rng> {
+pub struct ProgramGraph<'def, R: Rng> {
     current_states: SmallVec<[Location; 8]>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
-    def: Arc<ProgramGraphDef<R>>,
+    def: &'def ProgramGraphDef<R>,
 }
 
-impl<R: Rng> ProgramGraph<R> {
+impl<'def, R: Rng> ProgramGraph<'def, R> {
     /// Returns the current location.
     ///
     /// ```
@@ -349,7 +358,7 @@ impl<R: Rng> ProgramGraph<R> {
                 .1
                 .iter()
                 .filter_map(move |(post_state, guard, constraints)| {
-                    // prevent post_states to be duplicated waistfully
+                    // prevent post_states to be duplicated wastefully
                     if last_post_state.is_some_and(|s| s == *post_state) {
                         return None;
                     }
@@ -358,13 +367,13 @@ impl<R: Rng> ProgramGraph<R> {
                         self.active_autonomous_transition(guard.as_ref(), constraints, invariants)
                     } else {
                         match self.def.effects[action.0 as usize] {
-                            FnEffect::Effects(_, ref resets) => self.active_transition(
+                            Effect::Effects(_, ref resets) => self.active_transition(
                                 guard.as_ref(),
                                 constraints,
                                 invariants,
                                 resets,
                             ),
-                            FnEffect::Send(_) | FnEffect::Receive(_) => self
+                            Effect::Send(_) | Effect::Receive(_) => self
                                 .active_autonomous_transition(
                                     guard.as_ref(),
                                     constraints,
@@ -496,8 +505,7 @@ impl<R: Rng> ProgramGraph<R> {
             }
         } else if action.0 >= self.def.effects.len() as LocationIdx {
             return Err(PgError::MissingAction(action));
-        } else if let FnEffect::Effects(ref effects, ref resets) =
-            self.def.effects[action.0 as usize]
+        } else if let Effect::Effects(ref effects, ref resets) = self.def.effects[action.0 as usize]
         {
             if self.active_transitions(action, post_states, resets) {
                 effects.iter().for_each(|(var, effect)| {
@@ -551,7 +559,7 @@ impl<R: Rng> ProgramGraph<R> {
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
-            if let FnEffect::Send(effect) = &self.def.effects[action.0 as usize] {
+            if let Effect::Send(effect) = &self.def.effects[action.0 as usize] {
                 let val = effect.eval(&|var| self.vars[var.0 as usize].clone(), rng);
                 self.current_states.copy_from_slice(post_states);
                 Ok(val)
@@ -572,7 +580,7 @@ impl<R: Rng> ProgramGraph<R> {
         if action == EPSILON {
             Err(PgError::NotReceive(action))
         } else if self.active_transitions(action, post_states, &[]) {
-            if let FnEffect::Receive(var) = self.def.effects[action.0 as usize] {
+            if let Effect::Receive(var) = self.def.effects[action.0 as usize] {
                 let var_content = self.vars.get_mut(var.0 as usize).expect("variable exists");
                 if var_content.r#type() == val.r#type() {
                     *var_content = val;
@@ -603,9 +611,11 @@ impl<R: Rng> ProgramGraph<R> {
             .get(var.0 as usize)
             .ok_or(PgError::MissingVar(var))
     }
+}
 
+impl<'def, R: Rng + SeedableRng> ProgramGraph<'def, R> {
     pub(crate) fn montecarlo(&mut self, rng: &mut R) -> Option<Action> {
-        let mut rand = SmallRng::from_rng(rng);
+        let mut rand = R::from_rng(rng);
         if let Some((action, post_states)) = self
             .possible_transitions()
             .filter_map(|(action, post_state)| {
@@ -628,15 +638,15 @@ impl<R: Rng> ProgramGraph<R> {
 mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
-    use rand::rngs::mock::StepRng;
 
     use super::*;
 
     #[test]
     fn wait() {
-        let mut builder = ProgramGraphBuilder::new();
+        let mut builder = ProgramGraphBuilder::<SmallRng>::new();
         let _ = builder.new_initial_location();
-        let mut pg = builder.build::<SmallRng>();
+        let pg_def = builder.build();
+        let mut pg = pg_def.new_instance();
         assert_eq!(pg.possible_transitions().count(), 0);
         pg.wait(1).expect("wait 1 time unit");
     }
@@ -650,7 +660,8 @@ mod tests {
         builder
             .add_transition(initial, action, r#final, None)
             .expect("add transition");
-        let mut pg = builder.build();
+        let pg_def = builder.build();
+        let mut pg = pg_def.new_instance();
         assert_eq!(pg.current_states().as_slice(), &[initial]);
         // assert_eq!(
         //     pg.possible_transitions().collect::<Vec<_>>(),
@@ -668,10 +679,10 @@ mod tests {
     #[test]
     fn program_graph() -> Result<(), PgError> {
         // Create Program Graph
-        let mut builder = ProgramGraphBuilder::new();
-        let mut rng = StepRng::new(0, 1);
+        let mut builder = ProgramGraphBuilder::<SmallRng>::new();
         // Variables
-        let battery = builder.new_var_with_rng(Expression::Const(Val::Integer(0)), &mut rng)?;
+        let mut rng = SmallRng::from_seed([0; 32]);
+        let battery = builder.new_var(Expression::Const(Val::Integer(0)))?;
         // Locations
         let initial = builder.new_initial_location();
         let left = builder.new_location();
@@ -700,9 +711,9 @@ mod tests {
         builder.add_transition(right, move_left, center, Some(out_of_charge.clone()))?;
         builder.add_transition(center, move_left, left, Some(out_of_charge))?;
         // Execution
-        let mut pg = builder.build();
+        let pg_def = builder.build();
+        let mut pg = pg_def.new_instance();
         assert_eq!(pg.possible_transitions().count(), 1);
-        let mut rng = SmallRng::from_seed([0; 32]);
         pg.transition(initialize, &[center], &mut rng)
             .expect("initialize");
         assert_eq!(pg.possible_transitions().count(), 2);

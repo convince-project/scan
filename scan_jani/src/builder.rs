@@ -5,9 +5,9 @@ use crate::parser::{
 };
 use anyhow::{Context, anyhow, bail};
 use either::Either;
-use rand::{SeedableRng, rngs::SmallRng};
+use rand::rngs::SmallRng;
 use scan_core::{
-    Mtl, MtlOracle, PgModel, Type, TypeError, Val,
+    Mtl, MtlOracle, PgModelDef, Type, TypeError, Val,
     program_graph::{self, Action, PgExpression, ProgramGraphBuilder, Var},
 };
 use std::{
@@ -25,7 +25,7 @@ pub struct JaniModelData {
 pub(crate) fn build(
     jani_model: Model,
     properties: &[String],
-) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
+) -> anyhow::Result<(PgModelDef<SmallRng>, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
     builder.build(jani_model, properties)
 }
@@ -47,7 +47,7 @@ impl JaniBuilder {
         mut self,
         mut jani_model: Model,
         properties: &[String],
-    ) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
+    ) -> anyhow::Result<(PgModelDef<SmallRng>, MtlOracle, JaniModelData)> {
         // WARN Necessary "normalization" process
         self.init(&mut jani_model)?;
         self.normalize(&mut jani_model)
@@ -139,10 +139,9 @@ impl JaniBuilder {
             .collect();
 
         // Finalize, build and return everything
-        let pg = pgb.build();
-        let pg_model = PgModel::new(pg, SmallRng::from_os_rng(), global_vars, predicates);
+        let pg_def = pgb.build();
+        let pg_model = PgModelDef::new(pg_def, global_vars, predicates);
         let data = self.data(jani_model);
-
         Ok((pg_model, oracle, data))
     }
 
@@ -373,7 +372,7 @@ impl JaniBuilder {
 
     fn add_global_var(
         &mut self,
-        pgb: &mut ProgramGraphBuilder,
+        pgb: &mut ProgramGraphBuilder<SmallRng>,
         var: &VariableDeclaration,
     ) -> anyhow::Result<()> {
         // TODO WARN FIXME: in JANI initial values are random?
@@ -417,7 +416,7 @@ impl JaniBuilder {
 
     fn add_local_var(
         &self,
-        pgb: &mut ProgramGraphBuilder,
+        pgb: &mut ProgramGraphBuilder<SmallRng>,
         var: &VariableDeclaration,
         local_vars: &mut HashMap<String, (Var, Val, Type)>,
     ) -> anyhow::Result<()> {
@@ -469,7 +468,7 @@ impl JaniBuilder {
     fn build_automaton(
         &mut self,
         jani_model: &Model,
-        pgb: &mut ProgramGraphBuilder,
+        pgb: &mut ProgramGraphBuilder<SmallRng>,
         automaton: &Automaton,
         e_idx: usize,
     ) -> anyhow::Result<()> {
@@ -543,7 +542,7 @@ impl JaniBuilder {
     fn build_location(
         &mut self,
         jani_model: &Model,
-        pgb: &mut ProgramGraphBuilder,
+        pgb: &mut ProgramGraphBuilder<SmallRng>,
         location: &Location,
         e_idx: usize,
         locations: &mut HashMap<String, scan_core::program_graph::Location>,
@@ -573,7 +572,7 @@ impl JaniBuilder {
         &mut self,
         jani_model: &Model,
         automaton: &Automaton,
-        pgb: &mut ProgramGraphBuilder,
+        pgb: &mut ProgramGraphBuilder<SmallRng>,
         edge: &Edge,
         e_idx: usize,
         local_vars: &HashMap<String, (Var, Val, Type)>,

@@ -21,7 +21,7 @@ fn run_to_completion(mut pg: ProgramGraph<StepRng>) {
 }
 
 #[inline(always)]
-fn simple_pg() -> ProgramGraph<StepRng> {
+fn simple_pg() -> ProgramGraphDef<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -31,7 +31,7 @@ fn simple_pg() -> ProgramGraph<StepRng> {
 }
 
 #[inline(always)]
-fn condition_pg() -> ProgramGraph<StepRng> {
+fn condition_pg() -> ProgramGraphDef<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -62,7 +62,7 @@ fn condition_pg() -> ProgramGraph<StepRng> {
 }
 
 #[inline(always)]
-fn long_pg() -> ProgramGraph<StepRng> {
+fn long_pg() -> ProgramGraphDef<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
     let mut pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -75,7 +75,7 @@ fn long_pg() -> ProgramGraph<StepRng> {
 }
 
 #[inline(always)]
-fn counter_pg() -> ProgramGraph<StepRng> {
+fn counter_pg() -> ProgramGraphDef<StepRng> {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();
@@ -108,9 +108,10 @@ fn possible_transitions(c: &mut Criterion) {
         (counter_pg(), "counter pg"),
     ];
     for (pg, name) in pgs.iter() {
+        let pg = pg.new_instance();
         c.bench_with_input(
             BenchmarkId::new("possible transitions", name),
-            pg,
+            &pg,
             |b, pg| {
                 b.iter(|| pg.possible_transitions().count());
             },
@@ -126,9 +127,10 @@ fn run(c: &mut Criterion) {
         (counter_pg(), "counter pg"),
     ];
     for (pg, name) in pgs.iter() {
+        let pg = pg.new_instance();
         c.bench_with_input(
             BenchmarkId::new("execute to termination", name),
-            pg,
+            &pg,
             |b, pg| {
                 b.iter(|| run_to_completion(pg.clone()));
             },
