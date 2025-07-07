@@ -10,10 +10,10 @@ use log::info;
 use rand::Rng;
 use smallvec::SmallVec;
 
-pub type Guard = FnExpression<Var, DummyRng>;
+pub(crate) type Guard = FnExpression<Var, DummyRng>;
 
 // type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
-pub type Transition = (Location, Option<Guard>, Vec<TimeConstraint>);
+pub(crate) type Transition = (Location, Option<Guard>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
 pub struct ProgramGraphBuilder<R: Rng> {
@@ -63,7 +63,8 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // Create a new action
     /// let action = pg_builder.new_action();
     ///
@@ -93,7 +94,7 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     // /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder, Var};
     // /// # use rand::rngs::SmallRng;
     // /// # use rand::{Rng, SeedableRng};
-    // /// # let mut pg_builder = ProgramGraphBuilder::new();
+    // /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     // /// // Create RNG using `rand`
     // /// let mut rng = SmallRng::from_os_rng();
     // ///
@@ -128,7 +129,8 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{Action, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // Create a new action
     /// let action: Action = pg_builder.new_action();
     /// ```
@@ -145,8 +147,9 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{Clock, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
-    /// # let mut other_pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+    /// # let mut other_pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// let action = pg_builder.new_action();
     /// let clock = other_pg_builder.new_clock();
     /// // Associate action with clock reset
@@ -182,7 +185,8 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{Action, PgExpression, ProgramGraphBuilder, Var};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // Create a new action
     /// let action: Action = pg_builder.new_action();
     ///
@@ -324,7 +328,8 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
@@ -358,7 +363,8 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
@@ -427,7 +433,8 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
@@ -457,7 +464,8 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///

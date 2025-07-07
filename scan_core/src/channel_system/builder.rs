@@ -220,9 +220,10 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
     ///
     /// ```
     /// # use scan_core::*;
+    /// # use rand::rngs::SmallRng;
     /// # use scan_core::channel_system::*;
     /// // Create a new CS builder
-    /// let mut cs_builder = ChannelSystemBuilder::new();
+    /// let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
     ///
     /// // Add a new PG to the CS
     /// let pg = cs_builder.new_program_graph();

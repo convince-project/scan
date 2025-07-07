@@ -45,14 +45,15 @@
 //!
 //! // Build the PG from its builder
 //! // The builder is always guaranteed to build a well-defined PG and building cannot fail
-//! let mut pg = pg_builder.build();
+//! let pg = pg_builder.build();
+//! let mut instance = pg.new_instance();
 //!
 //! // Execution starts in the initial location
-//! assert_eq!(pg.current_states().as_slice(), &[initial_loc]);
+//! assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
 //!
 //! // Compute the possible transitions on the PG
 //! {
-//!     let mut iter = pg.possible_transitions();
+//!     let mut iter = instance .possible_transitions();
 //!     let (act, mut trans) = iter.next().unwrap();
 //!     assert_eq!(act, action);
 //!     let post_locs: Vec<Location> = trans.next().unwrap().collect();
@@ -64,16 +65,16 @@
 //! # use rand::{Rng, SeedableRng};
 //! # use rand::rngs::SmallRng;
 //! let mut rng = SmallRng::from_os_rng();
-//! let result = pg.transition(action, &[post_loc], &mut rng);
+//! let result = instance .transition(action, &[post_loc], &mut rng);
 //!
 //! // Performing a transition can fail, in particular, if the transition was not allowed
 //! result.expect("The transition from the initial location onto itself is possible");
 //!
 //! // There are no more possible transitions
-//! assert!(pg.possible_transitions().next().is_none());
+//! assert!(instance.possible_transitions().next().is_none());
 //!
 //! // Attempting to transition results in an error
-//! pg.transition(action, &[post_loc], &mut rng).expect_err("The transition is not possible");
+//! instance.transition(action, &[post_loc], &mut rng).expect_err("The transition is not possible");
 //! ```
 
 mod builder;
@@ -266,19 +267,20 @@ impl<'def, R: Rng> ProgramGraph<'def, R> {
     ///
     /// ```
     /// # use scan_core::program_graph::ProgramGraphBuilder;
+    /// # use rand::rngs::SmallRng;
     /// // Create a new PG builder
-    /// let mut pg_builder = ProgramGraphBuilder::new();
+    /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     ///
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
     /// // Build the PG from its builder
     /// // The builder is always guaranteed to build a well-defined PG and building cannot fail
-    /// # use rand::rngs::SmallRng;
-    /// let mut pg = pg_builder.build::<SmallRng>();
+    /// let pg = pg_builder.build();
+    /// let instance = pg.new_instance();
     ///
     /// // Execution starts in the initial location
-    /// assert_eq!(pg.current_states().as_slice(), &[initial_loc]);
+    /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
     /// ```
     #[inline(always)]
     pub fn current_states(&self) -> &SmallVec<[Location; 8]> {

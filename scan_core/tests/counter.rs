@@ -7,7 +7,7 @@ fn counter_pg() -> Result<(), PgError> {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();
-    let var = pg.new_var_with_rng(Expression::Const(Val::Integer(0)), &mut rng)?;
+    let var = pg.new_var(Expression::Const(Val::Integer(0)))?;
     pg.add_effect(
         action,
         var,
@@ -25,7 +25,8 @@ fn counter_pg() -> Result<(), PgError> {
         pg.add_transition(initial, action, initial, Some(guard))
             .unwrap();
     }
-    let mut pg = pg.build();
+    let pg = pg.build();
+    let mut pg = pg.new_instance();
     while let Some((action, post)) = pg
         .possible_transitions()
         .filter_map(|(a, iter)| {

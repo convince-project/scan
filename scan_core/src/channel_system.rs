@@ -1,7 +1,7 @@
 //! Implementation of the CS model of computation.
 //!
 //! Channel systems comprises multiple program graphs executing asynchronously
-//! while sending and retreiving messages from channels.
+//! while sending and retrieving messages from channels.
 //!
 //! A channel system is given by:
 //!
@@ -26,8 +26,10 @@
 //! ```
 //! # use scan_core::*;
 //! # use scan_core::channel_system::*;
+//! # use rand::rngs::SmallRng;
+//! # use rand::SeedableRng;
 //! // Create a new CS builder
-//! let mut cs_builder = ChannelSystemBuilder::new();
+//! let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
 //!
 //! // Add a new PG to the CS
 //! let pg_1 = cs_builder.new_program_graph();
@@ -73,11 +75,12 @@
 //!
 //! // Build the CS from its builder
 //! // The builder is always guaranteed to build a well-defined CS and building cannot fail
-//! let mut cs = cs_builder.build();
+//! let cs = cs_builder.build();
+//! let mut instance = cs.new_instance(SmallRng::from_os_rng());
 //!
 //! // Since the channel is empty, only pg_1 can transition (with send)
 //! {
-//! let mut iter = cs.possible_transitions();
+//! let mut iter = instance.possible_transitions();
 //! let (pg, action, mut trans) = iter.next().unwrap();
 //! assert_eq!(pg, pg_1);
 //! assert_eq!(action, send);
@@ -88,12 +91,12 @@
 //!
 //! // Perform the transition, which sends a value to the channel queue
 //! // After this, the channel is full
-//! cs.transition(pg_1, send, &[initial_1])
+//! instance.transition(pg_1, send, &[initial_1])
 //!     .expect("transition is possible");
 //!
 //! // Since the channel is now full, only pg_2 can transition (with receive)
 //! {
-//! let mut iter = cs.possible_transitions();
+//! let mut iter = instance.possible_transitions();
 //! let (pg, action, mut trans) = iter.next().unwrap();
 //! assert_eq!(pg, pg_2);
 //! assert_eq!(action, receive);
@@ -104,7 +107,7 @@
 //!
 //! // Perform the transition, which receives a value to the channel queue
 //! // After this, the channel is empty
-//! cs.transition(pg_2, receive, &[initial_2])
+//! instance.transition(pg_2, receive, &[initial_2])
 //!     .expect("transition is possible");
 //! ```
 
@@ -363,13 +366,9 @@ impl<'def, R: Rng> ChannelSystem<'def, R> {
         self.time
     }
 
-    pub(crate) fn channels(&self) -> &Vec<(Type, Option<usize>)> {
-        self.def.channels()
-    }
-
     /// Iterates over all transitions that can be admitted in the current state.
     ///
-    /// An admittable transition is characterized by the PG it executes on, the required action and the post-state
+    /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
     /// (the pre-state being necessarily the current state of the machine).
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
@@ -417,7 +416,7 @@ impl<'def, R: Rng> ChannelSystem<'def, R> {
                             |(channel, message)| {
                                 let (_, capacity) = self.def.channels[channel.0 as usize];
                                 let queue = &self.message_queue[channel.0 as usize];
-                                // Channel capacity must never be exeeded!
+                                // Channel capacity must never be exceeded!
                                 assert!(capacity.is_none_or(|cap| queue.len() <= cap));
                                 // NOTE FIXME currently handshake is unsupported
                                 !matches!(capacity, Some(0))
@@ -469,7 +468,7 @@ impl<'def, R: Rng> ChannelSystem<'def, R> {
         } else if let Some((channel, message)) = self.def.communication(action) {
             let (_, capacity) = self.def.channels[channel.0 as usize];
             let queue = &self.message_queue[channel.0 as usize];
-            // Channel capacity must never be exeeded!
+            // Channel capacity must never be exceeded!
             assert!(capacity.is_none_or(|cap| queue.len() <= cap));
             match message {
                 Message::Send if capacity.is_some_and(|cap| queue.len() >= cap) => {
@@ -650,18 +649,18 @@ mod tests {
 
     #[test]
     fn builder() {
-        let _cs = ChannelSystemBuilder::new();
+        let _cs: ChannelSystemBuilder<SmallRng> = ChannelSystemBuilder::new();
     }
 
     #[test]
     fn new_pg() {
-        let mut cs = ChannelSystemBuilder::new();
+        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
         let _ = cs.new_program_graph();
     }
 
     #[test]
     fn new_action() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::new();
+        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
         let pg = cs.new_program_graph();
         let _action = cs.new_action(pg)?;
         Ok(())
@@ -669,7 +668,7 @@ mod tests {
 
     #[test]
     fn new_var() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::new();
+        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
         let pg = cs.new_program_graph();
         let _var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
         let _var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
@@ -678,7 +677,7 @@ mod tests {
 
     #[test]
     fn add_effect() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::new();
+        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
         let pg = cs.new_program_graph();
         let action = cs.new_action(pg)?;
         let var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
@@ -696,7 +695,7 @@ mod tests {
 
     #[test]
     fn new_location() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::new();
+        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
         let pg = cs.new_program_graph();
         let initial = cs.new_initial_location(pg)?;
         let location = cs.new_location(pg)?;
@@ -706,7 +705,7 @@ mod tests {
 
     #[test]
     fn add_transition() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::new();
+        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
         let pg = cs.new_program_graph();
         let initial = cs.new_initial_location(pg)?;
         let action = cs.new_action(pg)?;
