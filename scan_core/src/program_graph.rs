@@ -195,10 +195,12 @@ enum Effect<R: Rng> {
     Receive(Var),
 }
 
+type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
+
 pub struct ProgramGraphDef<R: Rng> {
     initial_states: SmallVec<[Location; 8]>,
     effects: Vec<Effect<R>>,
-    locations: Vec<(Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>)>,
+    locations: Vec<LocationData>,
     // Time invariants of each location
     vars: Vec<Val>,
     // Number of clocks

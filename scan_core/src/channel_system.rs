@@ -278,6 +278,36 @@ pub enum EventType {
     ProbeFullQueue,
 }
 
+/// A definition object for a CS.
+/// It represents the abstract definition of a CS,
+/// which though cannot be run.
+///
+/// Use the [`ChannelSystemDef::new_instance`] to obtain a runnable CS object.
+/// Example:
+///
+/// ```
+/// # use scan_core::channel_system::ChannelSystemBuilder;
+/// # use rand::rngs::SmallRng;
+/// # use rand::SeedableRng;
+/// // Create and populate a CS builder object
+/// let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
+/// let pg_id = cs_builder.new_program_graph();
+/// let initial = cs_builder.new_initial_location(pg_id).expect("create new location");
+/// cs_builder.add_autonomous_transition(pg_id, initial, initial, None).expect("add transition");
+///
+/// // Build the builder object to get a CS definition object.
+/// let cs_def = cs_builder.build();
+///
+/// // Instantiate a CS with the previously built definition.
+/// let mut cs = cs_def.new_instance(SmallRng::from_os_rng());
+///
+/// // Perform the (unique) active transition available.
+/// let (pg_id_trans, e, mut post_locs) = cs.possible_transitions().last().expect("autonomous transition");
+/// assert_eq!(pg_id_trans, pg_id);
+/// let post_loc = post_locs.last().expect("post location").last().expect("post location");
+/// assert_eq!(post_loc, initial);
+/// cs.transition(pg_id, e, &[initial]).expect("transition is active");
+/// ```
 pub struct ChannelSystemDef<R: Rng> {
     channels: Vec<(Type, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,

@@ -1,6 +1,6 @@
 use super::{
-    Action, ActionIdx, Clock, EPSILON, Effect, FnExpression, Location, LocationIdx, PgError,
-    PgExpression, ProgramGraphDef, TimeConstraint, Var,
+    Action, ActionIdx, Clock, EPSILON, Effect, FnExpression, Location, LocationData, LocationIdx,
+    PgError, PgExpression, ProgramGraphDef, TimeConstraint, Var,
 };
 use crate::{
     DummyRng,
@@ -22,8 +22,9 @@ pub struct ProgramGraphBuilder<R: Rng> {
     // Effects are indexed by actions
     effects: Vec<Effect<R>>,
     // Transitions are indexed by locations
-    locations: Vec<(Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>)>,
     // Time invariants of each location
+    locations: Vec<LocationData>,
+    // Local variables with initial value.
     vars: Vec<Val>,
     // Number of clocks
     clocks: u16,
