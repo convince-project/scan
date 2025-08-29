@@ -19,9 +19,9 @@ boa_interner = "0.20.0"
 boa_parser = "0.20.0"
 log = { workspace = true }
 rand = { workspace = true }
-quick-xml = "0.38.0"
+quick-xml = "0.38.1"
 thiserror = { workspace = true }
-logos = "0.15.0"
+logos = "0.15.1"
 chumsky = "0.10.1"
 csv = { workspace = true }
 flate2 = { workspace = true }
