@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{Oracle, ScanDef, TransitionSystemDef};
+use scan_core::{Oracle, Scan, TransitionSystemDef};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -272,14 +272,13 @@ fn run_verification<E, Ts, O>(
     model: &str,
     args: &VerifyArgs,
     progress: Option<Bar>,
-    scan_def: &ScanDef<E, Ts, O>,
+    scan: &Scan<E, Ts, O>,
 ) -> anyhow::Result<Report>
 where
     Ts: TransitionSystemDef<E> + 'static,
     E: Clone + Send + Sync + 'static,
     O: Oracle + 'static,
 {
-    let scan = scan_def.new_instance();
     if let Some(bar) = progress {
         eprintln!(
             "Verifying {model} (-p {} -c {} -d {}) {:?}",
@@ -287,9 +286,9 @@ where
         );
         let report = std::thread::scope(|s| {
             s.spawn(|| {
-                bar.print_progress_bar(args.confidence, args.precision, &args.properties, &scan);
+                bar.print_progress_bar(args.confidence, args.precision, &args.properties, scan);
             });
-            args.verify(model.to_owned(), &scan)
+            args.verify(model.to_owned(), scan)
         })?;
         Ok(report)
     } else {
@@ -297,7 +296,7 @@ where
             "Verifying {model} (-p {} -c {} -d {}) {:?}...",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let report = args.verify(model.to_owned(), &scan)?;
+        let report = args.verify(model.to_owned(), scan)?;
         eprintln!(" done");
         Ok(report)
     }

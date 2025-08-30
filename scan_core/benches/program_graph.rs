@@ -1,11 +1,12 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use rand::rngs::mock::StepRng;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use scan_core::program_graph::*;
 use scan_core::*;
 
 #[inline(always)]
-fn run_to_completion(mut pg: ProgramGraph<StepRng>) {
-    let mut rng = StepRng::new(0, 1);
+fn run_to_completion(mut pg: ProgramGraph<SmallRng>) {
+    let mut rng = SmallRng::from_os_rng();
     while let Some((action, post)) = pg
         .possible_transitions()
         .filter_map(|(a, iter)| {
@@ -21,7 +22,7 @@ fn run_to_completion(mut pg: ProgramGraph<StepRng>) {
 }
 
 #[inline(always)]
-fn simple_pg() -> ProgramGraphDef<StepRng> {
+fn simple_pg() -> ProgramGraphDef<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -31,7 +32,7 @@ fn simple_pg() -> ProgramGraphDef<StepRng> {
 }
 
 #[inline(always)]
-fn condition_pg() -> ProgramGraphDef<StepRng> {
+fn condition_pg() -> ProgramGraphDef<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -62,7 +63,7 @@ fn condition_pg() -> ProgramGraphDef<StepRng> {
 }
 
 #[inline(always)]
-fn long_pg() -> ProgramGraphDef<StepRng> {
+fn long_pg() -> ProgramGraphDef<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let mut pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -75,7 +76,7 @@ fn long_pg() -> ProgramGraphDef<StepRng> {
 }
 
 #[inline(always)]
-fn counter_pg() -> ProgramGraphDef<StepRng> {
+fn counter_pg() -> ProgramGraphDef<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();

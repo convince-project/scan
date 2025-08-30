@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, ScanDef, Time, Tracer, TransitionSystemDef};
+use scan_core::{Oracle, Scan, Time, Tracer, TransitionSystemDef};
 
 const ALL_PROPS_ERR: &str =
     "the --all flag is incompatible with individually-specified properties.\n
@@ -52,7 +52,7 @@ impl TraceArgs {
     pub(crate) fn trace<E, Ts, O, Tr>(
         &self,
         // model: String,
-        scan_def: &ScanDef<E, Ts, O>,
+        scan: &Scan<E, Ts, O>,
         tracer: Tr,
     ) -> anyhow::Result<()>
     where
@@ -61,7 +61,6 @@ impl TraceArgs {
         O: Oracle,
         Tr: Tracer<E>,
     {
-        let scan = scan_def.new_instance();
         scan.trace(self.traces, tracer, self.duration, self.single_thread)?;
         Ok(())
     }

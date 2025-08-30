@@ -335,10 +335,10 @@ impl Parser {
                         {
                             let attrs = attrs(tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC])
                                 .context("failed to parse 'process' tag attributes")?;
-                            if let Some(moc) = attrs.get(ATTR_MOC) {
-                                if moc != "fsm" {
-                                    bail!("unknown moc {moc}");
-                                }
+                            if let Some(moc) = attrs.get(ATTR_MOC)
+                                && moc != "fsm"
+                            {
+                                bail!("unknown moc {moc}");
                             }
                             let process_id = attrs.get(ATTR_ID).unwrap().clone();
                             if self.process_list.contains_key(&process_id) {

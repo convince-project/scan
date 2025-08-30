@@ -76,7 +76,7 @@
 //! // Build the CS from its builder
 //! // The builder is always guaranteed to build a well-defined CS and building cannot fail
 //! let cs = cs_builder.build();
-//! let mut instance = cs.new_instance(SmallRng::from_os_rng());
+//! let mut instance = cs.new_instance();
 //!
 //! // Since the channel is empty, only pg_1 can transition (with send)
 //! {
@@ -299,7 +299,7 @@ pub enum EventType {
 /// let cs_def = cs_builder.build();
 ///
 /// // Instantiate a CS with the previously built definition.
-/// let mut cs = cs_def.new_instance(SmallRng::from_os_rng());
+/// let mut cs = cs_def.new_instance();
 ///
 /// // Perform the (unique) active transition available.
 /// let (pg_id_trans, e, mut post_locs) = cs.possible_transitions().last().expect("autonomous transition");
@@ -315,8 +315,8 @@ pub struct ChannelSystemDef<R: Rng> {
     program_graphs: Vec<ProgramGraphDef<R>>,
 }
 
-impl<R: Rng> ChannelSystemDef<R> {
-    pub fn new_instance<'def>(&'def self, rng: R) -> ChannelSystem<'def, R> {
+impl<R: Rng + SeedableRng> ChannelSystemDef<R> {
+    pub fn new_instance<'def>(&'def self) -> ChannelSystem<'def, R> {
         let message_queue = self
             .channels
             .iter()
@@ -329,7 +329,7 @@ impl<R: Rng> ChannelSystemDef<R> {
             })
             .collect();
         ChannelSystem {
-            rng,
+            rng: R::from_os_rng(),
             time: 0,
             program_graphs: Vec::from_iter(
                 self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
@@ -377,19 +377,7 @@ pub struct ChannelSystem<'def, R: Rng> {
     def: &'def ChannelSystemDef<R>,
 }
 
-impl<'def, R: Rng + Clone + SeedableRng> Clone for ChannelSystem<'def, R> {
-    fn clone(&self) -> Self {
-        Self {
-            rng: R::from_os_rng(),
-            time: self.time,
-            program_graphs: self.program_graphs.clone(),
-            message_queue: self.message_queue.clone(),
-            def: self.def,
-        }
-    }
-}
-
-impl<'def, R: Rng> ChannelSystem<'def, R> {
+impl<'def, R: Rng + SeedableRng> ChannelSystem<'def, R> {
     /// Returns the current time of the CS.
     #[inline(always)]
     pub fn time(&self) -> Time {
@@ -673,8 +661,6 @@ impl<'def, R: Rng> ChannelSystem<'def, R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::DummyRng;
-
     use super::*;
 
     #[test]
@@ -752,7 +738,7 @@ mod tests {
 
     #[test]
     fn add_communication() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::new();
+        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
         let ch = cs.new_channel(Type::Boolean, Some(1));
 
         let pg1 = cs.new_program_graph();
@@ -778,7 +764,7 @@ mod tests {
         cs.add_transition(pg2, initial2, receive, post2, None)?;
 
         let cs_def = cs.build();
-        let mut cs = cs_def.new_instance(DummyRng);
+        let mut cs = cs_def.new_instance();
         assert_eq!(cs.possible_transitions().count(), 1);
         assert_eq!(cs.def.communications_pg_idxs, vec![0, 2, 5]);
 

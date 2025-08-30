@@ -276,10 +276,10 @@ impl ModelBuilder {
                         .params
                         .insert(param.name.to_owned(), param_type.to_owned());
                     // Type parameters should not change type
-                    if let Some(prev_type) = prev_type {
-                        if prev_type != param_type {
-                            return Err(anyhow!("type parameter mismatch"));
-                        }
+                    if let Some(prev_type) = prev_type
+                        && prev_type != param_type
+                    {
+                        return Err(anyhow!("type parameter mismatch"));
                     }
                 }
                 Ok(())

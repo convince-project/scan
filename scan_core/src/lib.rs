@@ -16,13 +16,14 @@ pub mod program_graph;
 mod smc;
 mod transition_system;
 
+use core::marker::Sync;
 pub use grammar::*;
 use log::{info, trace};
 pub use model::*;
 pub use mtl::*;
 pub use pg_model::{PgModel, PgModelDef};
 pub use pmtl::*;
-use rand::RngCore;
+use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
@@ -52,6 +53,14 @@ impl RngCore for DummyRng {
     fn fill_bytes(&mut self, dst: &mut [u8]) {
         let _ = dst;
         panic!("DummyRng should never be called")
+    }
+}
+
+impl SeedableRng for DummyRng {
+    type Seed = [u8; 0];
+
+    fn from_seed(_seed: Self::Seed) -> Self {
+        Self
     }
 }
 
@@ -91,79 +100,41 @@ pub trait Oracle: Clone + Send + Sync {
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool>;
 }
 
-pub struct ScanDef<Event, Tsd, O>
+/// The main type to interface with the verification capabilities of SCAN.
+/// [`Scan`] holds the model, properties and other data necessary to run the verification process.
+/// The type of models and properties is abstracted through the [`TransitionSystem`] and [`Oracle`] traits,
+/// to provide a unified interface.
+pub struct Scan<Event, Tsd, O>
 where
     Tsd: TransitionSystemDef<Event>,
     O: Oracle,
 {
     tsd: Tsd,
     oracle: O,
-    _event: PhantomData<Event>,
-}
-
-impl<Event, Tsd, O> ScanDef<Event, Tsd, O>
-where
-    Tsd: TransitionSystemDef<Event>,
-    O: Oracle,
-{
-    pub fn new(tsd: Tsd, oracle: O) -> Self {
-        Self {
-            tsd,
-            oracle,
-            _event: PhantomData,
-        }
-    }
-
-    pub fn new_instance(&self) -> Scan<Event, Tsd::Ts<'_>, O> {
-        Scan {
-            ts: self.tsd.new_instance(),
-            oracle: self.oracle.clone(),
-            running: Arc::new(AtomicBool::new(false)),
-            successes: Arc::new(AtomicU32::new(0)),
-            failures: Arc::new(AtomicU32::new(0)),
-            violations: Arc::new(Mutex::new(Vec::new())),
-            _event: &PhantomData,
-        }
-    }
-}
-
-/// The main type to interface with the verification capabilities of SCAN.
-/// [`Scan`] holds the model, properties and other data necessary to run the verification process.
-/// The type of models and properties is abstracted through the [`TransitionSystem`] and [`Oracle`] traits,
-/// to provide a unified interface.
-#[derive(Clone)]
-pub struct Scan<'def, Event, Ts, O>
-where
-    Ts: TransitionSystem<'def, Event>,
-    O: Oracle,
-{
-    ts: Ts,
-    oracle: O,
     running: Arc<AtomicBool>,
     successes: Arc<AtomicU32>,
     failures: Arc<AtomicU32>,
     violations: Arc<Mutex<Vec<u32>>>,
-    _event: &'def PhantomData<Event>,
+    _event: PhantomData<Event>,
 }
 
-impl<'def, Event, T, O> Scan<'def, Event, T, O>
+impl<Event, Tsd, O> Scan<Event, Tsd, O>
 where
-    T: TransitionSystem<'def, Event>,
+    Tsd: TransitionSystemDef<Event> + Sync,
     O: Oracle,
     Event: Sync,
 {
-    // /// Creadte a new [`Scan`] object with the given [`TransitionSystem`] and [`Oracle`].
-    // pub fn new(ts: &'def T, oracle: &'def O) -> Self {
-    //     Self {
-    //         ts: Arc::new(ts),
-    //         oracle: Arc::new(oracle),
-    //         running: Arc::new(AtomicBool::new(false)),
-    //         successes: Arc::new(AtomicU32::new(0)),
-    //         failures: Arc::new(AtomicU32::new(0)),
-    //         violations: Arc::new(Mutex::new(Vec::new())),
-    //         _event: PhantomData,
-    //     }
-    // }
+    pub fn new(tsd: Tsd, oracle: O) -> Self {
+        Scan {
+            tsd,
+            oracle,
+            running: Arc::new(AtomicBool::new(false)),
+            successes: Arc::new(AtomicU32::new(0)),
+            failures: Arc::new(AtomicU32::new(0)),
+            violations: Arc::new(Mutex::new(Vec::new())),
+            _event: PhantomData,
+        }
+    }
 
     /// Tells whether a verification task is currently running.
     pub fn running(&self) -> bool {
@@ -189,13 +160,13 @@ where
     /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
     /// and a state [`Mutex`] to be updated with the results as they are produced.
     pub fn adaptive(
-        &self,
+        &'_ self,
         confidence: f64,
         precision: f64,
         // length: usize,
         duration: Time,
         single_thread: bool,
-    ) -> Result<(), T::Err> {
+    ) -> Result<(), <Tsd::Ts<'_> as TransitionSystem<'_, Event>>::Err> {
         // Cannot return as a T::Err, don't want to include anyhow in scan_core
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -205,7 +176,7 @@ where
         self.violations.lock().unwrap().clear();
         self.running.store(true, Ordering::Relaxed);
 
-        let ts = self.ts.clone();
+        // let ts = self.ts.clone();
         let oracle = self.oracle.clone();
         let running = self.running.clone();
         let successes = self.successes.clone();
@@ -216,9 +187,10 @@ where
             let local_successes;
             let local_failures;
 
-            let result = ts
-                .clone()
-                .experiment(duration, oracle.clone(), running.clone())?;
+            let result =
+                self.tsd
+                    .new_instance()
+                    .experiment(duration, oracle.clone(), running.clone())?;
             if !running.load(Ordering::Relaxed) {
                 return Ok(());
             }
@@ -288,20 +260,20 @@ where
 
     /// Produces and saves the traces for the given number of runs.
     pub fn trace<P>(
-        &self,
+        &'_ self,
         runs: usize,
         tracer: P,
         duration: Time,
         single_thread: bool,
-    ) -> Result<(), T::Err>
+    ) -> Result<(), <Tsd::Ts<'_> as TransitionSystem<'_, Event>>::Err>
     where
         P: Tracer<Event>,
     {
-        let ts = self.ts.clone();
-        let oracle = self.oracle.clone();
-        let tracer = tracer.clone();
-
-        let trace = || ts.clone().trace(duration, oracle.clone(), tracer.clone());
+        let trace = || {
+            self.tsd
+                .new_instance()
+                .trace(duration, self.oracle.clone(), tracer.clone())
+        };
 
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("verification starting");

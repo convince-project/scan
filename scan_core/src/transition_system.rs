@@ -1,4 +1,5 @@
 use crate::{Oracle, RunOutcome, Time, Val};
+use core::marker::Sync;
 use log::trace;
 use std::{
     error::Error,
@@ -34,7 +35,7 @@ impl<A> Tracer<A> for () {
     fn finalize(self, _outcome: &RunOutcome) {}
 }
 
-pub trait TransitionSystemDef<Event> {
+pub trait TransitionSystemDef<Event>: Sync {
     type Ts<'def>: TransitionSystem<'def, Event>
     where
         Self: 'def;
@@ -45,7 +46,7 @@ pub trait TransitionSystemDef<Event> {
 /// Trait for types that can execute like a transition system.
 ///
 /// Together with an [`Oracle`], it provides a verifiable system.
-pub trait TransitionSystem<'def, Event>: Clone + Send + Sync {
+pub trait TransitionSystem<'def, Event>: Send + Sync {
     /// The Error type for the [`TransitionSystem`].
     type Err: Error + Clone + Send + Sync + 'static;
 
@@ -64,7 +65,7 @@ pub trait TransitionSystem<'def, Event>: Clone + Send + Sync {
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
     fn experiment<O: Oracle>(
-        mut self,
+        &mut self,
         duration: Time,
         mut oracle: O,
         running: Arc<AtomicBool>,
@@ -101,7 +102,7 @@ pub trait TransitionSystem<'def, Event>: Clone + Send + Sync {
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
     /// and process the execution trace via the given [`Tracer`].
     fn trace<P, O: Oracle>(
-        mut self,
+        &mut self,
         duration: Time,
         mut oracle: O,
         mut tracer: P,

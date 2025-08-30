@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time, TransitionSystem};
+use scan_core::{Oracle, Scan, Time, TransitionSystemDef};
 
 use super::report::Report;
 
@@ -81,13 +81,13 @@ impl VerifyArgs {
         }
     }
 
-    pub(crate) fn verify<'def, E, Ts, O>(
+    pub(crate) fn verify<E, Ts, O>(
         &self,
         model: String,
-        scan: &Scan<'def, E, Ts, O>,
+        scan: &Scan<E, Ts, O>,
     ) -> anyhow::Result<Report>
     where
-        Ts: TransitionSystem<'def, E>,
+        Ts: TransitionSystemDef<E>,
         E: Clone + Send + Sync,
         O: Oracle,
     {

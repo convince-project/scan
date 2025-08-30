@@ -52,19 +52,6 @@ impl<R: Rng + SeedableRng> CsModelDef<R> {
         self.predicates.push(predicate);
         self.predicates.len() - 1
     }
-
-    // /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
-    // ///
-    // /// Predicates have to be passed all at once,
-    // /// as it is not possible to add any further ones after the [`CsModel`] has been initialized.
-    // pub fn build(self, rng: R) -> CsModel<'def, R> {
-    //     CsModel {
-    //         cs: self.cs.new_instance(rng),
-    //         ports: self.ports,
-    //         predicates: Arc::new(self.predicates),
-    //         last_event: None,
-    //     }
-    // }
 }
 
 impl<R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystemDef<Event> for CsModelDef<R> {
@@ -75,7 +62,7 @@ impl<R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystemDef<Event> for 
 
     fn new_instance<'def>(&'def self) -> CsModel<'def, R> {
         CsModel {
-            cs: self.cs.new_instance(R::from_os_rng()),
+            cs: self.cs.new_instance(),
             ports: self.ports.clone(),
             predicates: &self.predicates,
             last_event: None,
@@ -87,7 +74,7 @@ impl<R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystemDef<Event> for 
 ///
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
-#[derive(Clone)]
+// #[derive(Clone)]
 pub struct CsModel<'def, R: Rng + SeedableRng> {
     cs: ChannelSystem<'def, R>,
     ports: Vec<Option<Val>>,
@@ -103,16 +90,14 @@ impl<'def, R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<'def, Ev
 
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {
         let event = self.cs.montecarlo_execution(duration);
-        if let Some(ref event) = event {
-            if let EventType::Send(ref val) = event.event_type {
-                if let Some(port) = self
-                    .ports
-                    .get_mut(u16::from(event.channel) as usize)
-                    .expect("port must exist")
-                {
-                    *port = val.clone();
-                }
-            }
+        if let Some(ref event) = event
+            && let EventType::Send(ref val) = event.event_type
+            && let Some(port) = self
+                .ports
+                .get_mut(u16::from(event.channel) as usize)
+                .expect("port must exist")
+        {
+            *port = val.clone();
         }
         self.last_event = event.clone();
         Ok(event)
