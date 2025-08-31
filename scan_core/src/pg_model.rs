@@ -1,7 +1,7 @@
 use rand::{Rng, SeedableRng};
 
 use crate::{
-    DummyRng, FnExpression, TransitionSystem, TransitionSystemDef, Val,
+    Definition, DummyRng, FnExpression, TransitionSystem, Val,
     program_graph::{Action, PgError, PgExpression, ProgramGraph, ProgramGraphDef, Var},
 };
 
@@ -31,8 +31,8 @@ impl<R: Rng> PgModelDef<R> {
     }
 }
 
-impl<R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystemDef<Action> for PgModelDef<R> {
-    type Ts<'def>
+impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for PgModelDef<R> {
+    type I<'def>
         = PgModel<'def, R>
     where
         R: 'def;
@@ -52,17 +52,6 @@ pub struct PgModel<'def, R: Rng> {
     rng: R,
     global_vars: &'def [Var],
     predicates: &'def [FnExpression<Var, DummyRng>],
-}
-
-impl<R: Rng + SeedableRng + Clone> Clone for PgModel<'_, R> {
-    fn clone(&self) -> Self {
-        Self {
-            pg: self.pg.clone(),
-            rng: R::from_os_rng(),
-            global_vars: self.global_vars,
-            predicates: self.predicates,
-        }
-    }
 }
 
 impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem<'def, Action>

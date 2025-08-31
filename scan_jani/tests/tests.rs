@@ -37,6 +37,5 @@ fn leader_sync_5_4() {
 
 fn test(path: &Path) {
     let (scan, ..) = scan_jani::load(path, &[]).expect("load");
-    scan.adaptive(0.95, 0.01, 10000, true)
-        .expect("verification");
+    scan.adaptive(0.95, 0.01, 10000).expect("verification");
 }

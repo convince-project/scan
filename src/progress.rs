@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use scan_core::{Oracle, Scan, adaptive_bound, okamoto_bound};
+use scan_core::{Definition, Oracle, Scan, TransitionSystem, adaptive_bound, okamoto_bound};
 
 /// Verification progress bar
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -20,7 +20,8 @@ impl Bar {
         guarantees: &[String],
         scan: &Scan<E, Ts, O>,
     ) where
-        Ts: scan_core::TransitionSystemDef<E>,
+        Ts: Definition + Sync,
+        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
         E: Send + Sync,
         O: Oracle,
     {

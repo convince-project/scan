@@ -35,14 +35,6 @@ impl<A> Tracer<A> for () {
     fn finalize(self, _outcome: &RunOutcome) {}
 }
 
-pub trait TransitionSystemDef<Event>: Sync {
-    type Ts<'def>: TransitionSystem<'def, Event>
-    where
-        Self: 'def;
-
-    fn new_instance<'def>(&'def self) -> Self::Ts<'def>;
-}
-
 /// Trait for types that can execute like a transition system.
 ///
 /// Together with an [`Oracle`], it provides a verifiable system.

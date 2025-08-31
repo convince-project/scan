@@ -1,5 +1,5 @@
 use crate::channel_system::{Channel, ChannelSystem, ChannelSystemDef, CsError, Event, EventType};
-use crate::{DummyRng, Expression, FnExpression, Time, TransitionSystem, TransitionSystemDef, Val};
+use crate::{Definition, DummyRng, Expression, FnExpression, Time, TransitionSystem, Val};
 use rand::{Rng, SeedableRng};
 
 /// An atomic variable for [`crate::Pmtl`] formulae.
@@ -54,8 +54,8 @@ impl<R: Rng + SeedableRng> CsModelDef<R> {
     }
 }
 
-impl<R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystemDef<Event> for CsModelDef<R> {
-    type Ts<'def>
+impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for CsModelDef<R> {
+    type I<'def>
         = CsModel<'def, R>
     where
         R: 'def;

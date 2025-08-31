@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time, TransitionSystemDef};
+use scan_core::{Definition, Oracle, Scan, Time, TransitionSystem};
 
 use super::report::Report;
 
@@ -87,16 +87,16 @@ impl VerifyArgs {
         scan: &Scan<E, Ts, O>,
     ) -> anyhow::Result<Report>
     where
-        Ts: TransitionSystemDef<E>,
+        Ts: Definition + Sync,
+        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
         E: Clone + Send + Sync,
         O: Oracle,
     {
-        scan.adaptive(
-            self.confidence,
-            self.precision,
-            self.duration,
-            self.single_thread,
-        )?;
+        if self.single_thread {
+            scan.adaptive(self.confidence, self.precision, self.duration)?;
+        } else {
+            scan.par_adaptive(self.confidence, self.precision, self.duration)?;
+        }
         let successes = scan.successes();
         let failures = scan.failures();
         let runs = successes + failures;

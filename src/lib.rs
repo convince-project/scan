@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{Oracle, Scan, TransitionSystemDef};
+use scan_core::{Definition, Oracle, Scan, TransitionSystem};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -275,7 +275,8 @@ fn run_verification<E, Ts, O>(
     scan: &Scan<E, Ts, O>,
 ) -> anyhow::Result<Report>
 where
-    Ts: TransitionSystemDef<E> + 'static,
+    Ts: Definition + 'static + Sync,
+    for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
     E: Clone + Send + Sync + 'static,
     O: Oracle + 'static,
 {

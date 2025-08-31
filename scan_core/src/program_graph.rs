@@ -23,6 +23,7 @@
 //!
 //! ```
 //! # use scan_core::program_graph::{ProgramGraphBuilder, Location};
+//! # use scan_core::Definition;
 //! # use smallvec::smallvec;
 //! // Create a new PG builder
 //! let mut pg_builder = ProgramGraphBuilder::new();
@@ -79,7 +80,7 @@
 
 mod builder;
 
-use crate::{DummyRng, Time, grammar::*};
+use crate::{Definition, DummyRng, Time, grammar::*};
 pub use builder::*;
 use rand::{Rng, SeedableRng, seq::IteratorRandom};
 use smallvec::SmallVec;
@@ -207,8 +208,13 @@ pub struct ProgramGraphDef<R: Rng> {
     clocks: u16,
 }
 
-impl<R: Rng> ProgramGraphDef<R> {
-    pub fn new_instance<'def>(&'def self) -> ProgramGraph<'def, R> {
+impl<R: Rng> Definition for ProgramGraphDef<R> {
+    type I<'def>
+        = ProgramGraph<'def, R>
+    where
+        R: 'def;
+
+    fn new_instance<'def>(&'def self) -> Self::I<'def> {
         ProgramGraph {
             current_states: self.initial_states.clone(),
             vars: self.vars.clone(),
@@ -216,7 +222,9 @@ impl<R: Rng> ProgramGraphDef<R> {
             clocks: vec![0; self.clocks as usize],
         }
     }
+}
 
+impl<R: Rng> ProgramGraphDef<R> {
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
     // Returns error if the transition does not exist.
@@ -269,6 +277,7 @@ impl<'def, R: Rng> ProgramGraph<'def, R> {
     ///
     /// ```
     /// # use scan_core::program_graph::ProgramGraphBuilder;
+    /// # use scan_core::Definition;
     /// # use rand::rngs::SmallRng;
     /// // Create a new PG builder
     /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();

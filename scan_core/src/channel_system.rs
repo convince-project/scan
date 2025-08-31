@@ -116,7 +116,7 @@ mod builder;
 use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
 };
-use crate::{Time, grammar::*};
+use crate::{Definition, Time, grammar::*};
 pub use builder::*;
 use rand::rngs::SmallRng;
 use rand::seq::IteratorRandom;
@@ -287,6 +287,7 @@ pub enum EventType {
 ///
 /// ```
 /// # use scan_core::channel_system::ChannelSystemBuilder;
+/// # use scan_core::Definition;
 /// # use rand::rngs::SmallRng;
 /// # use rand::SeedableRng;
 /// // Create and populate a CS builder object
@@ -315,8 +316,13 @@ pub struct ChannelSystemDef<R: Rng> {
     program_graphs: Vec<ProgramGraphDef<R>>,
 }
 
-impl<R: Rng + SeedableRng> ChannelSystemDef<R> {
-    pub fn new_instance<'def>(&'def self) -> ChannelSystem<'def, R> {
+impl<R: Rng + SeedableRng> Definition for ChannelSystemDef<R> {
+    type I<'def>
+        = ChannelSystem<'def, R>
+    where
+        R: 'def;
+
+    fn new_instance<'def>(&'def self) -> Self::I<'def> {
         let message_queue = self
             .channels
             .iter()
@@ -338,7 +344,9 @@ impl<R: Rng + SeedableRng> ChannelSystemDef<R> {
             def: self,
         }
     }
+}
 
+impl<R: Rng + SeedableRng> ChannelSystemDef<R> {
     #[inline(always)]
     fn communication(&self, action: Action) -> Option<(Channel, Message)> {
         let pg_id = action.0;
