@@ -47,6 +47,8 @@ impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for PgModelDef<R> {
     }
 }
 
+/// A model based on a single [`ProgramGraph`],
+/// with predicates over the PG's variables.
 pub struct PgModel<'def, R: Rng> {
     pg: ProgramGraph<'def, R>,
     rng: R,

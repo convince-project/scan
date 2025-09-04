@@ -279,10 +279,9 @@ pub enum EventType {
 }
 
 /// A definition object for a CS.
-/// It represents the abstract definition of a CS,
-/// which though cannot be run.
+/// It represents the abstract definition of a CS.
 ///
-/// Use the [`ChannelSystemDef::new_instance`] to obtain a runnable CS object.
+/// Use the [`<ChannelSystemDef as Definition>::new_instance`] to obtain a runnable CS object.
 /// Example:
 ///
 /// ```
@@ -362,6 +361,8 @@ impl<R: Rng + SeedableRng> ChannelSystemDef<R> {
             .ok()
     }
 
+    /// Returns the list of defined channels, given as the pair of their type and capacity
+    /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
     pub fn channels(&self) -> &Vec<(Type, Option<usize>)> {
         &self.channels
     }

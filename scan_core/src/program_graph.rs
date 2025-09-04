@@ -198,6 +198,35 @@ enum Effect<R: Rng> {
 
 type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 
+/// A definition object for a PG.
+/// It represents the abstract definition of a PG.
+///
+/// Use the [`<ProgramGraphDef as Definition>::new_instance`] to obtain a runnable PG object.
+/// Example:
+///
+/// ```
+/// # use scan_core::program_graph::ProgramGraphBuilder;
+/// # use scan_core::Definition;
+/// # use rand::rngs::SmallRng;
+/// # use rand::SeedableRng;
+/// // Create and populate a PG builder object
+/// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+/// let initial = pg_builder.new_initial_location();
+/// pg_builder.add_autonomous_transition(initial, initial, None).expect("add transition");
+///
+/// // Build the builder object to get a PG definition object.
+/// let pg_def = pg_builder.build();
+///
+/// // Instantiate a PG with the previously built definition.
+/// let mut pg = pg_def.new_instance();
+///
+/// // Perform the (unique) active transition available.
+/// let (e, mut post_locs) = pg.possible_transitions().last().expect("autonomous transition");
+/// let post_loc = post_locs.last().expect("post location").last().expect("post location");
+/// assert_eq!(post_loc, initial);
+/// let mut rng = SmallRng::from_os_rng();
+/// pg.transition(e, &[initial], &mut rng).expect("transition is active");
+/// ```
 pub struct ProgramGraphDef<R: Rng> {
     initial_states: SmallVec<[Location; 8]>,
     effects: Vec<Effect<R>>,
