@@ -281,6 +281,10 @@ pub enum EventType {
 /// A definition object for a CS.
 /// It represents the abstract definition of a CS.
 ///
+/// The only way to produce a [`ChannelSystemDef`] is through a [`ChannelSystemBuilder`].
+/// This guarantees that there are no type errors involved in the definition of its PGs,
+/// and thus the CS will always be in a consistent state.
+///
 /// Use the [`<ChannelSystemDef as Definition>::new_instance`] to obtain a runnable CS object.
 /// Example:
 ///
@@ -374,10 +378,6 @@ impl<R: Rng + SeedableRng> ChannelSystemDef<R> {
 /// meaning that it is not possible to introduce new PGs or modifying them, or add new channels.
 /// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
 /// because only the internal state needs to be duplicated.
-///
-/// The only way to produce a [`ChannelSystem`] is through a [`ChannelSystemBuilder`].
-/// This guarantees that there are no type errors involved in the definition of its PGs,
-/// and thus the CS will always be in a consistent state.
 pub struct ChannelSystem<'def, R: Rng> {
     rng: R,
     time: Time,

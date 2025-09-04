@@ -201,6 +201,10 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// A definition object for a PG.
 /// It represents the abstract definition of a PG.
 ///
+/// The only way to produce a [`ProgramGraphDef`] is through a [`ProgramGraphBuilder`].
+/// This guarantees that there are no type errors involved in the definition of action's effects and transitions' guards,
+/// and thus the PG will always be in a consistent state.
+///
 /// Use the [`<ProgramGraphDef as Definition>::new_instance`] to obtain a runnable PG object.
 /// Example:
 ///
@@ -289,10 +293,6 @@ impl<R: Rng> ProgramGraphDef<R> {
 /// meaning that it is not possible to introduce new locations, actions, variables, etc.
 /// Though, this restriction makes it so that cloning the [`ProgramGraph`] is cheap,
 /// because only the internal state needs to be duplicated.
-///
-/// The only way to produce a [`ProgramGraph`] is through a [`ProgramGraphBuilder`].
-/// This guarantees that there are no type errors involved in the definition of action's effects and transitions' guards,
-/// and thus the PG will always be in a consistent state.
 #[derive(Clone)]
 pub struct ProgramGraph<'def, R: Rng> {
     current_states: SmallVec<[Location; 8]>,
