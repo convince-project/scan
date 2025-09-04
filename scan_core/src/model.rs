@@ -54,7 +54,7 @@ impl<R: Rng + SeedableRng> CsModelDef<R> {
     }
 }
 
-impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for CsModelDef<R> {
+impl<R: Rng + SeedableRng> Definition for CsModelDef<R> {
     type I<'def>
         = CsModel<'def, R>
     where
@@ -83,9 +83,7 @@ pub struct CsModel<'def, R: Rng + SeedableRng> {
     last_event: Option<Event>,
 }
 
-impl<'def, R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<'def, Event>
-    for CsModel<'def, R>
-{
+impl<'def, R: Rng + SeedableRng> TransitionSystem<'def, Event> for CsModel<'def, R> {
     type Err = CsError;
 
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {

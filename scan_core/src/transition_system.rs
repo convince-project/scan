@@ -38,9 +38,9 @@ impl<A> Tracer<A> for () {
 /// Trait for types that can execute like a transition system.
 ///
 /// Together with an [`Oracle`], it provides a verifiable system.
-pub trait TransitionSystem<'def, Event>: Send + Sync {
+pub trait TransitionSystem<'def, Event> {
     /// The Error type for the [`TransitionSystem`].
-    type Err: Error + Clone + Send + Sync + 'static;
+    type Err: Error + Send + Sync + 'static;
 
     /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
     /// unless the execution is terminated and no further events can happen.
@@ -62,13 +62,11 @@ pub trait TransitionSystem<'def, Event>: Send + Sync {
         mut oracle: O,
         running: Arc<AtomicBool>,
     ) -> Result<RunOutcome, Self::Err> {
-        // let mut current_len = 0;
         trace!("new run starting");
         let mut time;
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
         while let Some(_event) = self.transition(duration)? {
-            // current_len += 1;
             labels.clear();
             labels.extend(self.labels());
             time = self.time();

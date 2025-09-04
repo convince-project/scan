@@ -81,15 +81,15 @@ impl VerifyArgs {
         }
     }
 
-    pub(crate) fn verify<E, Ts, O>(
+    pub(crate) fn verify<Event, Ts, O>(
         &self,
         model: String,
-        scan: &Scan<E, Ts, O>,
+        scan: &Scan<Event, Ts, O>,
     ) -> anyhow::Result<Report>
     where
         Ts: Definition + Sync,
-        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
-        E: Clone + Send + Sync,
+        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, Event>,
+        Event: Clone + Sync,
         O: Oracle,
     {
         if self.single_thread {

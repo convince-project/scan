@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 pub mod channel_system;
+mod dummy_rng;
 mod grammar;
 mod model;
 mod mtl;
+mod oracle;
 mod pg_model;
 mod pmtl;
 pub mod program_graph;
@@ -17,13 +19,14 @@ mod smc;
 mod transition_system;
 
 use core::marker::Sync;
+use dummy_rng::DummyRng;
 pub use grammar::*;
 use log::{info, trace};
 pub use model::*;
 pub use mtl::*;
+pub use oracle::Oracle;
 pub use pg_model::{PgModel, PgModelDef};
 pub use pmtl::*;
-use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
@@ -39,31 +42,6 @@ pub use transition_system::*;
 /// The type that represents time.
 pub type Time = u32;
 
-struct DummyRng;
-
-impl RngCore for DummyRng {
-    fn next_u32(&mut self) -> u32 {
-        panic!("DummyRng should never be called")
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        panic!("DummyRng should never be called")
-    }
-
-    fn fill_bytes(&mut self, dst: &mut [u8]) {
-        let _ = dst;
-        panic!("DummyRng should never be called")
-    }
-}
-
-impl SeedableRng for DummyRng {
-    type Seed = [u8; 0];
-
-    fn from_seed(_seed: Self::Seed) -> Self {
-        Self
-    }
-}
-
 /// The possible outcomes of a model execution.
 #[derive(Debug, Clone)]
 pub enum RunOutcome {
@@ -78,33 +56,15 @@ pub enum RunOutcome {
     Verified(Vec<bool>),
 }
 
-/// Implementators are induced by a temporal property.
-/// They can update their internal state when fed a new state of a trace,
-/// and establish whether their corresponding property holds on such trace.
-pub trait Oracle: Clone + Send + Sync {
-    /// Update the internal state of the [`Oracle`] with the latest state of a temporal trace.
-    fn update(&mut self, state: &[bool], time: Time);
-
-    /// Returns the values of the "assume" properties,
-    /// if already determined.
-    fn output_assumes(&self) -> impl Iterator<Item = Option<bool>>;
-
-    /// Returns the values of the "guarantee" properties,
-    /// if already determined.
-    fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>>;
-
-    /// As the trace ends, the values of the "assume" properties is determined to be either true or false.
-    fn final_output_assumes(&self) -> impl Iterator<Item = bool>;
-
-    /// As the trace ends, the values of the "guarantee" properties is determined to be either true or false.
-    fn final_output_guarantees(&self) -> impl Iterator<Item = bool>;
-}
-
+/// An object that can be immutably borrowed to spawn instances of its instance type,
+/// provided that the instances have (at most) the same lifetime of their [`Definition`].
 pub trait Definition {
+    /// The instance type, parametrized by the lifetime of its [`Definition`].
     type I<'def>
     where
         Self: 'def;
 
+    /// Immutably borrow the [`Definition`] and spawn a new instance with (at most) the same lifetime.
     fn new_instance<'def>(&'def self) -> Self::I<'def>;
 }
 
@@ -133,6 +93,7 @@ where
     for<'def> D::I<'def>: TransitionSystem<'def, Event>,
     O: Oracle,
 {
+    /// Create new [`Scan`] object, based on the given [`Definition`] of a [`TransitionSystem`] and [`Oracle`].
     pub fn new(tsd: D, oracle: O) -> Self {
         Scan {
             tsd,

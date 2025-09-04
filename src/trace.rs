@@ -51,14 +51,13 @@ impl TraceArgs {
 
     pub(crate) fn trace<E, Ts, O, Tr>(
         &self,
-        // model: String,
         scan: &Scan<E, Ts, O>,
         tracer: Tr,
     ) -> anyhow::Result<()>
     where
         Ts: Definition + Sync,
         for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
-        E: Clone + Send + Sync,
+        E: Clone + Sync,
         O: Oracle,
         Tr: Tracer<E>,
     {
