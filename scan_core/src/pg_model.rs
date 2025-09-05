@@ -2,23 +2,19 @@ use rand::{Rng, SeedableRng};
 
 use crate::{
     Definition, DummyRng, FnExpression, TransitionSystem, Val,
-    program_graph::{Action, PgError, PgExpression, ProgramGraph, ProgramGraphDef, Var},
+    program_graph::{Action, PgError, PgExpression, ProgramGraph, ProgramGraphRun, Var},
 };
 
 /// A [`ProgramGraph`]-based model implementing [`TransitionSystem`] with synchronous concurrency.
-pub struct PgModelDef<R: Rng> {
-    pg: ProgramGraphDef<R>,
+pub struct PgModel<R: Rng> {
+    pg: ProgramGraph<R>,
     global_vars: Vec<Var>,
     predicates: Vec<FnExpression<Var, DummyRng>>,
 }
 
-impl<R: Rng> PgModelDef<R> {
+impl<R: Rng> PgModel<R> {
     /// Create a new [`PgModel`] from the given [`ProgramGraph`] and predicates over its internal state.
-    pub fn new(
-        pg: ProgramGraphDef<R>,
-        global_vars: Vec<Var>,
-        predicates: Vec<PgExpression>,
-    ) -> Self {
+    pub fn new(pg: ProgramGraph<R>, global_vars: Vec<Var>, predicates: Vec<PgExpression>) -> Self {
         let predicates = predicates
             .into_iter()
             .map(Into::<FnExpression<Var, DummyRng>>::into)
@@ -31,14 +27,14 @@ impl<R: Rng> PgModelDef<R> {
     }
 }
 
-impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for PgModelDef<R> {
+impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for PgModel<R> {
     type I<'def>
-        = PgModel<'def, R>
+        = PgModelRun<'def, R>
     where
         R: 'def;
 
-    fn new_instance<'def>(&'def self) -> PgModel<'def, R> {
-        PgModel {
+    fn new_instance<'def>(&'def self) -> PgModelRun<'def, R> {
+        PgModelRun {
             pg: self.pg.new_instance(),
             rng: R::from_os_rng(),
             global_vars: &self.global_vars,
@@ -49,15 +45,15 @@ impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for PgModelDef<R> {
 
 /// A model based on a single [`ProgramGraph`],
 /// with predicates over the PG's variables.
-pub struct PgModel<'def, R: Rng> {
-    pg: ProgramGraph<'def, R>,
+pub struct PgModelRun<'def, R: Rng> {
+    pg: ProgramGraphRun<'def, R>,
     rng: R,
     global_vars: &'def [Var],
     predicates: &'def [FnExpression<Var, DummyRng>],
 }
 
 impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem<'def, Action>
-    for PgModel<'def, R>
+    for PgModelRun<'def, R>
 {
     type Err = PgError;
 

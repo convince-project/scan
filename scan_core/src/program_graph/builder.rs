@@ -1,6 +1,6 @@
 use super::{
     Action, ActionIdx, Clock, EPSILON, Effect, FnExpression, Location, LocationData, LocationIdx,
-    PgError, PgExpression, ProgramGraphDef, TimeConstraint, Var,
+    PgError, PgExpression, ProgramGraph, TimeConstraint, Var,
 };
 use crate::{
     DummyRng,
@@ -496,7 +496,7 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// Since the construction of the builder is already checked ad every step,
     /// this method cannot fail.
-    pub fn build(mut self) -> ProgramGraphDef<R> {
+    pub fn build(mut self) -> ProgramGraph<R> {
         // Since vectors of effects and transitions will become immutable,
         // they should be shrunk to take as little space as possible
         self.effects.iter_mut().for_each(|effect| {
@@ -545,7 +545,7 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
         );
         self.initial_states.sort_unstable();
         self.initial_states.shrink_to_fit();
-        ProgramGraphDef {
+        ProgramGraph {
             initial_states: self.initial_states,
             effects: self.effects.into_iter().collect(),
             locations,

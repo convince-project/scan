@@ -1,10 +1,10 @@
 use super::{
-    Action, Channel, ChannelSystemDef, Clock, CsError, Location, Message, PgError, PgExpression,
-    PgId, ProgramGraphBuilder, TimeConstraint, Var,
+    Action, Channel, ChannelSystem, Clock, CsError, Location, Message, PgError, PgExpression, PgId,
+    ProgramGraphBuilder, TimeConstraint, Var,
 };
 use crate::Expression;
 use crate::grammar::Type;
-use crate::program_graph::ProgramGraphDef;
+use crate::program_graph::ProgramGraph;
 use log::info;
 use rand::Rng;
 use std::collections::HashMap;
@@ -665,13 +665,13 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
     }
 
     /// Produces a [`ChannelSystem`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
-    pub fn build(mut self) -> ChannelSystemDef<R> {
+    pub fn build(mut self) -> ChannelSystem<R> {
         info!(
             "create Channel System with:\n{} Program Graphs\n{} channels",
             self.program_graphs.len(),
             self.channels.len(),
         );
-        let mut program_graphs: Vec<ProgramGraphDef<R>> = self
+        let mut program_graphs: Vec<ProgramGraph<R>> = self
             .program_graphs
             .into_iter()
             .map(|builder| builder.build())
@@ -708,7 +708,7 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
         }
         assert_eq!(communications_pg_idxs.len(), program_graphs.len() + 1);
 
-        ChannelSystemDef {
+        ChannelSystem {
             channels: self.channels,
             communications,
             communications_pg_idxs,

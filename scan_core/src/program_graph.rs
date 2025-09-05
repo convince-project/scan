@@ -80,7 +80,7 @@
 
 mod builder;
 
-use crate::{Definition, DummyRng, Time, grammar::*};
+use crate::{DummyRng, Time, grammar::*};
 pub use builder::*;
 use rand::{Rng, SeedableRng, seq::IteratorRandom};
 use smallvec::SmallVec;
@@ -201,11 +201,10 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// A definition object for a PG.
 /// It represents the abstract definition of a PG.
 ///
-/// The only way to produce a [`ProgramGraphDef`] is through a [`ProgramGraphBuilder`].
+/// The only way to produce a [`ProgramGraph`] is through a [`ProgramGraphBuilder`].
 /// This guarantees that there are no type errors involved in the definition of action's effects and transitions' guards,
 /// and thus the PG will always be in a consistent state.
 ///
-/// Use the [`<ProgramGraphDef as Definition>::new_instance`] to obtain a runnable PG object.
 /// Example:
 ///
 /// ```
@@ -231,7 +230,7 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// let mut rng = SmallRng::from_os_rng();
 /// pg.transition(e, &[initial], &mut rng).expect("transition is active");
 /// ```
-pub struct ProgramGraphDef<R: Rng> {
+pub struct ProgramGraph<R: Rng> {
     initial_states: SmallVec<[Location; 8]>,
     effects: Vec<Effect<R>>,
     locations: Vec<LocationData>,
@@ -241,23 +240,16 @@ pub struct ProgramGraphDef<R: Rng> {
     clocks: u16,
 }
 
-impl<R: Rng> Definition for ProgramGraphDef<R> {
-    type I<'def>
-        = ProgramGraph<'def, R>
-    where
-        R: 'def;
-
-    fn new_instance<'def>(&'def self) -> Self::I<'def> {
-        ProgramGraph {
+impl<R: Rng> ProgramGraph<R> {
+    pub(crate) fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def, R> {
+        ProgramGraphRun {
             current_states: self.initial_states.clone(),
             vars: self.vars.clone(),
             def: self,
             clocks: vec![0; self.clocks as usize],
         }
     }
-}
 
-impl<R: Rng> ProgramGraphDef<R> {
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
     // Returns error if the transition does not exist.
@@ -291,41 +283,41 @@ impl<R: Rng> ProgramGraphDef<R> {
 ///
 /// The structure of the PG cannot be changed,
 /// meaning that it is not possible to introduce new locations, actions, variables, etc.
-/// Though, this restriction makes it so that cloning the [`ProgramGraph`] is cheap,
+/// Though, this restriction makes it so that cloning the [`ProgramGraphRun`] is cheap,
 /// because only the internal state needs to be duplicated.
 #[derive(Clone)]
-pub struct ProgramGraph<'def, R: Rng> {
+pub(crate) struct ProgramGraphRun<'def, R: Rng> {
     current_states: SmallVec<[Location; 8]>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
-    def: &'def ProgramGraphDef<R>,
+    def: &'def ProgramGraph<R>,
 }
 
-impl<'def, R: Rng> ProgramGraph<'def, R> {
-    /// Returns the current location.
-    ///
-    /// ```
-    /// # use scan_core::program_graph::ProgramGraphBuilder;
-    /// # use scan_core::Definition;
-    /// # use rand::rngs::SmallRng;
-    /// // Create a new PG builder
-    /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
-    ///
-    /// // The builder is initialized with an initial location
-    /// let initial_loc = pg_builder.new_initial_location();
-    ///
-    /// // Build the PG from its builder
-    /// // The builder is always guaranteed to build a well-defined PG and building cannot fail
-    /// let pg = pg_builder.build();
-    /// let instance = pg.new_instance();
-    ///
-    /// // Execution starts in the initial location
-    /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
-    /// ```
-    #[inline(always)]
-    pub fn current_states(&self) -> &SmallVec<[Location; 8]> {
-        &self.current_states
-    }
+impl<'def, R: Rng> ProgramGraphRun<'def, R> {
+    // /// Returns the current location.
+    // ///
+    // /// ```
+    // /// # use scan_core::program_graph::ProgramGraphBuilder;
+    // /// # use scan_core::Definition;
+    // /// # use rand::rngs::SmallRng;
+    // /// // Create a new PG builder
+    // /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+    // ///
+    // /// // The builder is initialized with an initial location
+    // /// let initial_loc = pg_builder.new_initial_location();
+    // ///
+    // /// // Build the PG from its builder
+    // /// // The builder is always guaranteed to build a well-defined PG and building cannot fail
+    // /// let pg = pg_builder.build();
+    // /// let instance = pg.new_instance();
+    // ///
+    // /// // Execution starts in the initial location
+    // /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
+    // /// ```
+    // #[inline(always)]
+    // pub fn current_states(&self) -> &SmallVec<[Location; 8]> {
+    //     &self.current_states
+    // }
 
     /// Iterates over all transitions that can be admitted in the current state.
     ///
@@ -655,7 +647,7 @@ impl<'def, R: Rng> ProgramGraph<'def, R> {
     }
 }
 
-impl<'def, R: Rng + SeedableRng> ProgramGraph<'def, R> {
+impl<'def, R: Rng + SeedableRng> ProgramGraphRun<'def, R> {
     pub(crate) fn montecarlo(&mut self, rng: &mut R) -> Option<Action> {
         let mut rand = R::from_rng(rng);
         if let Some((action, post_states)) = self
@@ -704,7 +696,7 @@ mod tests {
             .expect("add transition");
         let pg_def = builder.build();
         let mut pg = pg_def.new_instance();
-        assert_eq!(pg.current_states().as_slice(), &[initial]);
+        // assert_eq!(pg.current_states().as_slice(), &[initial]);
         // assert_eq!(
         //     pg.possible_transitions().collect::<Vec<_>>(),
         //     vec![(

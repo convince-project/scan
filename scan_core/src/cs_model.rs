@@ -1,4 +1,4 @@
-use crate::channel_system::{Channel, ChannelSystem, ChannelSystemDef, CsError, Event, EventType};
+use crate::channel_system::{Channel, ChannelSystem, ChannelSystemRun, CsError, Event, EventType};
 use crate::{Definition, DummyRng, Expression, FnExpression, Time, TransitionSystem, Val};
 use rand::{Rng, SeedableRng};
 
@@ -11,16 +11,16 @@ pub enum Atom {
     Event(Event),
 }
 
-/// A builder type for [`CsModel`].
-pub struct CsModelDef<R: Rng + SeedableRng> {
-    cs: ChannelSystemDef<R>,
+/// A definition type that instances new [`CsModelRun`].
+pub struct CsModel<R: Rng + SeedableRng> {
+    cs: ChannelSystem<R>,
     ports: Vec<Option<Val>>,
     predicates: Vec<FnExpression<Atom, DummyRng>>,
 }
 
-impl<R: Rng + SeedableRng> CsModelDef<R> {
+impl<R: Rng + SeedableRng> CsModel<R> {
     /// Creates new [`CsModelBuilder`] from a [`ChannelSystem`].
-    pub fn new(cs: ChannelSystemDef<R>) -> Self {
+    pub fn new(cs: ChannelSystem<R>) -> Self {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         Self {
             ports: vec![None; cs.channels().len()],
@@ -54,14 +54,14 @@ impl<R: Rng + SeedableRng> CsModelDef<R> {
     }
 }
 
-impl<R: Rng + SeedableRng> Definition for CsModelDef<R> {
+impl<R: Rng + SeedableRng> Definition for CsModel<R> {
     type I<'def>
-        = CsModel<'def, R>
+        = CsModelRun<'def, R>
     where
         R: 'def;
 
-    fn new_instance<'def>(&'def self) -> CsModel<'def, R> {
-        CsModel {
+    fn new_instance<'def>(&'def self) -> CsModelRun<'def, R> {
+        CsModelRun {
             cs: self.cs.new_instance(),
             ports: self.ports.clone(),
             predicates: &self.predicates,
@@ -74,16 +74,15 @@ impl<R: Rng + SeedableRng> Definition for CsModelDef<R> {
 ///
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
-// #[derive(Clone)]
-pub struct CsModel<'def, R: Rng + SeedableRng> {
-    cs: ChannelSystem<'def, R>,
+pub struct CsModelRun<'def, R: Rng + SeedableRng> {
+    cs: ChannelSystemRun<'def, R>,
     ports: Vec<Option<Val>>,
     // TODO: predicates should not use rng
     predicates: &'def Vec<FnExpression<Atom, DummyRng>>,
     last_event: Option<Event>,
 }
 
-impl<'def, R: Rng + SeedableRng> TransitionSystem<'def, Event> for CsModel<'def, R> {
+impl<'def, R: Rng + SeedableRng> TransitionSystem<'def, Event> for CsModelRun<'def, R> {
     type Err = CsError;
 
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {

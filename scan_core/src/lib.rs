@@ -7,9 +7,9 @@
 #![forbid(unsafe_code)]
 
 pub mod channel_system;
+mod cs_model;
 mod dummy_rng;
 mod grammar;
-mod model;
 mod mtl;
 mod oracle;
 mod pg_model;
@@ -19,14 +19,14 @@ mod smc;
 mod transition_system;
 
 use core::marker::Sync;
+pub use cs_model::{CsModel, CsModelRun};
 use dummy_rng::DummyRng;
-pub use grammar::*;
+pub use grammar::{Expression, Float, Integer, Type, TypeError, Val};
 use log::{info, trace};
-pub use model::*;
-pub use mtl::*;
+pub use mtl::{Mtl, MtlOracle};
 pub use oracle::Oracle;
-pub use pg_model::{PgModel, PgModelDef};
-pub use pmtl::*;
+pub use pg_model::{PgModel, PgModelRun};
+pub use pmtl::{Pmtl, PmtlOracle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{

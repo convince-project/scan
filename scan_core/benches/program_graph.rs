@@ -5,7 +5,7 @@ use scan_core::program_graph::*;
 use scan_core::*;
 
 #[inline(always)]
-fn run_to_completion(mut pg: ProgramGraph<SmallRng>) {
+fn run_to_completion(mut pg: ProgramGraphRun<SmallRng>) {
     let mut rng = SmallRng::from_os_rng();
     while let Some((action, post)) = pg
         .possible_transitions()
@@ -22,7 +22,7 @@ fn run_to_completion(mut pg: ProgramGraph<SmallRng>) {
 }
 
 #[inline(always)]
-fn simple_pg() -> ProgramGraphDef<SmallRng> {
+fn simple_pg() -> ProgramGraph<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -32,7 +32,7 @@ fn simple_pg() -> ProgramGraphDef<SmallRng> {
 }
 
 #[inline(always)]
-fn condition_pg() -> ProgramGraphDef<SmallRng> {
+fn condition_pg() -> ProgramGraph<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -63,7 +63,7 @@ fn condition_pg() -> ProgramGraphDef<SmallRng> {
 }
 
 #[inline(always)]
-fn long_pg() -> ProgramGraphDef<SmallRng> {
+fn long_pg() -> ProgramGraph<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let mut pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -76,7 +76,7 @@ fn long_pg() -> ProgramGraphDef<SmallRng> {
 }
 
 #[inline(always)]
-fn counter_pg() -> ProgramGraphDef<SmallRng> {
+fn counter_pg() -> ProgramGraph<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();

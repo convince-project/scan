@@ -7,7 +7,7 @@ use anyhow::{Context, anyhow, bail};
 use either::Either;
 use rand::rngs::SmallRng;
 use scan_core::{
-    Mtl, MtlOracle, PgModelDef, Type, TypeError, Val,
+    Mtl, MtlOracle, PgModel, Type, TypeError, Val,
     program_graph::{self, Action, PgExpression, ProgramGraphBuilder, Var},
 };
 use std::{
@@ -25,7 +25,7 @@ pub struct JaniModelData {
 pub(crate) fn build(
     jani_model: Model,
     properties: &[String],
-) -> anyhow::Result<(PgModelDef<SmallRng>, MtlOracle, JaniModelData)> {
+) -> anyhow::Result<(PgModel<SmallRng>, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
     builder.build(jani_model, properties)
 }
@@ -47,7 +47,7 @@ impl JaniBuilder {
         mut self,
         mut jani_model: Model,
         properties: &[String],
-    ) -> anyhow::Result<(PgModelDef<SmallRng>, MtlOracle, JaniModelData)> {
+    ) -> anyhow::Result<(PgModel<SmallRng>, MtlOracle, JaniModelData)> {
         // WARN Necessary "normalization" process
         self.init(&mut jani_model)?;
         self.normalize(&mut jani_model)
@@ -140,7 +140,7 @@ impl JaniBuilder {
 
         // Finalize, build and return everything
         let pg_def = pgb.build();
-        let pg_model = PgModelDef::new(pg_def, global_vars, predicates);
+        let pg_model = PgModel::new(pg_def, global_vars, predicates);
         let data = self.data(jani_model);
         Ok((pg_model, oracle, data))
     }
