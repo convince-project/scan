@@ -1,5 +1,6 @@
 use crate::channel_system::{Channel, ChannelSystem, ChannelSystemRun, CsError, Event, EventType};
-use crate::{Definition, DummyRng, Expression, FnExpression, Time, TransitionSystem, Val};
+use crate::grammar::FnExpression;
+use crate::{Definition, DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
 use rand::{Rng, SeedableRng};
 
 /// An atomic variable for [`crate::Pmtl`] formulae.
@@ -82,7 +83,7 @@ pub struct CsModelRun<'def, R: Rng + SeedableRng> {
     last_event: Option<Event>,
 }
 
-impl<'def, R: Rng + SeedableRng> TransitionSystem<'def, Event> for CsModelRun<'def, R> {
+impl<'def, R: Rng + SeedableRng> TransitionSystem<Event> for CsModelRun<'def, R> {
     type Err = CsError;
 
     fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {

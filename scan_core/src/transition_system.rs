@@ -38,7 +38,7 @@ impl<A> Tracer<A> for () {
 /// Trait for types that can execute like a transition system.
 ///
 /// Together with an [`Oracle`], it provides a verifiable system.
-pub trait TransitionSystem<'def, Event> {
+pub trait TransitionSystem<Event> {
     /// The Error type for the [`TransitionSystem`].
     type Err: Error + Send + Sync + 'static;
 

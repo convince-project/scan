@@ -88,7 +88,7 @@ impl VerifyArgs {
     ) -> anyhow::Result<Report>
     where
         Ts: Definition + Sync,
-        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, Event>,
+        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
         Event: Clone + Sync,
         O: Oracle,
     {

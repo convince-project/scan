@@ -13,16 +13,16 @@ pub(crate) enum Bar {
 }
 
 impl Bar {
-    pub(crate) fn print_progress_bar<E, Ts, O>(
+    pub(crate) fn print_progress_bar<Event, Ts, O>(
         &self,
         confidence: f64,
         precision: f64,
         guarantees: &[String],
-        scan: &Scan<E, Ts, O>,
+        scan: &Scan<Event, Ts, O>,
     ) where
         Ts: Definition + Sync,
-        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
-        E: Send + Sync,
+        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
+        Event: Send + Sync,
         O: Oracle,
     {
         const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";

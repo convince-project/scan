@@ -268,16 +268,16 @@ fn validate_properties(props: &[String], all_props: &[String]) -> anyhow::Result
     }
 }
 
-fn run_verification<E, Ts, O>(
+fn run_verification<Event, Ts, O>(
     model: &str,
     args: &VerifyArgs,
     progress: Option<Bar>,
-    scan: &Scan<E, Ts, O>,
+    scan: &Scan<Event, Ts, O>,
 ) -> anyhow::Result<Report>
 where
     Ts: Definition + 'static + Sync,
-    for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
-    E: Clone + Send + Sync + 'static,
+    for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
+    Event: Clone + Send + Sync + 'static,
     O: Oracle + 'static,
 {
     if let Some(bar) = progress {
