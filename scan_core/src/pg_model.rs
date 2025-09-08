@@ -1,7 +1,8 @@
 use rand::{Rng, SeedableRng};
 
 use crate::{
-    Definition, DummyRng, FnExpression, TransitionSystem, Val,
+    Definition, DummyRng, TransitionSystem, Val,
+    grammar::FnExpression,
     program_graph::{Action, PgError, PgExpression, ProgramGraph, ProgramGraphRun, Var},
 };
 
@@ -52,7 +53,7 @@ pub struct PgModelRun<'def, R: Rng> {
     predicates: &'def [FnExpression<Var, DummyRng>],
 }
 
-impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem<'def, Action>
+impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem<Action>
     for PgModelRun<'def, R>
 {
     type Err = PgError;

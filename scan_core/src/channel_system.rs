@@ -321,18 +321,17 @@ pub struct ChannelSystem<R: Rng> {
 
 impl<R: Rng + SeedableRng> ChannelSystem<R> {
     pub(crate) fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def, R> {
-        let message_queue = self
-            .channels
-            .iter()
-            .map(|(_, cap)| cap.map_or_else(VecDeque::default, VecDeque::with_capacity))
-            .collect();
         ChannelSystemRun {
             rng: R::from_os_rng(),
             time: 0,
             program_graphs: Vec::from_iter(
                 self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
             ),
-            message_queue,
+            message_queue: Vec::from_iter(
+                self.channels
+                    .iter()
+                    .map(|(_, cap)| cap.map_or_else(VecDeque::new, VecDeque::with_capacity)),
+            ),
             def: self,
         }
     }

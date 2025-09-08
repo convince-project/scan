@@ -49,17 +49,17 @@ impl TraceArgs {
         }
     }
 
-    pub(crate) fn trace<E, Ts, O, Tr>(
+    pub(crate) fn trace<Event, Ts, O, Tr>(
         &self,
-        scan: &Scan<E, Ts, O>,
+        scan: &Scan<Event, Ts, O>,
         tracer: Tr,
     ) -> anyhow::Result<()>
     where
         Ts: Definition + Sync,
-        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<'def, E>,
-        E: Clone + Sync,
+        for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
+        Event: Clone + Sync,
         O: Oracle,
-        Tr: Tracer<E>,
+        Tr: Tracer<Event>,
     {
         if self.single_thread {
             scan.traces(self.traces, tracer, self.duration)?;

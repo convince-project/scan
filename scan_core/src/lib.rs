@@ -19,13 +19,13 @@ mod smc;
 mod transition_system;
 
 use core::marker::Sync;
-pub use cs_model::{CsModel, CsModelRun};
+pub use cs_model::{Atom, CsModel};
 use dummy_rng::DummyRng;
 pub use grammar::{Expression, Float, Integer, Type, TypeError, Val};
 use log::{info, trace};
 pub use mtl::{Mtl, MtlOracle};
 pub use oracle::Oracle;
-pub use pg_model::{PgModel, PgModelRun};
+pub use pg_model::PgModel;
 pub use pmtl::{Pmtl, PmtlOracle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
@@ -37,7 +37,7 @@ use std::{
     },
     time::Instant,
 };
-pub use transition_system::*;
+pub use transition_system::{Tracer, TransitionSystem};
 
 /// The type that represents time.
 pub type Time = u32;
@@ -75,7 +75,7 @@ pub trait Definition {
 pub struct Scan<Event, D, O>
 where
     D: Definition,
-    for<'def> D::I<'def>: TransitionSystem<'def, Event>,
+    for<'def> D::I<'def>: TransitionSystem<Event>,
     O: Oracle,
 {
     tsd: D,
@@ -90,7 +90,7 @@ where
 impl<Event, D, O> Scan<Event, D, O>
 where
     D: Definition,
-    for<'def> D::I<'def>: TransitionSystem<'def, Event>,
+    for<'def> D::I<'def>: TransitionSystem<Event>,
     O: Oracle,
 {
     /// Create new [`Scan`] object, based on the given [`Definition`] of a [`TransitionSystem`] and [`Oracle`].
@@ -138,7 +138,7 @@ where
         confidence: f64,
         precision: f64,
         duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<'_, Event>>::Err> {
+    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err> {
         let local_successes;
         let local_failures;
 
@@ -197,7 +197,7 @@ where
         confidence: f64,
         precision: f64,
         duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<'_, Event>>::Err> {
+    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err> {
         // Cannot return as a T::Err, don't want to include anyhow in scan_core
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -223,7 +223,7 @@ where
         &'_ self,
         tracer: P,
         duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<'_, Event>>::Err>
+    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err>
     where
         P: Tracer<Event>,
     {
@@ -238,7 +238,7 @@ where
         runs: usize,
         tracer: P,
         duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<'_, Event>>::Err>
+    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err>
     where
         P: Tracer<Event>,
     {
@@ -258,7 +258,7 @@ where
 impl<Event, D, O> Scan<Event, D, O>
 where
     D: Definition + Sync,
-    for<'def> D::I<'def>: TransitionSystem<'def, Event>,
+    for<'def> D::I<'def>: TransitionSystem<Event>,
     O: Oracle,
     Event: Sync,
 {
@@ -270,7 +270,7 @@ where
         confidence: f64,
         precision: f64,
         duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<'_, Event>>::Err> {
+    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err> {
         // Cannot return as a T::Err, don't want to include anyhow in scan_core
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -299,7 +299,7 @@ where
         runs: usize,
         tracer: P,
         duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<'_, Event>>::Err>
+    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err>
     where
         P: Tracer<Event>,
     {
