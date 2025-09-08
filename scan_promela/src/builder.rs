@@ -187,28 +187,49 @@ impl Builder {
                 Module::Trace(trace) => Self::visit_trace(&trace, cs_builder, gctx)?,
                 Module::Utype(ut) => Self::visit_utype(&ut, gctx)?,
                 Module::DeclList(dl) => Self::visit_decl_list(&dl, cs_builder, gctx)?,
+
                 _ => return Err(BuilderError::UnsupportedModule(format!("{:?}", module))),
             }
         }
         Ok(())
     }
 
-    /// Handles a list of global declarations (`DeclList`).
-    ///
-    /// Note: This implementation creates a dummy PG to host the global variables, as SCAN
-    /// requires all variables to belong to a PG. This is a known limitation that prevents
-    /// true variable sharing.
+    /// Handles a top-level DeclList.
+    /// Policy: only `chan` declarations are allowed at top level; any global var is rejected.
     fn visit_decl_list(
         dl: &DeclList,
         cs: &mut ChannelSystemBuilder<SmallRng>,
         gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
+        // ---- pre-scan: ensure ALL decls are channels ----
+        for one in &dl.decls {
+            match one {
+                OneDecl::Var(vd) => {
+                    if !matches!(vd.typename, Typename::Chan) {
+                        return Err(BuilderError::UnsupportedDeclList(
+                            "Top-level DeclList must contain only `chan` declarations; \
+                            global variables are not supported (SCAN does not provide shared variables across Program Graphs)."
+                                .into(),
+                        ));
+                    }
+                }
+                // Other decl-kinds are not allowed at top level either
+                _ => {
+                    return Err(BuilderError::UnsupportedDeclList(
+                        "Top-level DeclList supports only `chan` declarations."
+                            .into(),
+                    ));
+                }
+            }
+        }
+
+        // ---- creation ----
+        // We still reuse the existing per-PG helper by allocating a dummy PG.
+        // Channels in SCAN are global, so this is safe; no Vars are created here.
         let pg = cs.new_program_graph();
-        let _ = cs
-            .new_initial_location(pg)
+        cs.new_initial_location(pg)
             .map_err(|_| BuilderError::UnsupportedDeclList("initial location".into()))?;
 
-        // Temporary *local* context
         let mut lctx = PgCtx {
             cs,
             pg,
@@ -217,14 +238,12 @@ impl Builder {
             chans: HashMap::new(),
         };
 
-        for decl in dl.decls.iter() {
-            let created = Self::visit_one_decl(decl, &mut lctx, gctx)?;
-            // Copy the newly created identifiers into the actual global context.
-            for (name, v) in created {
-                gctx.vars.insert(name, v);
-                gctx.types.insert(v, lctx.type_vars[&v].clone());
-            }
+        for decl in &dl.decls {
+            // visit_one_decl will create channels and register them in gctx.chans
+            // (it returns an empty map for channels; no Vars are produced here).
+            let _ = Self::visit_one_decl(decl, &mut lctx, gctx)?;
         }
+
         Ok(())
     }
 

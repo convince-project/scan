@@ -1,5 +1,5 @@
-pub use main::builder::*;
-pub use main::*;
+pub use scan_promela::builder::*;
+pub use scan_promela::*;
 
 // helper functions for tests
 pub fn name(id: &str) -> Name {

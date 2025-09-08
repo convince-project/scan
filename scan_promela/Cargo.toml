@@ -1,5 +1,5 @@
 [package]
-name = "main"
+name = "scan_promela"
 version = "1.87.0"
 edition = "2024"
 
@@ -16,10 +16,3 @@ regex = "1"
 scan_core = {git = "https://github.com/convince-project/scan.git", package="scan_core"}
 rand = { version = "0.9.1", features = ["small_rng"] }
 log = "0.4"
-
-[lib]
-path = "src/main/lib.rs"
-
-[[bin]]
-name = "main"
-path = "src/main/main.rs"

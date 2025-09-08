@@ -1,8 +1,8 @@
 use lrlex::lrlex_mod;
 use lrpar::lrpar_mod;
 
-lrlex_mod!("main/spinv.l");
-lrpar_mod!("main/spinv4.y");
+lrlex_mod!("spinv.l");
+lrpar_mod!("spinv4.y");
 
 #[path = "builder.rs"]
 pub mod builder;

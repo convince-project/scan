@@ -1,4 +1,5 @@
-use main::*;
+use scan_promela::*;
+pub use builder::*;
 mod common;
 mod support {
     pub use crate::common::*;
@@ -109,7 +110,7 @@ fn global_decl_list() {
         false,
     ));
 
-    assert!(Builder::create_channel_system(vec![global, q]).is_ok());
+    assert!(Builder::create_channel_system(vec![global, q]).is_err());
 }
 
 // test 6
@@ -518,21 +519,75 @@ fn if_choice_blocks_and_executes() {
     let mut cs = Builder::create_channel_system(vec![p_mod]).expect("build");
 
     // (1) all’inizio è abilitata SOLO l’opzione x==0
-    {
-        let mut it = cs.possible_transitions();
-        let (pg, _act, _) = it.next().expect("one enabled guard");
-        assert!(it.next().is_none());
-        assert_eq!(u16::from(pg), 0); // unico PG: quello di P
-    }
+    let (enabled_count, mut enabled_info) = {
+        let mut enabled_count = 0usize;
+        let mut enabled_info = None;
 
-    // eseguo la transizione ----------------------------------------------------
-    let (pg, act, mut alts) = cs.possible_transitions().next().unwrap();
-    let post = alts.next().unwrap().collect::<Vec<_>>();
-    drop(alts); // chiudo l’iteratore
-    cs.transition(pg, act, &post).unwrap();
+        for (pg_id, action, post_sets) in cs.possible_transitions() {
+            for (alt_idx, locs_iter) in post_sets.enumerate() {
+                // raccogli le destinazioni per questa alternativa
+                let locs: Vec<CsLoc> = locs_iter.collect();
+                if !locs.is_empty() {
+                    enabled_count += 1;
+                    // tieni una qualunque opzione abilitata per eseguirla dopo
+                    enabled_info = Some((pg_id, action, alt_idx, locs));
+                }
+            }
+        }
 
-    // (2) ora x==1, quindi NESSUNA guardia è abilitata
-    assert_eq!(cs.possible_transitions().count(), 0);
+        (enabled_count, enabled_info)
+    };
+    assert_eq!(enabled_count, 1, "deve essere abilitata solo la guardia x==0");
+
+    // dopo la prima transition (choose) ci sarà ancora 1 transizione abilitata (l’assegnamento)
+    let (pg, act, locs) = cs
+        .possible_transitions()
+        .find_map(|(pg, act, mut alts)| {
+            let l = alts.next()?.collect::<Vec<_>>();
+            Some((pg, act, l))
+        })
+        .unwrap();
+    cs.transition(pg, act, &locs).unwrap();
+
+    let enabled1 = cs
+        .possible_transitions()
+        .filter_map(|(_, _, mut alts)| alts.next())
+        .count();
+    assert_eq!(enabled1, 1); // l’assegnamento x=1
+
+    // esegui l’assegnamento
+    let (pg, act, locs) = cs
+        .possible_transitions()
+        .find_map(|(pg, act, mut alts)| {
+            let l = alts.next()?.collect::<Vec<_>>();
+            Some((pg, act, l))
+        })
+        .unwrap();
+    cs.transition(pg, act, &locs).unwrap();
+
+    // ora è abilitata la transizione di close verso exit
+    let enabled2 = cs
+        .possible_transitions()
+        .filter_map(|(_, _, mut alts)| alts.next())
+        .count();
+    assert_eq!(enabled2, 1);
+
+    // esegui il close → exit
+    let (pg, act, locs) = cs
+        .possible_transitions()
+        .find_map(|(pg, act, mut alts)| {
+            let l = alts.next()?.collect::<Vec<_>>();
+            Some((pg, act, l))
+        })
+        .unwrap();
+    cs.transition(pg, act, &locs).unwrap();
+
+    // finalmente 0
+    let enabled_end = cs
+        .possible_transitions()
+        .filter_map(|(_, _, mut alts)| alts.next())
+        .count();
+    assert_eq!(enabled_end, 0);
 }
 
 // test 15
@@ -545,7 +600,7 @@ fn if_two_true_guards_nondet() {
     let x_decl = decl_int("x");
     let seq_true1 = Sequence {
         steps: vec![
-            Step::Statement(Box::new(Stmnt::Expr(Box::new(AnyExpr::Default))), None),
+            Step::Statement(Box::new(Stmnt::Expr(Box::new(AnyExpr::Const(Box::new(Const::Skip))))), None),
             Step::Statement(
                 Box::new(Stmnt::Assign(Box::new(Assign::new(
                     varref("x"),
@@ -558,7 +613,7 @@ fn if_two_true_guards_nondet() {
     };
     let seq_true2 = Sequence {
         steps: vec![
-            Step::Statement(Box::new(Stmnt::Expr(Box::new(AnyExpr::Default))), None),
+            Step::Statement(Box::new(Stmnt::Expr(Box::new(AnyExpr::Const(Box::new(Const::Skip))))), None),
             Step::Statement(
                 Box::new(Stmnt::Assign(Box::new(Assign::new(
                     varref("x"),

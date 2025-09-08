@@ -13,8 +13,8 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-lrlex_mod!("main/spinv.l");
-lrpar_mod!("main/spinv4.y");
+lrlex_mod!("spinv.l");
+lrpar_mod!("spinv4.y");
 
 pub mod builder;
 use crate::builder::Builder;

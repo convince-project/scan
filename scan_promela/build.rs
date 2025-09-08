@@ -1,6 +1,6 @@
 use cfgrammar::yacc::YaccKind;
 use lrlex::CTLexerBuilder;
-use std::env;
+use std::path::PathBuf;
 
 fn main() {
     //     env::set_var("RUST_BACKTRACE", "0");
@@ -23,42 +23,29 @@ fn main() {
             }
         };
     */
+
+    let grammar_path = PathBuf::from("spinv4.y");
+    let lexer_path   = PathBuf::from("spinv.l");
+
     // Build the lexer and parser with proper error handling
-    let lexer_builder = match CTLexerBuilder::new()
-        .lrpar_config(|ctp| {
-            println!("Inizializzazione di lrpar_config...");
-            let result = ctp
-                .yacckind(YaccKind::Grmtools)
-                .grammar_in_src_dir(r".\main\spinv4.y")
-                .map_err(|e| format!("Errore nella configurazione della grammatica: {}", e));
-
-            match result {
-                Ok(_) => println!("Configurazione della grammatica riuscita"),
-                Err(ref e) => println!("Errore nella configurazione della grammatica: {}", e),
-            }
-
-            result.unwrap_or_else(|_| {
-                eprintln!("Errore nel unwrap della grammatica");
-                std::process::exit(1);
-            })
+    let builder = CTLexerBuilder::new()
+        .lrpar_config(move |ctp| {
+            ctp.yacckind(YaccKind::Grmtools)
+              .grammar_in_src_dir(&grammar_path)
+              .unwrap_or_else(|e| {
+                  eprintln!("Errore nella configurazione della grammatica: {e}");
+                  std::process::exit(1);
+              })
         })
-        .lexer_in_src_dir(r".\main\spinv.l")
-        .map_err(|e| {
-            println!("Errore durante l'inizializzazione del lexer: {}", e);
-            format!("Errore nell'inizializzazione del lexer: {}", e)
-        }) {
-        Ok(builder) => builder,
-        Err(e) => {
-            eprintln!("{}", e);
+        .lexer_in_src_dir(&lexer_path)
+        .unwrap_or_else(|e| {
+            eprintln!("Errore nell'inizializzazione del lexer: {e}");
             std::process::exit(1);
-        }
-    };
+        });
 
-    match lexer_builder.build() {
-        Ok(_) => println!("Build completata con successo"),
-        Err(e) => {
-            eprintln!("Errore durante la build del lexer e parser: {:?}", e);
-            std::process::exit(1);
-        }
-    }
+    builder.build().unwrap_or_else(|e| {
+        eprintln!("Errore durante la build del lexer e parser: {e:?}");
+        std::process::exit(1);
+    });
+
 }

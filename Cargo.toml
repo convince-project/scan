@@ -23,7 +23,7 @@ panic = "abort"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = ["scan_core", "scan_scxml", "scan_jani"]
+members = ["scan_core", "scan_scxml", "scan_jani", "scan_promela"]
 
 [workspace.dependencies]
 anyhow = "1.0.98"
