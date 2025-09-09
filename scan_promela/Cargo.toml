@@ -13,6 +13,6 @@ cfgrammar = "0.13"
 lrlex = "0.13.10"
 lrpar = "0.13.10"
 regex = "1"
-scan_core = {git = "https://github.com/convince-project/scan.git", package="scan_core"}
+scan_core = { path="../scan_core" }
 rand = { version = "0.9.1", features = ["small_rng"] }
 log = "0.4"
