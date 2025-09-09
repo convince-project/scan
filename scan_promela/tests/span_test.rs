@@ -1,5 +1,5 @@
-use scan_promela::*;
 pub use builder::*;
+use scan_promela::*;
 mod common;
 mod support {
     pub use crate::common::*;
@@ -537,7 +537,10 @@ fn if_choice_blocks_and_executes() {
 
         (enabled_count, enabled_info)
     };
-    assert_eq!(enabled_count, 1, "deve essere abilitata solo la guardia x==0");
+    assert_eq!(
+        enabled_count, 1,
+        "deve essere abilitata solo la guardia x==0"
+    );
 
     // dopo la prima transition (choose) ci sarà ancora 1 transizione abilitata (l’assegnamento)
     let (pg, act, locs) = cs
@@ -600,7 +603,10 @@ fn if_two_true_guards_nondet() {
     let x_decl = decl_int("x");
     let seq_true1 = Sequence {
         steps: vec![
-            Step::Statement(Box::new(Stmnt::Expr(Box::new(AnyExpr::Const(Box::new(Const::Skip))))), None),
+            Step::Statement(
+                Box::new(Stmnt::Expr(Box::new(AnyExpr::Const(Box::new(Const::Skip))))),
+                None,
+            ),
             Step::Statement(
                 Box::new(Stmnt::Assign(Box::new(Assign::new(
                     varref("x"),
@@ -613,7 +619,10 @@ fn if_two_true_guards_nondet() {
     };
     let seq_true2 = Sequence {
         steps: vec![
-            Step::Statement(Box::new(Stmnt::Expr(Box::new(AnyExpr::Const(Box::new(Const::Skip))))), None),
+            Step::Statement(
+                Box::new(Stmnt::Expr(Box::new(AnyExpr::Const(Box::new(Const::Skip))))),
+                None,
+            ),
             Step::Statement(
                 Box::new(Stmnt::Assign(Box::new(Assign::new(
                     varref("x"),

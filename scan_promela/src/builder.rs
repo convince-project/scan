@@ -216,8 +216,7 @@ impl Builder {
                 // Other decl-kinds are not allowed at top level either
                 _ => {
                     return Err(BuilderError::UnsupportedDeclList(
-                        "Top-level DeclList supports only `chan` declarations."
-                            .into(),
+                        "Top-level DeclList supports only `chan` declarations.".into(),
                     ));
                 }
             }

@@ -25,17 +25,17 @@ fn main() {
     */
 
     let grammar_path = PathBuf::from("spinv4.y");
-    let lexer_path   = PathBuf::from("spinv.l");
+    let lexer_path = PathBuf::from("spinv.l");
 
     // Build the lexer and parser with proper error handling
     let builder = CTLexerBuilder::new()
         .lrpar_config(move |ctp| {
             ctp.yacckind(YaccKind::Grmtools)
-              .grammar_in_src_dir(&grammar_path)
-              .unwrap_or_else(|e| {
-                  eprintln!("Errore nella configurazione della grammatica: {e}");
-                  std::process::exit(1);
-              })
+                .grammar_in_src_dir(&grammar_path)
+                .unwrap_or_else(|e| {
+                    eprintln!("Errore nella configurazione della grammatica: {e}");
+                    std::process::exit(1);
+                })
         })
         .lexer_in_src_dir(&lexer_path)
         .unwrap_or_else(|e| {
@@ -47,5 +47,4 @@ fn main() {
         eprintln!("Errore durante la build del lexer e parser: {e:?}");
         std::process::exit(1);
     });
-
 }
