@@ -3,7 +3,9 @@ use rand::{Rng, SeedableRng};
 use crate::{
     Definition, DummyRng, TransitionSystem, Val,
     grammar::FnExpression,
-    program_graph::{Action, PgError, PgExpression, ProgramGraph, ProgramGraphRun, Var},
+    program_graph::{
+        Action, PgError, PgExpression, ProgramGraph, ProgramGraphBuilder, ProgramGraphRun, Var,
+    },
 };
 
 /// A [`ProgramGraph`]-based model implementing [`TransitionSystem`] with synchronous concurrency.
@@ -13,9 +15,14 @@ pub struct PgModel<R: Rng> {
     predicates: Vec<FnExpression<Var, DummyRng>>,
 }
 
-impl<R: Rng> PgModel<R> {
+impl<R: Rng + 'static> PgModel<R> {
     /// Create a new [`PgModel`] from the given [`ProgramGraph`] and predicates over its internal state.
-    pub fn new(pg: ProgramGraph<R>, global_vars: Vec<Var>, predicates: Vec<PgExpression>) -> Self {
+    pub fn new(
+        pg: ProgramGraphBuilder<R>,
+        global_vars: Vec<Var>,
+        predicates: Vec<PgExpression>,
+    ) -> Self {
+        let pg = pg.build();
         let predicates = predicates
             .into_iter()
             .map(Into::<FnExpression<Var, DummyRng>>::into)

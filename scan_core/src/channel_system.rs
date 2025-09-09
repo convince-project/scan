@@ -312,7 +312,7 @@ pub enum EventType {
 /// assert_eq!(post_loc, initial);
 /// cs.transition(pg_id, e, &[initial]).expect("transition is active");
 /// ```
-pub struct ChannelSystem<R: Rng> {
+pub(crate) struct ChannelSystem<R: Rng> {
     channels: Vec<(Type, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
     communications_pg_idxs: Vec<u16>,

@@ -139,8 +139,7 @@ impl JaniBuilder {
             .collect();
 
         // Finalize, build and return everything
-        let pg_def = pgb.build();
-        let pg_model = PgModel::new(pg_def, global_vars, predicates);
+        let pg_model = PgModel::new(pgb, global_vars, predicates);
         let data = self.data(jani_model);
         Ok((pg_model, oracle, data))
     }

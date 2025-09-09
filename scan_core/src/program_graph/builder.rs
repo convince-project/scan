@@ -496,7 +496,7 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// Since the construction of the builder is already checked ad every step,
     /// this method cannot fail.
-    pub fn build(mut self) -> ProgramGraph<R> {
+    pub(crate) fn build(mut self) -> ProgramGraph<R> {
         // Since vectors of effects and transitions will become immutable,
         // they should be shrunk to take as little space as possible
         self.effects.iter_mut().for_each(|effect| {

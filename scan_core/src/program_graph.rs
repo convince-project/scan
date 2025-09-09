@@ -230,7 +230,7 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// let mut rng = SmallRng::from_os_rng();
 /// pg.transition(e, &[initial], &mut rng).expect("transition is active");
 /// ```
-pub struct ProgramGraph<R: Rng> {
+pub(crate) struct ProgramGraph<R: Rng> {
     initial_states: SmallVec<[Location; 8]>,
     effects: Vec<Effect<R>>,
     locations: Vec<LocationData>,

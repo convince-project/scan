@@ -665,7 +665,7 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
     }
 
     /// Produces a [`ChannelSystem`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
-    pub fn build(mut self) -> ChannelSystem<R> {
+    pub(crate) fn build(mut self) -> ChannelSystem<R> {
         info!(
             "create Channel System with:\n{} Program Graphs\n{} channels",
             self.program_graphs.len(),

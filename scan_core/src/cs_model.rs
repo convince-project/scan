@@ -1,4 +1,6 @@
-use crate::channel_system::{Channel, ChannelSystem, ChannelSystemRun, CsError, Event, EventType};
+use crate::channel_system::{
+    Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, CsError, Event, EventType,
+};
 use crate::grammar::FnExpression;
 use crate::{Definition, DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
 use rand::{Rng, SeedableRng};
@@ -19,10 +21,11 @@ pub struct CsModel<R: Rng + SeedableRng> {
     predicates: Vec<FnExpression<Atom, DummyRng>>,
 }
 
-impl<R: Rng + SeedableRng> CsModel<R> {
+impl<R: Rng + SeedableRng + 'static> CsModel<R> {
     /// Creates new [`CsModelBuilder`] from a [`ChannelSystem`].
-    pub fn new(cs: ChannelSystem<R>) -> Self {
+    pub fn new(cs: ChannelSystemBuilder<R>) -> Self {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
+        let cs = cs.build();
         Self {
             ports: vec![None; cs.channels().len()],
             cs,

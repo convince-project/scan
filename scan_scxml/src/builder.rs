@@ -1648,7 +1648,7 @@ impl ModelBuilder {
     }
 
     fn build_model(self) -> (CsModel<SmallRng>, PmtlOracle, ScxmlModel) {
-        let mut model = CsModel::new(self.cs.build());
+        let mut model = CsModel::new(self.cs);
         let mut ports = Vec::new();
         for (port_name, (atom, init)) in self.ports {
             // TODO FIXME handle error.
