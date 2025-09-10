@@ -49,11 +49,7 @@ impl TraceArgs {
         }
     }
 
-    pub(crate) fn trace<Event, Ts, O, Tr>(
-        &self,
-        scan: &Scan<Event, Ts, O>,
-        tracer: Tr,
-    ) -> anyhow::Result<()>
+    pub(crate) fn trace<Event, Ts, O, Tr>(&self, scan: &Scan<Event, Ts, O>, tracer: Tr)
     where
         Ts: Definition + Sync,
         for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
@@ -62,10 +58,9 @@ impl TraceArgs {
         Tr: Tracer<Event>,
     {
         if self.single_thread {
-            scan.traces(self.traces, tracer, self.duration)?;
+            scan.traces(self.traces, tracer, self.duration);
         } else {
-            scan.par_traces(self.traces, tracer, self.duration)?;
+            scan.par_traces(self.traces, tracer, self.duration);
         }
-        Ok(())
     }
 }

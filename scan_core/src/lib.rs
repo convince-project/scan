@@ -57,14 +57,14 @@ pub enum RunOutcome {
 }
 
 /// An object that can be immutably borrowed to spawn instances of its instance type,
-/// provided that the instances have (at most) the same lifetime of their [`Definition`].
+/// provided that the instances have the same lifetime of their [`Definition`].
 pub trait Definition {
     /// The instance type, parametrized by the lifetime of its [`Definition`].
     type I<'def>
     where
         Self: 'def;
 
-    /// Immutably borrow the [`Definition`] and spawn a new instance with (at most) the same lifetime.
+    /// Immutably borrow the [`Definition`] and spawn a new instance with the same lifetime.
     fn new_instance<'def>(&'def self) -> Self::I<'def>;
 }
 
@@ -133,22 +133,16 @@ where
         self.violations.lock().expect("lock").clone()
     }
 
-    fn verification(
-        &'_ self,
-        confidence: f64,
-        precision: f64,
-        duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err> {
+    fn verification(&'_ self, confidence: f64, precision: f64, duration: Time) {
         let local_successes;
         let local_failures;
 
-        let result = self.tsd.new_instance().experiment(
-            duration,
-            self.oracle.clone(),
-            self.running.clone(),
-        )?;
+        let result =
+            self.tsd
+                .new_instance()
+                .experiment(duration, self.oracle.clone(), self.running.clone());
         if !self.running.load(Ordering::Relaxed) {
-            return Ok(());
+            return;
         }
         match result {
             RunOutcome::Verified(guarantees) => {
@@ -173,7 +167,7 @@ where
                     trace!("runs: {local_failures} failures");
                 }
             }
-            RunOutcome::Incomplete => return Ok(()),
+            RunOutcome::Incomplete => return,
         }
         let runs = local_successes + local_failures;
         // Avoid division by 0
@@ -186,18 +180,12 @@ where
             info!("adaptive bound satisfied");
             self.running.store(false, Ordering::Relaxed);
         }
-        Ok(())
     }
 
     /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
     /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
     /// and a state [`Mutex`] to be updated with the results as they are produced.
-    pub fn adaptive(
-        &'_ self,
-        confidence: f64,
-        precision: f64,
-        duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err> {
+    pub fn adaptive(&'_ self, confidence: f64, precision: f64, duration: Time) {
         // Cannot return as a T::Err, don't want to include anyhow in scan_core
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -208,22 +196,17 @@ where
         info!("verification starting");
         let start_time = Instant::now();
 
-        (0..usize::MAX)
+        let _ = (0..usize::MAX)
             .map(|_| self.verification(confidence, precision, duration))
             .take_while(|_| self.running.load(Ordering::Relaxed))
-            .try_for_each(|b| b.map(|_| ()))?;
+            .count();
 
         let elapsed = start_time.elapsed();
         info!("verification time elapsed: {elapsed:0.2?}");
         info!("verification terminating");
-        Ok(())
     }
 
-    fn trace<P>(
-        &'_ self,
-        tracer: P,
-        duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err>
+    fn trace<P>(&'_ self, tracer: P, duration: Time)
     where
         P: Tracer<Event>,
     {
@@ -233,12 +216,7 @@ where
     }
 
     /// Produces and saves the traces for the given number of runs.
-    pub fn traces<P>(
-        &'_ self,
-        runs: usize,
-        tracer: P,
-        duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err>
+    pub fn traces<P>(&'_ self, runs: usize, tracer: P, duration: Time)
     where
         P: Tracer<Event>,
     {
@@ -246,12 +224,11 @@ where
         info!("tracing starting");
         let start_time = Instant::now();
 
-        (0..runs).try_for_each(|_| self.trace(tracer.clone(), duration))?;
+        (0..runs).for_each(|_| self.trace(tracer.clone(), duration));
 
         let elapsed = start_time.elapsed();
         info!("tracing time elapsed: {elapsed:0.2?}");
         info!("tracing terminating");
-        Ok(())
     }
 }
 
@@ -265,12 +242,7 @@ where
     /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
     /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
     /// and a state [`Mutex`] to be updated with the results as they are produced.
-    pub fn par_adaptive(
-        &'_ self,
-        confidence: f64,
-        precision: f64,
-        duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err> {
+    pub fn par_adaptive(&'_ self, confidence: f64, precision: f64, duration: Time) {
         // Cannot return as a T::Err, don't want to include anyhow in scan_core
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -281,25 +253,19 @@ where
         info!("verification starting");
         let start_time = Instant::now();
 
-        (0..usize::MAX)
+        let _ = (0..usize::MAX)
             .into_par_iter()
             .map(|_| self.verification(confidence, precision, duration))
             .take_any_while(|_| self.running.load(Ordering::Relaxed))
-            .try_for_each(|b| b.map(|_| ()))?;
+            .count();
 
         let elapsed = start_time.elapsed();
         info!("verification time elapsed: {elapsed:0.2?}");
         info!("verification terminating");
-        Ok(())
     }
 
     /// Produces and saves the traces for the given number of runs.
-    pub fn par_traces<P>(
-        &'_ self,
-        runs: usize,
-        tracer: P,
-        duration: Time,
-    ) -> Result<(), <D::I<'_> as TransitionSystem<Event>>::Err>
+    pub fn par_traces<P>(&'_ self, runs: usize, tracer: P, duration: Time)
     where
         P: Tracer<Event>,
     {
@@ -309,11 +275,10 @@ where
 
         (0..runs)
             .into_par_iter()
-            .try_for_each(|_| self.trace(tracer.clone(), duration))?;
+            .for_each(|_| self.trace(tracer.clone(), duration));
 
         let elapsed = start_time.elapsed();
         info!("tracing time elapsed: {elapsed:0.2?}");
         info!("tracing terminating");
-        Ok(())
     }
 }

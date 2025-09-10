@@ -1,12 +1,9 @@
 use crate::{Oracle, RunOutcome, Time, Val};
 use core::marker::Sync;
 use log::trace;
-use std::{
-    error::Error,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 /// Trait that handles streaming of traces,
@@ -39,12 +36,9 @@ impl<A> Tracer<A> for () {
 ///
 /// Together with an [`Oracle`], it provides a verifiable system.
 pub trait TransitionSystem<Event> {
-    /// The Error type for the [`TransitionSystem`].
-    type Err: Error + Send + Sync + 'static;
-
     /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
     /// unless the execution is terminated and no further events can happen.
-    fn transition(&mut self, duration: Time) -> Result<Option<Event>, Self::Err>;
+    fn transition(&mut self, duration: Time) -> Option<Event>;
 
     /// Current time of the [`TransitionSystem`] (for timed systems).
     fn time(&self) -> Time;
@@ -61,42 +55,37 @@ pub trait TransitionSystem<Event> {
         duration: Time,
         mut oracle: O,
         running: Arc<AtomicBool>,
-    ) -> Result<RunOutcome, Self::Err> {
+    ) -> RunOutcome {
         trace!("new run starting");
         let mut time;
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
-        while let Some(_event) = self.transition(duration)? {
+        while let Some(_event) = self.transition(duration) {
             labels.clear();
             labels.extend(self.labels());
             time = self.time();
             if time >= duration {
                 trace!("run stopped");
-                return Ok(RunOutcome::Incomplete);
+                return RunOutcome::Incomplete;
             }
             oracle.update(&labels, time);
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
-                return Ok(RunOutcome::Incomplete);
+                return RunOutcome::Incomplete;
             } else if oracle.output_guarantees().all(|b| b.is_some()) {
                 trace!("run complete early");
                 let verified = Vec::from_iter(oracle.output_guarantees().map(Option::unwrap));
-                return Ok(RunOutcome::Verified(verified));
+                return RunOutcome::Verified(verified);
             }
         }
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
-        Ok(RunOutcome::Verified(verified))
+        RunOutcome::Verified(verified)
     }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
     /// and process the execution trace via the given [`Tracer`].
-    fn trace<P, O: Oracle>(
-        &mut self,
-        duration: Time,
-        mut oracle: O,
-        mut tracer: P,
-    ) -> Result<(), Self::Err>
+    fn trace<P, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: P)
     where
         P: Tracer<Event>,
     {
@@ -106,7 +95,7 @@ pub trait TransitionSystem<Event> {
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
         tracer.init();
-        while let Some(event) = self.transition(duration)? {
+        while let Some(event) = self.transition(duration) {
             // current_len += 1;
             labels.clear();
             labels.extend(self.labels());
@@ -114,7 +103,7 @@ pub trait TransitionSystem<Event> {
             if time >= duration {
                 trace!("run stopped");
                 tracer.finalize(&RunOutcome::Incomplete);
-                return Ok(());
+                return;
             }
             tracer.trace(&event, time, self.state());
             oracle.update(&labels, time);
@@ -122,6 +111,5 @@ pub trait TransitionSystem<Event> {
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
         tracer.finalize(&RunOutcome::Verified(verified));
-        Ok(())
     }
 }

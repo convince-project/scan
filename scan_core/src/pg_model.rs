@@ -4,7 +4,7 @@ use crate::{
     Definition, DummyRng, TransitionSystem, Val,
     grammar::FnExpression,
     program_graph::{
-        Action, PgError, PgExpression, ProgramGraph, ProgramGraphBuilder, ProgramGraphRun, Var,
+        Action, PgExpression, ProgramGraph, ProgramGraphBuilder, ProgramGraphRun, Var,
     },
 };
 
@@ -63,10 +63,8 @@ pub struct PgModelRun<'def, R: Rng> {
 impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem<Action>
     for PgModelRun<'def, R>
 {
-    type Err = PgError;
-
-    fn transition(&mut self, _duration: crate::Time) -> Result<Option<Action>, PgError> {
-        Ok(self.pg.montecarlo(&mut self.rng))
+    fn transition(&mut self, _duration: crate::Time) -> Option<Action> {
+        self.pg.montecarlo(&mut self.rng)
     }
 
     fn time(&self) -> crate::Time {

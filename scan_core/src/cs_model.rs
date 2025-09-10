@@ -1,5 +1,5 @@
 use crate::channel_system::{
-    Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, CsError, Event, EventType,
+    Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
 use crate::grammar::FnExpression;
 use crate::{Definition, DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
@@ -87,9 +87,7 @@ pub struct CsModelRun<'def, R: Rng + SeedableRng> {
 }
 
 impl<'def, R: Rng + SeedableRng> TransitionSystem<Event> for CsModelRun<'def, R> {
-    type Err = CsError;
-
-    fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {
+    fn transition(&mut self, duration: Time) -> Option<Event> {
         let event = self.cs.montecarlo_execution(duration);
         if let Some(ref event) = event
             && let EventType::Send(ref val) = event.event_type
@@ -101,7 +99,7 @@ impl<'def, R: Rng + SeedableRng> TransitionSystem<Event> for CsModelRun<'def, R>
             *port = val.clone();
         }
         self.last_event = event.clone();
-        Ok(event)
+        event
     }
 
     fn time(&self) -> Time {

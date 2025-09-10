@@ -81,11 +81,7 @@ impl VerifyArgs {
         }
     }
 
-    pub(crate) fn verify<Event, Ts, O>(
-        &self,
-        model: String,
-        scan: &Scan<Event, Ts, O>,
-    ) -> anyhow::Result<Report>
+    pub(crate) fn verify<Event, Ts, O>(&self, model: String, scan: &Scan<Event, Ts, O>) -> Report
     where
         Ts: Definition + Sync,
         for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
@@ -93,9 +89,9 @@ impl VerifyArgs {
         O: Oracle,
     {
         if self.single_thread {
-            scan.adaptive(self.confidence, self.precision, self.duration)?;
+            scan.adaptive(self.confidence, self.precision, self.duration);
         } else {
-            scan.par_adaptive(self.confidence, self.precision, self.duration)?;
+            scan.par_adaptive(self.confidence, self.precision, self.duration);
         }
         let successes = scan.successes();
         let failures = scan.failures();
@@ -107,7 +103,7 @@ impl VerifyArgs {
             .cloned()
             .zip(scan.violations().into_iter().chain([0].into_iter().cycle()))
             .collect::<HashMap<String, u32>>();
-        let report = Report {
+        Report {
             model,
             precision: self.precision,
             confidence: self.confidence,
@@ -117,7 +113,6 @@ impl VerifyArgs {
             successes,
             failures,
             property_failures,
-        };
-        Ok(report)
+        }
     }
 }

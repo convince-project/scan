@@ -188,8 +188,7 @@ impl Cli {
                 if args.all {
                     args.properties = scxml_model.guarantees.clone();
                 }
-                let report = run_verification(model, &args, progress, &scan_def)?;
-                report.print(json);
+                run_verification(model, &args, progress, &scan_def).print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -209,7 +208,7 @@ impl Cli {
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(scxml_model);
                 eprint!("Trace computation in progress...");
-                args.trace(&scan_def, tracer)?;
+                args.trace(&scan_def, tracer);
                 eprintln!(" done");
             }
         }
@@ -234,7 +233,7 @@ impl Cli {
                 if args.all {
                     args.properties = jani_model.guarantees;
                 }
-                run_verification(model, &args, progress, &scan)?.print(json);
+                run_verification(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -250,7 +249,7 @@ impl Cli {
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
                 eprint!("Trace computation in progress...");
-                args.trace(&scan, tracer)?;
+                args.trace(&scan, tracer);
                 eprintln!(" done");
             }
         }
@@ -273,7 +272,7 @@ fn run_verification<Event, Ts, O>(
     args: &VerifyArgs,
     progress: Option<Bar>,
     scan: &Scan<Event, Ts, O>,
-) -> anyhow::Result<Report>
+) -> Report
 where
     Ts: Definition + 'static + Sync,
     for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
@@ -285,21 +284,20 @@ where
             "Verifying {model} (-p {} -c {} -d {}) {:?}",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let report = std::thread::scope(|s| {
+        std::thread::scope(|s| {
             s.spawn(|| {
                 bar.print_progress_bar(args.confidence, args.precision, &args.properties, scan);
             });
             args.verify(model.to_owned(), scan)
-        })?;
-        Ok(report)
+        })
     } else {
         eprint!(
             "Verifying {model} (-p {} -c {} -d {}) {:?}...",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let report = args.verify(model.to_owned(), scan)?;
+        let report = args.verify(model.to_owned(), scan);
         eprintln!(" done");
-        Ok(report)
+        report
     }
 }
 
