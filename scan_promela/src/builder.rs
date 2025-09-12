@@ -139,10 +139,9 @@ pub fn typename_to_type(tn: &Typename) -> Result<Type, BuilderError> {
 
 /// Allocates a fresh, unnamed `Location` in the current Program-Graph.
 fn fresh_loc<'a>(ctx: &mut PgCtx<'a>) -> Result<Location, BuilderError> {
-    Ok(ctx
-        .cs
+    ctx.cs
         .new_location(ctx.pg)
-        .map_err(|_| BuilderError::TypeError("new loc".into()))?)
+        .map_err(|_| BuilderError::TypeError("new loc".into()))
 }
 
 /// Registers all variable declarations from a `DeclList` as local variables in the current `PgCtx`.
@@ -256,7 +255,7 @@ impl Builder {
 
         let mut ctx = PgCtx {
             cs: cs_builder,
-            pg: pg,
+            pg,
             vars: HashMap::new(),
             type_vars: HashMap::new(),
             chans: HashMap::new(),
@@ -295,12 +294,12 @@ impl Builder {
         match step {
             // ---------------------------- Statement ----------------------------
             Step::Statement(stmt_box, _unless) => {
-                Self::visit_statement(&**stmt_box, entry_loc, ctx, gctx)
+                Self::visit_statement(stmt_box, entry_loc, ctx, gctx)
             }
 
             // --------------------------- Declaration ---------------------------
             Step::Declaration(decl_box) => {
-                let _ = Self::visit_one_decl(&**decl_box, ctx, gctx)?;
+                let _ = Self::visit_one_decl(decl_box, ctx, gctx)?;
                 // Declarations do not create transitions or advance control flow.
                 Ok(entry_loc)
             }
@@ -422,69 +421,69 @@ impl Builder {
             }
 
             Unary(Unarop::Not, sub) => {
-                Expression::Not(Box::new(Self::translate_expr(&*sub, ctx, gctx)?))
+                Expression::Not(Box::new(Self::translate_expr(sub, ctx, gctx)?))
             }
-            Negate(sub) => Expression::Opposite(Box::new(Self::translate_expr(&*sub, ctx, gctx)?)),
+            Negate(sub) => Expression::Opposite(Box::new(Self::translate_expr(sub, ctx, gctx)?)),
 
             Add(l, r) => Expression::Sum(vec![
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ]),
             Subtract(l, r) => Expression::Sum(vec![
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Expression::Opposite(Box::new(Self::translate_expr(&*r, ctx, gctx)?)),
+                Self::translate_expr(l, ctx, gctx)?,
+                Expression::Opposite(Box::new(Self::translate_expr(r, ctx, gctx)?)),
             ]),
             Multiply(l, r) => Expression::Mult(vec![
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ]),
             Divide(l, r) => Expression::Div(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))),
             Modulo(l, r) => Expression::Mod(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))),
 
             Equal(l, r) => Expression::Equal(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))),
             NotEqual(l, r) => Expression::Not(Box::new(Expression::Equal(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))))),
             GreaterThan(l, r) => Expression::Greater(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))),
             GreaterEqual(l, r) => Expression::GreaterEq(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))),
             LessThan(l, r) => Expression::Less(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))),
             LessEqual(l, r) => Expression::LessEq(Box::new((
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ))),
 
             Logical(l, LogicalOp::And, r) | Andor(l, r) => Expression::And(vec![
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ]),
             Logical(l, LogicalOp::Or, r) => Expression::Or(vec![
-                Self::translate_expr(&*l, ctx, gctx)?,
-                Self::translate_expr(&*r, ctx, gctx)?,
+                Self::translate_expr(l, ctx, gctx)?,
+                Self::translate_expr(r, ctx, gctx)?,
             ]),
 
             Ternary(c, a, b) => Expression::Ite(Box::new((
-                Self::translate_expr(&*c, ctx, gctx)?,
-                Self::translate_expr(&*a, ctx, gctx)?,
-                Self::translate_expr(&*b, ctx, gctx)?,
+                Self::translate_expr(c, ctx, gctx)?,
+                Self::translate_expr(a, ctx, gctx)?,
+                Self::translate_expr(b, ctx, gctx)?,
             ))),
 
             Len(_) => {
@@ -543,7 +542,7 @@ impl Builder {
                 let AnyExpr::Chanpoll(kind_box, chan_expr) = &**expr_box else {
                     unreachable!()
                 };
-                return Self::gen_probe(in_l, &**kind_box, &**chan_expr, ctx, gctx);
+                Self::gen_probe(in_l, kind_box, chan_expr, ctx, gctx)
             }
 
             // skip pure expressions
@@ -580,16 +579,16 @@ impl Builder {
             }
 
             // 5. send
-            SendMsg(msg_box) => Self::gen_send(in_l, &*msg_box, ctx, gctx),
+            SendMsg(msg_box) => Self::gen_send(in_l, msg_box, ctx, gctx),
 
             // 6. receive
-            Receive(recv_box) => Self::gen_recv(in_l, &*recv_box, ctx, gctx),
+            Receive(recv_box) => Self::gen_recv(in_l, recv_box, ctx, gctx),
 
             // 7. if
-            If(opts) => Self::gen_branching(in_l, &*opts, false, ctx, gctx),
+            If(opts) => Self::gen_branching(in_l, opts, false, ctx, gctx),
 
             // 8. do (looped branching)
-            Do(opts) => Self::gen_branching(in_l, &*opts, true, ctx, gctx),
+            Do(opts) => Self::gen_branching(in_l, opts, true, ctx, gctx),
 
             other => Err(BuilderError::UnsupportedStatement(format!("{:?}", other))),
         }
@@ -975,7 +974,7 @@ impl Builder {
         Ok(())
     }
 
-    fn visit_utype(ut: &Utype, _gctx: &mut GlobalCtx) -> Result<(), BuilderError> {
+    fn visit_utype(_ut: &Utype, _gctx: &mut GlobalCtx) -> Result<(), BuilderError> {
         Ok(())
     }
 }

@@ -46,5 +46,6 @@ log = { workspace = true }
 scan_core = { version = "0.1.0", path = "scan_core" }
 scan_jani = { version = "0.1.0", path = "scan_jani" }
 scan_scxml = { version = "0.1.0", path = "scan_scxml" }
+scan_promela = { version = "0.1.0", path = "scan_promela" }
 serde = { workspace = true }
 serde_json = { workspace = true }

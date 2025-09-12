@@ -7,7 +7,6 @@ use lrpar::NonStreamingLexer;
 use lrpar::lrpar_mod;
 use regex::Regex;
 use std::env;
-use std::ffi::OsStr;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
@@ -115,18 +114,16 @@ fn process_directory(dir_path: &Path, debug_mode: bool) {
     // Reading all file inside te directory
     match fs::read_dir(dir_path) {
         Ok(entries) => {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if path.is_file()
-                        && path
-                            .extension()
-                            .map_or(false, |ext| ext == "prm" || ext == "pml")
-                    {
-                        process_file(&path, debug_mode);
-                    } else if path.is_dir() {
-                        process_directory(&path, debug_mode);
-                    }
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file()
+                    && path
+                        .extension()
+                        .is_some_and(|ext| ext == "prm" || ext == "pml")
+                {
+                    process_file(&path, debug_mode);
+                } else if path.is_dir() {
+                    process_directory(&path, debug_mode);
                 }
             }
         }
