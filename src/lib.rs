@@ -60,6 +60,14 @@ enum Format {
     ///
     /// WARNING: JANI support is still experimental.
     Jani,
+    /// Promela format, passed as the path to the .pml or .prm file.
+    ///
+    /// Promela models are composed by a single .pml or .prm file.
+    ///
+    /// The model has to be passed to SCAN as the path to the .pml or .prm file.
+    ///
+    /// WARNING: Promela support is still experimental.
+    Promela,
 }
 
 /// SCAN's available commands.
@@ -152,6 +160,7 @@ impl Cli {
             match format {
                 Format::Scxml => self.run_scxml(&model),
                 Format::Jani => self.run_jani(&model),
+                Format::Promela => self.run_promela(&model),
             }
         } else if self.model.is_dir() {
             self.run_scxml(&model)
@@ -166,6 +175,7 @@ impl Cli {
             {
                 "xml" => self.run_scxml(&model),
                 "jani" => self.run_jani(&model),
+                "pml" | "prm" => self.run_promela(&model),
                 _ => bail!("unsupported file format"),
             }
         }
@@ -251,6 +261,48 @@ impl Cli {
                 eprint!("Trace computation in progress...");
                 args.trace(&scan, tracer);
                 eprintln!(" done");
+            }
+        }
+        Ok(())
+    }
+
+    fn run_promela(self, model: &str) -> anyhow::Result<()> {
+        use scan_promela::*;
+
+        match self.command {
+            Commands::Verify {
+                mut args,
+                progress,
+                json,
+            } => {
+                args.validate()?;
+                eprint!("Processing {model}...");
+                let properties = args.properties.clone();
+                let (scan, promela_model) = load(&self.model, &properties, args.all)?;
+                eprintln!(" done");
+                // validate_properties(&args.properties, &jani_model.guarantees)?;
+                // if args.all {
+                //     args.properties = jani_model.guarantees;
+                // }
+                run_verification(model, &args, progress, &scan).print(json);
+            }
+            Commands::Validate => {
+                eprint!("Processing {model}...");
+                let (_scan, _jani_model) = load(&self.model, &[], true)?;
+                eprintln!(" done");
+                println!("Model {model} successfully validated");
+            }
+            Commands::Trace(args) => {
+                args.validate()?;
+                eprint!("Processing {model}...");
+                let (scan, jani_model) = load(&self.model, &[], args.all)?;
+                eprintln!(" done");
+                // let jani_model = Arc::new(jani_model);
+                todo!()
+                // let tracer = TracePrinter::new(jani_model);
+                // eprint!("Trace computation in progress...");
+                // args.trace(&scan, tracer);
+                // eprintln!(" done");
             }
         }
         Ok(())

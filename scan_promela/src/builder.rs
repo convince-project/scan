@@ -4,23 +4,35 @@ use scan_core::channel_system::CsError;
 use scan_core::channel_system::{Channel, ChannelSystemBuilder, Location, PgId, Var};
 use scan_core::{Expression, Type, Val};
 use std::collections::HashMap;
-use std::fmt;
+use thiserror::Error;
 
 /// Enumerates all possible errors that can occur during the translation from Promela AST to a Channel System.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum BuilderError {
+    #[error("Unsupported module: {0:?}")]
     UnsupportedModule(String),
+    #[error("Unsupported statement: {0:?}")]
     UnsupportedStatement(String),
+    #[error("Unsupported expression: {0:?}")]
     UnsupportedExpression(String),
+    #[error("Unsupported step: {0:?}")]
     UnsupportedStep(String),
+    #[error("Unsupported declaration: {0:?}")]
     UnsupportedDeclaration(String),
+    #[error("Type error: {0:?}")]
     TypeError(String),
+    #[error("Unsupported init: {0:?}")]
     UnsupportedInit(String),
+    #[error("Unsupported never-claim: {0:?}")]
     UnsupportedNever(String),
+    #[error("Unsupported never-claim: {0:?}")]
     UnsupportedTrace(String),
+    #[error("Unsupported utype: {0:?}")]
     UnsupportedUtype(String),
+    #[error("Unsupported declaration list: {0:?}")]
     UnsupportedDeclList(String),
-    ScanCoreError(CsError),
+    #[error("SCAN core error: {0:?}")]
+    ScanCoreError(#[source] CsError),
 }
 
 /// Allows automatic conversion from SCAN's internal errors (`CsError`) to our custom `BuilderError`.
@@ -28,25 +40,6 @@ pub enum BuilderError {
 impl From<CsError> for BuilderError {
     fn from(err: CsError) -> Self {
         BuilderError::ScanCoreError(err)
-    }
-}
-
-impl fmt::Display for BuilderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BuilderError::UnsupportedModule(s) => write!(f, "Unsupported module: {s}"),
-            BuilderError::UnsupportedStatement(s) => write!(f, "Unsupported statement: {s}"),
-            BuilderError::UnsupportedExpression(s) => write!(f, "Unsupported expression: {s}"),
-            BuilderError::UnsupportedStep(s) => write!(f, "Unsupported step: {s}"),
-            BuilderError::UnsupportedDeclaration(s) => write!(f, "Unsupported declaration: {s}"),
-            BuilderError::TypeError(s) => write!(f, "Type error: {s}"),
-            BuilderError::UnsupportedInit(s) => write!(f, "Unsupported init: {s}"),
-            BuilderError::UnsupportedNever(s) => write!(f, "Unsupported never-claim: {s}"),
-            BuilderError::UnsupportedTrace(s) => write!(f, "Unsupported trace: {s}"),
-            BuilderError::UnsupportedUtype(s) => write!(f, "Unsupported utype: {s}"),
-            BuilderError::UnsupportedDeclList(s) => write!(f, "Unsupported declaration list: {s}"),
-            BuilderError::ScanCoreError(e) => write!(f, "SCAN core error: {e}"),
-        }
     }
 }
 

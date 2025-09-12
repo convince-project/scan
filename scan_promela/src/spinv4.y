@@ -286,7 +286,7 @@ Name -> Result<Name, Box<dyn Error>>:
         let lexeme = $1.expect("Error: Expected an identifier token."); 
         let span = lexeme.span();
         let name_str = $lexer.span_str(span).to_string();
-        println!("DEBUG: In Name rule, token span: {:?}, testo: '{}'", span, name_str);
+        debug!("In Name rule, token span: {:?}, testo: '{}'", span, name_str);
         if name_str.is_empty() {
             Err(Box::from("Error: Name cannot be empty"))
         } else {
@@ -656,6 +656,7 @@ Range -> Result<Range, Box<dyn Error>>:
 %%
 use std::error::Error;
 use std::fmt; // Import fmt for formatting and displaying
+use log::debug;
 
 // Flatten function for Spec Rule
 fn flatten(lhs: Result<Vec<Module>, Box<dyn Error>>, 
@@ -2054,13 +2055,13 @@ impl AnyExpr {
     }
     
     pub fn new_const(value: Const) -> Self {
-    // println!("DEBUGGING: Converting Const to AnyExpr: {:?}", value); 
+    // debug!("Converting Const to AnyExpr: {:?}", value); 
     match value {
         Const::True => AnyExpr::Const(Box::new(Const::new_true())),
         Const::False => AnyExpr::Const(Box::new(Const::new_false())),
         Const::Skip => AnyExpr::Const(Box::new(Const::new_skip())),
         Const::Number(val) => {
-            // println!("DEBUGGING: Const is a number: {}", val);
+            // debug!("Const is a number: {}", val);
             AnyExpr::Const(Box::new(Const::new_number(val)))
         }
     }
