@@ -19,18 +19,17 @@ mod smc;
 mod transition_system;
 
 use core::marker::Sync;
-pub use cs_model::{Atom, CsModel};
+pub use cs_model::{Atom, CsModel, CsModelRun};
 use dummy_rng::DummyRng;
 pub use grammar::{Expression, Float, Integer, Type, TypeError, Val};
 use log::{info, trace};
 pub use mtl::{Mtl, MtlOracle};
 pub use oracle::Oracle;
-pub use pg_model::PgModel;
+pub use pg_model::{PgModel, PgModelRun};
 pub use pmtl::{Pmtl, PmtlOracle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
-    marker::PhantomData,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -56,43 +55,20 @@ pub enum RunOutcome {
     Verified(Vec<bool>),
 }
 
-/// An object that can be immutably borrowed to spawn instances of its instance type,
-/// provided that the instances have the same lifetime of their [`Definition`].
-pub trait Definition {
-    /// The instance type, parametrized by the lifetime of its [`Definition`].
-    type I<'def>
-    where
-        Self: 'def;
-
-    /// Immutably borrow the [`Definition`] and spawn a new instance with the same lifetime.
-    fn new_instance<'def>(&'def self) -> Self::I<'def>;
-}
-
 /// The main type to interface with the verification capabilities of SCAN.
 /// [`Scan`] holds the model, properties and other data necessary to run the verification process.
 /// The type of models and properties is abstracted through the [`TransitionSystem`] and [`Oracle`] traits,
 /// to provide a unified interface.
-pub struct Scan<Event, D, O>
-where
-    D: Definition,
-    for<'def> D::I<'def>: TransitionSystem<Event>,
-    O: Oracle,
-{
+pub struct Scan<D, O> {
     tsd: D,
     oracle: O,
     running: Arc<AtomicBool>,
     successes: Arc<AtomicU32>,
     failures: Arc<AtomicU32>,
     violations: Arc<Mutex<Vec<u32>>>,
-    _event: PhantomData<Event>,
 }
 
-impl<Event, D, O> Scan<Event, D, O>
-where
-    D: Definition,
-    for<'def> D::I<'def>: TransitionSystem<Event>,
-    O: Oracle,
-{
+impl<D, O> Scan<D, O> {
     /// Create new [`Scan`] object, based on the given [`Definition`] of a [`TransitionSystem`] and [`Oracle`].
     pub fn new(tsd: D, oracle: O) -> Self {
         Scan {
@@ -102,7 +78,6 @@ where
             successes: Arc::new(AtomicU32::new(0)),
             failures: Arc::new(AtomicU32::new(0)),
             violations: Arc::new(Mutex::new(Vec::new())),
-            _event: PhantomData,
         }
     }
 
@@ -132,15 +107,22 @@ where
     pub fn violations(&self) -> Vec<u32> {
         self.violations.lock().expect("lock").clone()
     }
+}
 
-    fn verification(&'_ self, confidence: f64, precision: f64, duration: Time) {
+impl<D, O> Scan<D, O>
+where
+    O: Oracle,
+{
+    fn verification<'a, Event, Ts>(&'a self, confidence: f64, precision: f64, duration: Time)
+    where
+        Ts: TransitionSystem<Event> + From<&'a D>,
+    {
         let local_successes;
         let local_failures;
 
-        let result =
-            self.tsd
-                .new_instance()
-                .experiment(duration, self.oracle.clone(), self.running.clone());
+        let result = <&D as Into<Ts>>::into(&self.tsd)
+            // .new_instance()
+            .experiment(duration, self.oracle.clone(), self.running.clone());
         if !self.running.load(Ordering::Relaxed) {
             return;
         }
@@ -185,7 +167,10 @@ where
     /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
     /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
     /// and a state [`Mutex`] to be updated with the results as they are produced.
-    pub fn adaptive(&'_ self, confidence: f64, precision: f64, duration: Time) {
+    pub fn adaptive<'a, Event, Ts>(&'a self, confidence: f64, precision: f64, duration: Time)
+    where
+        Ts: TransitionSystem<Event> + From<&'a D>,
+    {
         // Cannot return as a T::Err, don't want to include anyhow in scan_core
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -197,7 +182,7 @@ where
         let start_time = Instant::now();
 
         let _ = (0..usize::MAX)
-            .map(|_| self.verification(confidence, precision, duration))
+            .map(|_| self.verification::<Event, Ts>(confidence, precision, duration))
             .take_while(|_| self.running.load(Ordering::Relaxed))
             .count();
 
@@ -206,25 +191,25 @@ where
         info!("verification terminating");
     }
 
-    fn trace<P>(&'_ self, tracer: P, duration: Time)
+    fn trace<'a, Event, Ts, P>(&'a self, tracer: P, duration: Time)
     where
+        Ts: TransitionSystem<Event> + From<&'a D>,
         P: Tracer<Event>,
     {
-        self.tsd
-            .new_instance()
-            .trace(duration, self.oracle.clone(), tracer)
+        <&D as Into<Ts>>::into(&self.tsd).trace(duration, self.oracle.clone(), tracer)
     }
 
     /// Produces and saves the traces for the given number of runs.
-    pub fn traces<P>(&'_ self, runs: usize, tracer: P, duration: Time)
+    pub fn traces<'a, Event, Ts, P>(&'a self, runs: usize, tracer: P, duration: Time)
     where
+        Ts: TransitionSystem<Event> + From<&'a D>,
         P: Tracer<Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
         let start_time = Instant::now();
 
-        (0..runs).for_each(|_| self.trace(tracer.clone(), duration));
+        (0..runs).for_each(|_| self.trace::<Event, Ts, P>(tracer.clone(), duration));
 
         let elapsed = start_time.elapsed();
         info!("tracing time elapsed: {elapsed:0.2?}");
@@ -232,18 +217,18 @@ where
     }
 }
 
-impl<Event, D, O> Scan<Event, D, O>
+impl<D, O> Scan<D, O>
 where
-    D: Definition + Sync,
-    for<'def> D::I<'def>: TransitionSystem<Event>,
+    D: Sync,
     O: Oracle,
-    Event: Sync,
 {
     /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
     /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
     /// and a state [`Mutex`] to be updated with the results as they are produced.
-    pub fn par_adaptive(&'_ self, confidence: f64, precision: f64, duration: Time) {
-        // Cannot return as a T::Err, don't want to include anyhow in scan_core
+    pub fn par_adaptive<'a, Event, Ts>(&'a self, confidence: f64, precision: f64, duration: Time)
+    where
+        Ts: TransitionSystem<Event> + From<&'a D>,
+    {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
 
@@ -255,7 +240,7 @@ where
 
         let _ = (0..usize::MAX)
             .into_par_iter()
-            .map(|_| self.verification(confidence, precision, duration))
+            .map(|_| self.verification::<Event, Ts>(confidence, precision, duration))
             .take_any_while(|_| self.running.load(Ordering::Relaxed))
             .count();
 
@@ -265,8 +250,9 @@ where
     }
 
     /// Produces and saves the traces for the given number of runs.
-    pub fn par_traces<P>(&'_ self, runs: usize, tracer: P, duration: Time)
+    pub fn par_traces<'a, Event, Ts, P>(&'a self, runs: usize, tracer: P, duration: Time)
     where
+        Ts: TransitionSystem<Event> + From<&'a D>,
         P: Tracer<Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
@@ -275,7 +261,7 @@ where
 
         (0..runs)
             .into_par_iter()
-            .for_each(|_| self.trace(tracer.clone(), duration));
+            .for_each(|_| self.trace::<Event, Ts, P>(tracer.clone(), duration));
 
         let elapsed = start_time.elapsed();
         info!("tracing time elapsed: {elapsed:0.2?}");

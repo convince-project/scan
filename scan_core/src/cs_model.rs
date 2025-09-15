@@ -2,7 +2,7 @@ use crate::channel_system::{
     Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
 use crate::grammar::FnExpression;
-use crate::{Definition, DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
+use crate::{DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
 use rand::{Rng, SeedableRng};
 
 /// An atomic variable for [`crate::Pmtl`] formulae.
@@ -15,7 +15,7 @@ pub enum Atom {
 }
 
 /// A definition type that instances new [`CsModelRun`].
-pub struct CsModel<R: Rng + SeedableRng> {
+pub struct CsModel<R: Rng> {
     cs: ChannelSystem<R>,
     ports: Vec<Option<Val>>,
     predicates: Vec<FnExpression<Atom, DummyRng>>,
@@ -58,17 +58,12 @@ impl<R: Rng + SeedableRng + 'static> CsModel<R> {
     }
 }
 
-impl<R: Rng + SeedableRng> Definition for CsModel<R> {
-    type I<'def>
-        = CsModelRun<'def, R>
-    where
-        R: 'def;
-
-    fn new_instance<'def>(&'def self) -> CsModelRun<'def, R> {
+impl<'a, R: Rng + SeedableRng> From<&'a CsModel<R>> for CsModelRun<'a, R> {
+    fn from(value: &'a CsModel<R>) -> Self {
         CsModelRun {
-            cs: self.cs.new_instance(),
-            ports: self.ports.clone(),
-            predicates: &self.predicates,
+            cs: value.cs.new_instance(),
+            ports: value.ports.clone(),
+            predicates: &value.predicates,
             last_event: None,
         }
     }

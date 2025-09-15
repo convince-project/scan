@@ -18,9 +18,9 @@ pub mod builder;
 pub use builder::*;
 use rand::rngs::SmallRng;
 use regex::Regex;
-use scan_core::{CsModel, PmtlOracle, Scan, channel_system::Event};
+use scan_core::{CsModel, PmtlOracle, Scan};
 
-pub type PromelaScan = Scan<Event, CsModel<SmallRng>, PmtlOracle>;
+pub type PromelaScan = Scan<CsModel<SmallRng>, PmtlOracle>;
 
 pub type PromelaModel = ();
 

@@ -11,12 +11,11 @@ use log::info;
 use parser::Model;
 use rand::rngs::SmallRng;
 use scan_core::PgModel;
-use scan_core::program_graph::Action;
 use scan_core::{MtlOracle, Scan};
 use std::{fs::File, io::Read, path::Path};
 pub use tracer::TracePrinter;
 
-pub type JaniScan = Scan<Action, PgModel<SmallRng>, MtlOracle>;
+pub type JaniScan = Scan<PgModel<SmallRng>, MtlOracle>;
 
 pub fn load<'def>(
     path: &'def Path,

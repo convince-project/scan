@@ -1,7 +1,7 @@
 use rand::{Rng, SeedableRng};
 
 use crate::{
-    Definition, DummyRng, TransitionSystem, Val,
+    DummyRng, TransitionSystem, Val,
     grammar::FnExpression,
     program_graph::{
         Action, PgExpression, ProgramGraph, ProgramGraphBuilder, ProgramGraphRun, Var,
@@ -35,18 +35,13 @@ impl<R: Rng + 'static> PgModel<R> {
     }
 }
 
-impl<R: Rng + SeedableRng + Clone + Send + Sync> Definition for PgModel<R> {
-    type I<'def>
-        = PgModelRun<'def, R>
-    where
-        R: 'def;
-
-    fn new_instance<'def>(&'def self) -> PgModelRun<'def, R> {
+impl<'a, R: Rng + SeedableRng> From<&'a PgModel<R>> for PgModelRun<'a, R> {
+    fn from(value: &'a PgModel<R>) -> Self {
         PgModelRun {
-            pg: self.pg.new_instance(),
+            pg: value.pg.new_instance(),
             rng: R::from_os_rng(),
-            global_vars: &self.global_vars,
-            predicates: &self.predicates,
+            global_vars: &value.global_vars,
+            predicates: &value.predicates,
         }
     }
 }

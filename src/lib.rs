@@ -27,7 +27,10 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{Definition, Oracle, Scan, TransitionSystem};
+use scan_core::{
+    CsModel, CsModelRun, MtlOracle, Oracle, PgModel, PgModelRun, PmtlOracle, Scan,
+    TransitionSystem, channel_system::Event, program_graph::Action,
+};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -198,7 +201,10 @@ impl Cli {
                 if args.all {
                     args.properties = scxml_model.guarantees.clone();
                 }
-                run_verification(model, &args, progress, &scan_def).print(json);
+                run_verification::<Event, CsModel<_>, CsModelRun<_>, PmtlOracle>(
+                    model, &args, progress, &scan_def,
+                )
+                .print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -218,7 +224,7 @@ impl Cli {
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(scxml_model);
                 eprint!("Trace computation in progress...");
-                args.trace(&scan_def, tracer);
+                args.trace::<CsModel<_>, PmtlOracle, Event, CsModelRun<_>, _>(&scan_def, tracer);
                 eprintln!(" done");
             }
         }
@@ -243,7 +249,10 @@ impl Cli {
                 if args.all {
                     args.properties = jani_model.guarantees;
                 }
-                run_verification(model, &args, progress, &scan).print(json);
+                run_verification::<Action, PgModel<_>, PgModelRun<_>, MtlOracle>(
+                    model, &args, progress, &scan,
+                )
+                .print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -259,7 +268,7 @@ impl Cli {
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
                 eprint!("Trace computation in progress...");
-                args.trace(&scan, tracer);
+                args.trace::<PgModel<_>, MtlOracle, Action, PgModelRun<_>, _>(&scan, tracer);
                 eprintln!(" done");
             }
         }
@@ -271,20 +280,23 @@ impl Cli {
 
         match self.command {
             Commands::Verify {
-                mut args,
+                args,
                 progress,
                 json,
             } => {
                 args.validate()?;
                 eprint!("Processing {model}...");
                 let properties = args.properties.clone();
-                let (scan, promela_model) = load(&self.model, &properties, args.all)?;
+                let (scan, _promela_model) = load(&self.model, &properties, args.all)?;
                 eprintln!(" done");
                 // validate_properties(&args.properties, &jani_model.guarantees)?;
                 // if args.all {
                 //     args.properties = jani_model.guarantees;
                 // }
-                run_verification(model, &args, progress, &scan).print(json);
+                run_verification::<Event, CsModel<_>, CsModelRun<_>, PmtlOracle>(
+                    model, &args, progress, &scan,
+                )
+                .print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -295,7 +307,7 @@ impl Cli {
             Commands::Trace(args) => {
                 args.validate()?;
                 eprint!("Processing {model}...");
-                let (scan, jani_model) = load(&self.model, &[], args.all)?;
+                let (_scan, _promela_model) = load(&self.model, &[], args.all)?;
                 eprintln!(" done");
                 // let jani_model = Arc::new(jani_model);
                 todo!()
@@ -319,17 +331,16 @@ fn validate_properties(props: &[String], all_props: &[String]) -> anyhow::Result
     }
 }
 
-fn run_verification<Event, Ts, O>(
+fn run_verification<'a, Event, D, Ts, O>(
     model: &str,
     args: &VerifyArgs,
     progress: Option<Bar>,
-    scan: &Scan<Event, Ts, O>,
+    scan: &'a Scan<D, O>,
 ) -> Report
 where
-    Ts: Definition + 'static + Sync,
-    for<'def> <Ts as Definition>::I<'def>: TransitionSystem<Event>,
-    Event: Clone + Send + Sync + 'static,
-    O: Oracle + 'static,
+    D: 'a + Sync,
+    Ts: TransitionSystem<Event> + From<&'a D>,
+    O: Oracle,
 {
     if let Some(bar) = progress {
         eprintln!(
@@ -338,16 +349,21 @@ where
         );
         std::thread::scope(|s| {
             s.spawn(|| {
-                bar.print_progress_bar(args.confidence, args.precision, &args.properties, scan);
+                bar.print_progress_bar::<D, O>(
+                    args.confidence,
+                    args.precision,
+                    &args.properties,
+                    scan,
+                );
             });
-            args.verify(model.to_owned(), scan)
+            args.verify::<D, O, Event, Ts>(model.to_owned(), scan)
         })
     } else {
         eprint!(
             "Verifying {model} (-p {} -c {} -d {}) {:?}...",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let report = args.verify(model.to_owned(), scan);
+        let report = args.verify::<D, O, Event, Ts>(model.to_owned(), scan);
         eprintln!(" done");
         report
     }
