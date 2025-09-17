@@ -16,6 +16,7 @@ pub(crate) type Guard = FnExpression<Var, DummyRng>;
 pub(crate) type Transition = (Location, Option<Guard>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
+#[derive(Debug, Clone)]
 pub struct ProgramGraphBuilder<R: Rng> {
     // initial_states: Vec<Location>,
     initial_states: SmallVec<[Location; 8]>,
@@ -30,13 +31,13 @@ pub struct ProgramGraphBuilder<R: Rng> {
     clocks: u16,
 }
 
-impl<R: Rng + 'static> Default for ProgramGraphBuilder<R> {
+impl<R: Clone + Rng + 'static> Default for ProgramGraphBuilder<R> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<R: Rng + 'static> ProgramGraphBuilder<R> {
+impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
     /// Creates a new [`ProgramGraphBuilder`].
     /// At creation, this will only have the initial location with no variables, no actions and no transitions.
     pub fn new() -> Self {
@@ -496,7 +497,7 @@ impl<R: Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// Since the construction of the builder is already checked ad every step,
     /// this method cannot fail.
-    pub(crate) fn build(mut self) -> ProgramGraph<R> {
+    pub fn build(mut self) -> ProgramGraph<R> {
         // Since vectors of effects and transitions will become immutable,
         // they should be shrunk to take as little space as possible
         self.effects.iter_mut().for_each(|effect| {

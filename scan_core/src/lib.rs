@@ -59,6 +59,7 @@ pub enum RunOutcome {
 /// [`Scan`] holds the model, properties and other data necessary to run the verification process.
 /// The type of models and properties is abstracted through the [`TransitionSystem`] and [`Oracle`] traits,
 /// to provide a unified interface.
+#[derive(Debug, Clone)]
 pub struct Scan<D, O> {
     tsd: D,
     oracle: O,
@@ -69,7 +70,7 @@ pub struct Scan<D, O> {
 }
 
 impl<D, O> Scan<D, O> {
-    /// Create new [`Scan`] object, based on the given [`Definition`] of a [`TransitionSystem`] and [`Oracle`].
+    /// Create new [`Scan`] object.
     pub fn new(tsd: D, oracle: O) -> Self {
         Scan {
             tsd,

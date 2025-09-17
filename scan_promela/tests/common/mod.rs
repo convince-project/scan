@@ -1,4 +1,3 @@
-pub use scan_promela::builder::*;
 pub use scan_promela::*;
 
 // helper functions for tests

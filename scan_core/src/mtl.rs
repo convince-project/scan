@@ -1,7 +1,7 @@
 use crate::{Oracle, Time};
 
 /// An Metric Temporal Logic (MTL) formula.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Mtl<V: Clone> {
     /// An atomic proposition in an [`Mtl`] formula.
     Atom(V),
@@ -12,7 +12,7 @@ pub enum Mtl<V: Clone> {
 /// An oracle for (simple) [`Mtl`] properties.
 ///
 /// Currently limited to properties of the form `p U q`.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct MtlOracle {
     assumes: Vec<(Mtl<usize>, Option<bool>)>,
     guarantees: Vec<(Mtl<usize>, Option<bool>)>,

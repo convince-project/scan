@@ -5,8 +5,9 @@ use scan_core::program_graph::*;
 use scan_core::*;
 
 #[inline(always)]
-fn run_to_completion(mut pg: ProgramGraphRun<SmallRng>) {
-    let mut rng = SmallRng::from_os_rng();
+fn run_to_completion(pg: &mut ProgramGraphRun<SmallRng>) {
+    let mut rng = SmallRng::from_seed([0; 32]);
+
     while let Some((action, post)) = pg
         .possible_transitions()
         .filter_map(|(a, iter)| {
@@ -22,17 +23,17 @@ fn run_to_completion(mut pg: ProgramGraphRun<SmallRng>) {
 }
 
 #[inline(always)]
-fn simple_pg() -> ProgramGraph<SmallRng> {
+fn simple_pg() -> ProgramGraphBuilder<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
     let post = pg.new_location();
     pg.add_transition(pre, action, post, None).unwrap();
-    pg.build()
+    pg
 }
 
 #[inline(always)]
-fn condition_pg() -> ProgramGraph<SmallRng> {
+fn condition_pg() -> ProgramGraphBuilder<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -59,11 +60,11 @@ fn condition_pg() -> ProgramGraph<SmallRng> {
         )))),
     )
     .unwrap();
-    pg.build()
+    pg
 }
 
 #[inline(always)]
-fn long_pg() -> ProgramGraph<SmallRng> {
+fn long_pg() -> ProgramGraphBuilder<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let mut pre = pg.new_initial_location();
     let action = pg.new_action();
@@ -72,11 +73,11 @@ fn long_pg() -> ProgramGraph<SmallRng> {
         pg.add_transition(pre, action, post, None).unwrap();
         pre = post;
     }
-    pg.build()
+    pg
 }
 
 #[inline(always)]
-fn counter_pg() -> ProgramGraph<SmallRng> {
+fn counter_pg() -> ProgramGraphBuilder<SmallRng> {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();
@@ -98,7 +99,7 @@ fn counter_pg() -> ProgramGraph<SmallRng> {
         pg.add_transition(initial, action, initial, Some(guard))
             .unwrap();
     }
-    pg.build()
+    pg
 }
 
 fn possible_transitions(c: &mut Criterion) {
@@ -108,7 +109,8 @@ fn possible_transitions(c: &mut Criterion) {
         (long_pg(), "long pg"),
         (counter_pg(), "counter pg"),
     ];
-    for (pg, name) in pgs.iter() {
+    for (pg, name) in pgs.into_iter() {
+        let pg = pg.build();
         let pg = pg.new_instance();
         c.bench_with_input(
             BenchmarkId::new("possible transitions", name),
@@ -127,13 +129,14 @@ fn run(c: &mut Criterion) {
         (long_pg(), "long pg"),
         (counter_pg(), "counter pg"),
     ];
-    for (pg, name) in pgs.iter() {
-        let pg = pg.new_instance();
+    for (pg, name) in pgs.into_iter() {
+        let pg = pg.build();
         c.bench_with_input(
             BenchmarkId::new("execute to termination", name),
             &pg,
             |b, pg| {
-                b.iter(|| run_to_completion(pg.clone()));
+                let mut pg = pg.new_instance();
+                b.iter(|| run_to_completion(&mut pg));
             },
         );
     }

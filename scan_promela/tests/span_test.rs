@@ -298,12 +298,14 @@ fn send_then_receive_unbounded() {
     ));
 
     // -------- costruiamo il CS
-    let mut cs = Builder::create_channel_system(vec![
+    let cs = Builder::create_channel_system(vec![
         Module::DeclList(DeclList::new(vec![ch_decl])),
         p_mod,
         q_mod,
     ])
     .expect("builder");
+    let cs = cs.build();
+    let mut cs = cs.new_instance();
 
     // (1) All’inizio solo P può fare il send
     {
@@ -383,9 +385,11 @@ fn second_send_on_full_channel_blocked() {
         false,
     ));
 
-    let mut cs =
+    let cs =
         Builder::create_channel_system(vec![Module::DeclList(DeclList::new(vec![ch_decl])), p_mod])
-            .expect("builder");
+            .expect("builder")
+            .build();
+    let mut cs = cs.new_instance();
 
     // Primo send accettato ----------------------------------------------------
     let (pg, act, mut alts) = cs.possible_transitions().next().unwrap();
@@ -443,7 +447,9 @@ fn receive_on_empty_channel_disabled() {
 
     let cs =
         Builder::create_channel_system(vec![Module::DeclList(DeclList::new(vec![ch_decl])), r_mod])
-            .expect("builder");
+            .expect("builder")
+            .build();
+    let cs = cs.new_instance();
 
     // Nessuna transizione abilitata (coda vuota)
     assert_eq!(cs.possible_transitions().count(), 0);
@@ -516,10 +522,13 @@ fn if_choice_blocks_and_executes() {
     ));
 
     // -- costruzione e simulazione --------------------------------------------
-    let mut cs = Builder::create_channel_system(vec![p_mod]).expect("build");
+    let cs = Builder::create_channel_system(vec![p_mod])
+        .expect("build")
+        .build();
+    let mut cs = cs.new_instance();
 
     // (1) all’inizio è abilitata SOLO l’opzione x==0
-    let (enabled_count, mut enabled_info) = {
+    let (enabled_count, _enabled_info) = {
         let mut enabled_count = 0usize;
         let mut enabled_info = None;
 
@@ -651,7 +660,8 @@ fn if_two_true_guards_nondet() {
     ));
 
     // costruiamo il sistema
-    let cs = Builder::create_channel_system(vec![q_mod]).unwrap();
+    let cs = Builder::create_channel_system(vec![q_mod]).unwrap().build();
+    let cs = cs.new_instance();
     // all’inizio esistono DUE transizioni abilitate (una per opzione)
     assert_eq!(cs.possible_transitions().count(), 2);
 }
@@ -686,7 +696,8 @@ fn if_blocks_when_all_guards_false() {
         false,
     ));
 
-    let cs = Builder::create_channel_system(vec![r_mod]).unwrap();
+    let cs = Builder::create_channel_system(vec![r_mod]).unwrap().build();
+    let cs = cs.new_instance();
     use scan_core::channel_system::Location as CsLocation;
 
     let enabled: Vec<_> = cs
@@ -753,7 +764,8 @@ fn print_transitions_with_and_without_empty_post_locs() {
         false,
     ));
 
-    let cs = Builder::create_channel_system(vec![r_mod]).unwrap();
+    let cs = Builder::create_channel_system(vec![r_mod]).unwrap().build();
+    let cs = cs.new_instance();
 
     // ----- Raw print: includes all actions regardless of viability -----
     println!("▶ All transitions (including blocked):");
@@ -869,7 +881,8 @@ fn if_else_only_when_x_negative() {
         false,
     ));
 
-    let cs = Builder::create_channel_system(vec![p_mod]).unwrap();
+    let cs = Builder::create_channel_system(vec![p_mod]).unwrap().build();
+    let cs = cs.new_instance();
 
     let enabled: Vec<_> = cs
         .possible_transitions()
@@ -878,7 +891,7 @@ fn if_else_only_when_x_negative() {
                 .map(|l| l.collect())
                 .filter(|v: &Vec<CsLoc>| !v.is_empty())
                 .collect();
-            (!posts.is_empty()).then(|| (pg, act, posts))
+            (!posts.is_empty()).then_some((pg, act, posts))
         })
         .collect();
 
@@ -969,7 +982,8 @@ fn do_loops_until_guards_false_then_exits_verbose() {
         false,
     ));
 
-    let cs = Builder::create_channel_system(vec![proc]).unwrap();
+    let cs = Builder::create_channel_system(vec![proc]).unwrap().build();
+    let cs = cs.new_instance();
 
     /* -------- estraiamo la transizione veramente abilitata -------- */
     let mut enabled_count = 0;
@@ -1071,12 +1085,14 @@ fn send_and_receive_capacity_one_single_exchange() {
     ));
 
     // --- build the CS (order: DeclList, P, Q) → PgId(P)=1, PgId(Q)=2
-    let mut cs = Builder::create_channel_system(vec![
+    let cs = Builder::create_channel_system(vec![
         Module::DeclList(DeclList::new(vec![ch_decl])),
         p_mod,
         q_mod,
     ])
-    .expect("builder");
+    .expect("builder")
+    .build();
+    let mut cs = cs.new_instance();
 
     // (1) start: only P can send
     {
@@ -1186,7 +1202,8 @@ fn if_else_guard_true_else_disabled_verbose() {
         body,
         false,
     ));
-    let cs = Builder::create_channel_system(vec![proc]).unwrap();
+    let cs = Builder::create_channel_system(vec![proc]).unwrap().build();
+    let cs = cs.new_instance();
 
     // --------- raccolta alternative abilitate ----------
     let mut enabled_count = 0usize;
@@ -1207,7 +1224,7 @@ fn if_else_guard_true_else_disabled_verbose() {
         enabled_count, 1,
         "deve essere abilitata una sola alternativa (non l'else)"
     );
-    let (_pg, _act, alt_idx, post_locs) = enabled_info.expect("nessuna transizione abilitata");
+    let (_pg, _act, _alt_idx, post_locs) = enabled_info.expect("nessuna transizione abilitata");
 
     // atteso: è il ramo 0 (guardia vera), NON l’else
     //assert_eq!(alt_idx, 0, "si deve abilitare il ramo con guardia vera, non l'else");
@@ -1296,7 +1313,8 @@ fn if_else_all_guards_false_then_only_else_enabled_verbose() {
         body,
         false,
     ));
-    let cs = Builder::create_channel_system(vec![proc]).unwrap();
+    let cs = Builder::create_channel_system(vec![proc]).unwrap().build();
+    let cs = cs.new_instance();
 
     // --------- raccolta alternative abilitate ----------
     let mut enabled_count = 0usize;
@@ -1314,7 +1332,7 @@ fn if_else_all_guards_false_then_only_else_enabled_verbose() {
 
     // ---------- assert + stampa ----------
     assert_eq!(enabled_count, 1, "deve abilitarsi SOLO l'else");
-    let (_pg, _act, alt_idx, post_locs) = enabled_info.expect("nessuna transizione abilitata");
+    let (_pg, _act, _alt_idx, post_locs) = enabled_info.expect("nessuna transizione abilitata");
 
     // atteso: branch 2 (i due normali sono 0 e 1, l'else è in coda)
     //assert_eq!(alt_idx, 2, "l'unica alternativa abilitata deve essere l'else");

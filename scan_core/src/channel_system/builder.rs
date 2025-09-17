@@ -122,13 +122,13 @@ pub struct ChannelSystemBuilder<R: Rng> {
     communications: HashMap<Action, (Channel, Message)>,
 }
 
-impl<R: Rng + 'static> Default for ChannelSystemBuilder<R> {
+impl<R: Clone + Rng + 'static> Default for ChannelSystemBuilder<R> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<R: Rng + 'static> ChannelSystemBuilder<R> {
+impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
     /// Create a new [`ProgramGraphBuilder`] with the given RNG (see also `ChannelSystemBuilder::new`).
     /// At creation, this will be completely empty.
     pub fn new() -> Self {
@@ -665,7 +665,7 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
     }
 
     /// Produces a [`ChannelSystem`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
-    pub(crate) fn build(mut self) -> ChannelSystem<R> {
+    pub fn build(mut self) -> ChannelSystem<R> {
         info!(
             "create Channel System with:\n{} Program Graphs\n{} channels",
             self.program_graphs.len(),

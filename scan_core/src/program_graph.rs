@@ -23,7 +23,6 @@
 //!
 //! ```
 //! # use scan_core::program_graph::{ProgramGraphBuilder, Location};
-//! # use scan_core::Definition;
 //! # use smallvec::smallvec;
 //! // Create a new PG builder
 //! let mut pg_builder = ProgramGraphBuilder::new();
@@ -188,7 +187,7 @@ pub enum PgError {
     Type(#[source] TypeError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Effect<R: Rng> {
     // NOTE: Could use a SmallVec for clock resets
     Effects(Vec<(Var, FnExpression<Var, R>)>, Vec<Clock>),
@@ -209,7 +208,6 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 ///
 /// ```
 /// # use scan_core::program_graph::ProgramGraphBuilder;
-/// # use scan_core::Definition;
 /// # use rand::rngs::SmallRng;
 /// # use rand::SeedableRng;
 /// // Create and populate a PG builder object
@@ -230,7 +228,8 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// let mut rng = SmallRng::from_os_rng();
 /// pg.transition(e, &[initial], &mut rng).expect("transition is active");
 /// ```
-pub(crate) struct ProgramGraph<R: Rng> {
+#[derive(Debug, Clone)]
+pub struct ProgramGraph<R: Rng> {
     initial_states: SmallVec<[Location; 8]>,
     effects: Vec<Effect<R>>,
     locations: Vec<LocationData>,
@@ -241,7 +240,7 @@ pub(crate) struct ProgramGraph<R: Rng> {
 }
 
 impl<R: Rng> ProgramGraph<R> {
-    pub(crate) fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def, R> {
+    pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def, R> {
         ProgramGraphRun {
             current_states: self.initial_states.clone(),
             vars: self.vars.clone(),
@@ -285,8 +284,8 @@ impl<R: Rng> ProgramGraph<R> {
 /// meaning that it is not possible to introduce new locations, actions, variables, etc.
 /// Though, this restriction makes it so that cloning the [`ProgramGraphRun`] is cheap,
 /// because only the internal state needs to be duplicated.
-#[derive(Clone)]
-pub(crate) struct ProgramGraphRun<'def, R: Rng> {
+#[derive(Debug, Clone)]
+pub struct ProgramGraphRun<'def, R: Rng> {
     current_states: SmallVec<[Location; 8]>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
@@ -294,30 +293,29 @@ pub(crate) struct ProgramGraphRun<'def, R: Rng> {
 }
 
 impl<'def, R: Rng> ProgramGraphRun<'def, R> {
-    // /// Returns the current location.
-    // ///
-    // /// ```
-    // /// # use scan_core::program_graph::ProgramGraphBuilder;
-    // /// # use scan_core::Definition;
-    // /// # use rand::rngs::SmallRng;
-    // /// // Create a new PG builder
-    // /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
-    // ///
-    // /// // The builder is initialized with an initial location
-    // /// let initial_loc = pg_builder.new_initial_location();
-    // ///
-    // /// // Build the PG from its builder
-    // /// // The builder is always guaranteed to build a well-defined PG and building cannot fail
-    // /// let pg = pg_builder.build();
-    // /// let instance = pg.new_instance();
-    // ///
-    // /// // Execution starts in the initial location
-    // /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
-    // /// ```
-    // #[inline(always)]
-    // pub fn current_states(&self) -> &SmallVec<[Location; 8]> {
-    //     &self.current_states
-    // }
+    /// Returns the current location.
+    ///
+    /// ```
+    /// # use scan_core::program_graph::ProgramGraphBuilder;
+    /// # use rand::rngs::SmallRng;
+    /// // Create a new PG builder
+    /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+    ///
+    /// // The builder is initialized with an initial location
+    /// let initial_loc = pg_builder.new_initial_location();
+    ///
+    /// // Build the PG from its builder
+    /// // The builder is always guaranteed to build a well-defined PG and building cannot fail
+    /// let pg = pg_builder.build();
+    /// let instance = pg.new_instance();
+    ///
+    /// // Execution starts in the initial location
+    /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
+    /// ```
+    #[inline(always)]
+    pub fn current_states(&self) -> &SmallVec<[Location; 8]> {
+        &self.current_states
+    }
 
     /// Iterates over all transitions that can be admitted in the current state.
     ///
@@ -332,11 +330,6 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
             impl Iterator<Item = impl Iterator<Item = Location> + use<'_, R>> + use<'_, R>,
         ),
     > + use<'_, R> {
-        // static EMPTY: Vec<(Action, Vec<Transition>)> = Vec::new();
-        // self.current_states
-        //     .first()
-        //     .map(|loc| &self.def.locations[loc.0 as usize].0)
-        //     .unwrap_or_else(|| &EMPTY)
         self.def.locations[self.current_states[0].0 as usize]
             .0
             .iter()
@@ -347,19 +340,6 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
                     self.possible_transitions_action(*action, Some(idx)),
                 )
             })
-        // .chain(
-        //     if self.current_states.is_empty() {
-        //         0..self.def.effects.len()
-        //     } else {
-        //         std::ops::Range::default()
-        //     }
-        //     .map(|idx| {
-        //         (
-        //             Action(idx as ActionIdx),
-        //             self.possible_transitions_action(Action(idx as ActionIdx), None),
-        //         )
-        //     }),
-        // )
     }
 
     #[inline(always)]

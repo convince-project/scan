@@ -9,13 +9,14 @@ use crate::{
 };
 
 /// A [`ProgramGraph`]-based model implementing [`TransitionSystem`] with synchronous concurrency.
+#[derive(Debug, Clone)]
 pub struct PgModel<R: Rng> {
     pg: ProgramGraph<R>,
     global_vars: Vec<Var>,
     predicates: Vec<FnExpression<Var, DummyRng>>,
 }
 
-impl<R: Rng + 'static> PgModel<R> {
+impl<R: Clone + Rng + 'static> PgModel<R> {
     /// Create a new [`PgModel`] from the given [`ProgramGraph`] and predicates over its internal state.
     pub fn new(
         pg: ProgramGraphBuilder<R>,
@@ -48,6 +49,7 @@ impl<'a, R: Rng + SeedableRng> From<&'a PgModel<R>> for PgModelRun<'a, R> {
 
 /// A model based on a single [`ProgramGraph`],
 /// with predicates over the PG's variables.
+#[derive(Debug, Clone)]
 pub struct PgModelRun<'def, R: Rng> {
     pg: ProgramGraphRun<'def, R>,
     rng: R,

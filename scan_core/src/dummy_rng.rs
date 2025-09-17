@@ -1,5 +1,6 @@
 use rand::{RngCore, SeedableRng};
 
+#[derive(Debug, Clone)]
 pub(crate) struct DummyRng;
 
 impl RngCore for DummyRng {

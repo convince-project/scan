@@ -281,16 +281,15 @@ pub enum EventType {
 /// A definition object for a CS.
 /// It represents the abstract definition of a CS.
 ///
-/// The only way to produce a [`ChannelSystemDef`] is through a [`ChannelSystemBuilder`].
+/// The only way to produce a [`ChannelSystem`] is through a [`ChannelSystemBuilder`].
 /// This guarantees that there are no type errors involved in the definition of its PGs,
 /// and thus the CS will always be in a consistent state.
 ///
-/// Use the [`<ChannelSystemDef as Definition>::new_instance`] to obtain a runnable CS object.
+/// Use the [`<ChannelSystem::new_instance`] to obtain a runnable CS object.
 /// Example:
 ///
 /// ```
 /// # use scan_core::channel_system::ChannelSystemBuilder;
-/// # use scan_core::Definition;
 /// # use rand::rngs::SmallRng;
 /// # use rand::SeedableRng;
 /// // Create and populate a CS builder object
@@ -312,7 +311,8 @@ pub enum EventType {
 /// assert_eq!(post_loc, initial);
 /// cs.transition(pg_id, e, &[initial]).expect("transition is active");
 /// ```
-pub(crate) struct ChannelSystem<R: Rng> {
+#[derive(Debug, Clone)]
+pub struct ChannelSystem<R: Rng> {
     channels: Vec<(Type, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
     communications_pg_idxs: Vec<u16>,
@@ -320,7 +320,7 @@ pub(crate) struct ChannelSystem<R: Rng> {
 }
 
 impl<R: Rng + SeedableRng> ChannelSystem<R> {
-    pub(crate) fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def, R> {
+    pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def, R> {
         ChannelSystemRun {
             rng: R::from_os_rng(),
             time: 0,
@@ -364,7 +364,8 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
 /// meaning that it is not possible to introduce new PGs or modifying them, or add new channels.
 /// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
 /// because only the internal state needs to be duplicated.
-pub(crate) struct ChannelSystemRun<'def, R: Rng> {
+#[derive(Debug, Clone)]
+pub struct ChannelSystemRun<'def, R: Rng> {
     rng: R,
     time: Time,
     message_queue: Vec<VecDeque<Val>>,
@@ -379,36 +380,36 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
         self.time
     }
 
-    // /// Iterates over all transitions that can be admitted in the current state.
-    // ///
-    // /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
-    // /// (the pre-state being necessarily the current state of the machine).
-    // /// The (eventual) guard is guaranteed to be satisfied.
-    // ///
-    // /// See also [`ProgramGraph::possible_transitions`].
-    // pub fn possible_transitions(
-    //     &self,
-    // ) -> impl Iterator<
-    //     Item = (
-    //         PgId,
-    //         Action,
-    //         impl Iterator<Item = impl Iterator<Item = Location> + '_> + '_,
-    //     ),
-    // > + '_ {
-    //     self.program_graphs
-    //         .iter()
-    //         .enumerate()
-    //         .flat_map(move |(id, pg)| {
-    //             let pg_id = PgId(id as u16);
-    //             pg.possible_transitions().filter_map(move |(action, post)| {
-    //                 let action = Action(pg_id, action);
-    //                 self.check_communication(pg_id, action).ok().map(move |()| {
-    //                     let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
-    //                     (pg_id, action, post)
-    //                 })
-    //             })
-    //         })
-    // }
+    /// Iterates over all transitions that can be admitted in the current state.
+    ///
+    /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
+    /// (the pre-state being necessarily the current state of the machine).
+    /// The (eventual) guard is guaranteed to be satisfied.
+    ///
+    /// See also [`ProgramGraph::possible_transitions`].
+    pub fn possible_transitions(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            PgId,
+            Action,
+            impl Iterator<Item = impl Iterator<Item = Location> + '_> + '_,
+        ),
+    > + '_ {
+        self.program_graphs
+            .iter()
+            .enumerate()
+            .flat_map(move |(id, pg)| {
+                let pg_id = PgId(id as u16);
+                pg.possible_transitions().filter_map(move |(action, post)| {
+                    let action = Action(pg_id, action);
+                    self.check_communication(pg_id, action).ok().map(move |()| {
+                        let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
+                        (pg_id, action, post)
+                    })
+                })
+            })
+    }
 
     pub(crate) fn montecarlo_execution(&mut self, duration: Time) -> Option<Event> {
         let pgs = self.program_graphs.len();
@@ -473,40 +474,40 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
         None
     }
 
-    // fn check_communication(&self, pg_id: PgId, action: Action) -> Result<(), CsError> {
-    //     if pg_id.0 >= self.program_graphs.len() as u16 {
-    //         Err(CsError::MissingPg(pg_id))
-    //     } else if action.0 != pg_id {
-    //         Err(CsError::ActionNotInPg(action, pg_id))
-    //     } else if let Some((channel, message)) = self.def.communication(action) {
-    //         let (_, capacity) = self.def.channels[channel.0 as usize];
-    //         let queue = &self.message_queue[channel.0 as usize];
-    //         // Channel capacity must never be exceeded!
-    //         assert!(capacity.is_none_or(|cap| queue.len() <= cap));
-    //         match message {
-    //             Message::Send if capacity.is_some_and(|cap| queue.len() >= cap) => {
-    //                 Err(CsError::OutOfCapacity(channel))
-    //             }
-    //             Message::Receive if queue.is_empty() => Err(CsError::Empty(channel)),
-    //             Message::ProbeEmptyQueue | Message::ProbeFullQueue
-    //                 if matches!(capacity, Some(0)) =>
-    //             {
-    //                 Err(CsError::ProbingHandshakeChannel(channel))
-    //             }
-    //             Message::ProbeFullQueue if capacity.is_none() => {
-    //                 Err(CsError::ProbingInfiniteQueue(channel))
-    //             }
-    //             Message::ProbeEmptyQueue if !queue.is_empty() => Err(CsError::NotEmpty(channel)),
-    //             Message::ProbeFullQueue if capacity.is_some_and(|cap| queue.len() < cap) => {
-    //                 Err(CsError::NotFull(channel))
-    //             }
-    //             _ => Ok(()),
-    //         }
-    //     } else {
-    //         Ok(())
-    //         // Err(CsError::NoCommunication(action))
-    //     }
-    // }
+    fn check_communication(&self, pg_id: PgId, action: Action) -> Result<(), CsError> {
+        if pg_id.0 >= self.program_graphs.len() as u16 {
+            Err(CsError::MissingPg(pg_id))
+        } else if action.0 != pg_id {
+            Err(CsError::ActionNotInPg(action, pg_id))
+        } else if let Some((channel, message)) = self.def.communication(action) {
+            let (_, capacity) = self.def.channels[channel.0 as usize];
+            let queue = &self.message_queue[channel.0 as usize];
+            // Channel capacity must never be exceeded!
+            assert!(capacity.is_none_or(|cap| queue.len() <= cap));
+            match message {
+                Message::Send if capacity.is_some_and(|cap| queue.len() >= cap) => {
+                    Err(CsError::OutOfCapacity(channel))
+                }
+                Message::Receive if queue.is_empty() => Err(CsError::Empty(channel)),
+                Message::ProbeEmptyQueue | Message::ProbeFullQueue
+                    if matches!(capacity, Some(0)) =>
+                {
+                    Err(CsError::ProbingHandshakeChannel(channel))
+                }
+                Message::ProbeFullQueue if capacity.is_none() => {
+                    Err(CsError::ProbingInfiniteQueue(channel))
+                }
+                Message::ProbeEmptyQueue if !queue.is_empty() => Err(CsError::NotEmpty(channel)),
+                Message::ProbeFullQueue if capacity.is_some_and(|cap| queue.len() < cap) => {
+                    Err(CsError::NotFull(channel))
+                }
+                _ => Ok(()),
+            }
+        } else {
+            Ok(())
+            // Err(CsError::NoCommunication(action))
+        }
+    }
 
     /// Executes a transition on the given PG characterized by the argument action and post-state.
     ///

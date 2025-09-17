@@ -26,8 +26,8 @@ pub type PromelaModel = ();
 
 pub fn load(
     path: &Path,
-    properties: &[String],
-    all_properties: bool,
+    _properties: &[String],
+    _all_properties: bool,
 ) -> anyhow::Result<(PromelaScan, PromelaModel)> {
     // let time = std::time::Instant::now();
     // info!(target: "parser", "parse SCXML model");

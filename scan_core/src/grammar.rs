@@ -5,6 +5,7 @@
 //! The language features base types and product types,
 //! Boolean logic and basic arithmetic expressions.
 
+use dyn_clone::DynClone;
 use rand::Rng;
 use std::hash::Hash;
 use thiserror::Error;
@@ -717,9 +718,14 @@ where
     }
 }
 
-type DynFnExpr<V, R> = dyn Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync;
+trait DynFnExpr<V, R>: Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync + DynClone {}
 
-pub(crate) struct FnExpression<V, R: Rng>(Box<DynFnExpr<V, R>>);
+impl<V, R, T: Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync + Clone> DynFnExpr<V, R> for T {}
+
+dyn_clone::clone_trait_object!(<V, R> DynFnExpr<V, R>);
+
+#[derive(Clone)]
+pub(crate) struct FnExpression<V, R>(Box<dyn DynFnExpr<V, R>>);
 
 impl<C, R: Rng> std::fmt::Debug for FnExpression<C, R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -727,14 +733,14 @@ impl<C, R: Rng> std::fmt::Debug for FnExpression<C, R> {
     }
 }
 
-impl<V, R: Rng> FnExpression<V, R> {
+impl<V, R> FnExpression<V, R> {
     #[inline(always)]
     pub fn eval(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Val {
         self.0(vars, rng)
     }
 }
 
-impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
+impl<V: Clone + Send + Sync + 'static, R: Clone + Rng + 'static> From<Expression<V>>
     for FnExpression<V, R>
 {
     fn from(value: Expression<V>) -> Self {
