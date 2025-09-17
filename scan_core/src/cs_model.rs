@@ -1,6 +1,5 @@
 use crate::channel_system::{
-    Action, Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
-    Location, PgId,
+    Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
 use crate::grammar::FnExpression;
 use crate::{DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
@@ -61,7 +60,7 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
 }
 
 impl<'a, R: Rng + SeedableRng + 'a> CsModel<R> {
-    pub fn new_instance(&'a self) -> CsModelRun<'a, R> {
+    fn new_instance(&'a self) -> CsModelRun<'a, R> {
         CsModelRun {
             cs: self.cs.new_instance(),
             ports: self.ports.clone(),
@@ -88,20 +87,6 @@ pub struct CsModelRun<'def, R: Rng + SeedableRng> {
     // TODO: predicates should not use rng
     predicates: &'def Vec<FnExpression<Atom, DummyRng>>,
     last_event: Option<Event>,
-}
-
-impl<'def, R: Rng + SeedableRng> CsModelRun<'def, R> {
-    pub fn possible_transitions(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            PgId,
-            Action,
-            impl Iterator<Item = impl Iterator<Item = Location> + '_> + '_,
-        ),
-    > + '_ {
-        self.cs.possible_transitions()
-    }
 }
 
 impl<'def, R: Rng + SeedableRng> TransitionSystem<Event> for CsModelRun<'def, R> {

@@ -3,11 +3,7 @@ use std::{fs::File, io::Read, path::Path};
 pub use crate::spinv4_y::*;
 use anyhow::{Context, anyhow, bail};
 use log::info;
-#[warn(unused_imports)]
 use lrlex::lrlex_mod;
-use lrpar::Lexeme;
-use lrpar::Lexer;
-use lrpar::NonStreamingLexer;
 use lrpar::lrpar_mod;
 
 lrlex_mod!("spinv.l");
@@ -140,48 +136,48 @@ fn read_file(file_path: &Path) -> anyhow::Result<String> {
     Ok(content)
 }
 
-fn debug_parsing(content: &str) {
-    // ---------------------------------------------------------------- Lexer
-    let lexerdef = spinv_l::lexerdef();
-    let lexer = lexerdef.lexer(content);
+// fn debug_parsing(content: &str) {
+//     // ---------------------------------------------------------------- Lexer
+//     let lexerdef = spinv_l::lexerdef();
+//     let lexer = lexerdef.lexer(content);
 
-    println!("--- Lexer trace ---");
-    for token in lexer.iter() {
-        match token {
-            Ok(lexeme) => {
-                let span = lexeme.span();
-                println!(
-                    "Token: {:?}, text: '{}'",
-                    lexeme.tok_id(),
-                    lexer.span_str(span)
-                );
-            }
-            Err(e) => eprintln!("Lexer error: {e:?}"),
-        }
-    }
+//     println!("--- Lexer trace ---");
+//     for token in lexer.iter() {
+//         match token {
+//             Ok(lexeme) => {
+//                 let span = lexeme.span();
+//                 println!(
+//                     "Token: {:?}, text: '{}'",
+//                     lexeme.tok_id(),
+//                     lexer.span_str(span)
+//                 );
+//             }
+//             Err(e) => eprintln!("Lexer error: {e:?}"),
+//         }
+//     }
 
-    // ---------------------------------------------------------------- Parser
-    println!("--- Parser trace ---");
-    let (res, errs) = spinv4_y::parse(&lexer);
+//     // ---------------------------------------------------------------- Parser
+//     println!("--- Parser trace ---");
+//     let (res, errs) = spinv4_y::parse(&lexer);
 
-    // Print all error‑repair proposals reported by the GLR/LALR parser.
-    for e in errs {
-        println!("Parse error: {}", e.pp(&lexer, &spinv4_y::token_epp));
-    }
+//     // Print all error‑repair proposals reported by the GLR/LALR parser.
+//     for e in errs {
+//         println!("Parse error: {}", e.pp(&lexer, &spinv4_y::token_epp));
+//     }
 
-    // Final outcome
-    match res {
-        Some(Ok(ast)) => {
-            println!("Parsing finished successfully.");
-            for module in ast {
-                // Each `module` implements `Display`, so we show it nicely.
-                println!("{module}");
-            }
-        }
-        Some(Err(e)) => eprintln!("Parser returned an error: {e:?}"),
-        None => eprintln!("Parsing failed: no result produced."),
-    }
-}
+//     // Final outcome
+//     match res {
+//         Some(Ok(ast)) => {
+//             println!("Parsing finished successfully.");
+//             for module in ast {
+//                 // Each `module` implements `Display`, so we show it nicely.
+//                 println!("{module}");
+//             }
+//         }
+//         Some(Err(e)) => eprintln!("Parser returned an error: {e:?}"),
+//         None => eprintln!("Parsing failed: no result produced."),
+//     }
+// }
 
 /// Tokenise `content`, parse it and return the AST (Vec<Module>).
 ///

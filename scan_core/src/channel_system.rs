@@ -320,6 +320,12 @@ pub struct ChannelSystem<R: Rng> {
 }
 
 impl<R: Rng + SeedableRng> ChannelSystem<R> {
+    /// Creates a new [`ChannelSystemRun`] which allows to execute the CS as defined.
+    ///
+    /// The new instance borrows the caller to refer to the CS definition without copying its data,
+    /// so that spawning instances is (relatively) inexpensive.
+    ///
+    /// See also [`ProgramGraph::new_instance`].
     pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def, R> {
         ChannelSystemRun {
             rng: R::from_os_rng(),

@@ -240,6 +240,10 @@ pub struct ProgramGraph<R: Rng> {
 }
 
 impl<R: Rng> ProgramGraph<R> {
+    /// Creates a new [`ProgramGraphRun`] which allows to execute the PG as defined.
+    ///
+    /// The new instance borrows the caller to refer to the PG definition without copying its data,
+    /// so that spawning instances is (relatively) inexpensive.
     pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def, R> {
         ProgramGraphRun {
             current_states: self.initial_states.clone(),
