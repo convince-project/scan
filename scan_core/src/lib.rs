@@ -159,9 +159,7 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
         }
     }
 
-    /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
-    /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
-    /// and a state [`Mutex`] to be updated with the results as they are produced.
+    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
     pub fn adaptive(&self, confidence: f64, precision: f64, duration: Time) {
         // Cannot return as a T::Err, don't want to include anyhow in scan_core
         assert!(0f64 < confidence && confidence < 1f64);
@@ -192,16 +190,17 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
         ts.trace(duration, oracle, tracer)
     }
 
-    /// Produces and saves the traces for the given number of runs.
-    pub fn traces<'a, P>(&'a self, runs: usize, tracer: P, duration: Time)
+    /// Produces and saves the traces for the given number of runs,
+    /// using the provided [`Tracer`].
+    pub fn traces<'a, T>(&'a self, runs: usize, tracer: T, duration: Time)
     where
-        P: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
         let start_time = Instant::now();
 
-        (0..runs).for_each(|_| self.trace::<P>(tracer.clone(), duration));
+        (0..runs).for_each(|_| self.trace::<T>(tracer.clone(), duration));
 
         let elapsed = start_time.elapsed();
         info!("tracing time elapsed: {elapsed:0.2?}");
@@ -214,9 +213,8 @@ where
     TsG: TransitionSystemGenerator + Sync,
     OG: OracleGenerator + Sync,
 {
-    /// Statistically verifies [`CsModel`] using adaptive bound and the given parameters.
-    /// It allows to optionally pass a [`Tracer`] object to record the produced traces,
-    /// and a state [`Mutex`] to be updated with the results as they are produced.
+    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
+    /// spawning multiple threads.
     pub fn par_adaptive(&self, confidence: f64, precision: f64, duration: Time) {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -238,10 +236,12 @@ where
         info!("verification terminating");
     }
 
-    /// Produces and saves the traces for the given number of runs.
-    pub fn par_traces<'a, P>(&'a self, runs: usize, tracer: P, duration: Time)
+    /// Produces and saves the traces for the given number of runs,
+    /// using the provided [`Tracer`],
+    /// spawning multiple threads.
+    pub fn par_traces<'a, T>(&'a self, runs: usize, tracer: T, duration: Time)
     where
-        P: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
@@ -249,7 +249,7 @@ where
 
         (0..runs)
             .into_par_iter()
-            .for_each(|_| self.trace::<P>(tracer.clone(), duration));
+            .for_each(|_| self.trace::<T>(tracer.clone(), duration));
 
         let elapsed = start_time.elapsed();
         info!("tracing time elapsed: {elapsed:0.2?}");

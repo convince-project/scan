@@ -99,9 +99,9 @@ pub trait TransitionSystem {
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
     /// and process the execution trace via the given [`Tracer`].
-    fn trace<P, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: P)
+    fn trace<T, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: T)
     where
-        P: Tracer<Self::Event>,
+        T: Tracer<Self::Event>,
     {
         // let mut current_len = 0;
         trace!("new run starting");

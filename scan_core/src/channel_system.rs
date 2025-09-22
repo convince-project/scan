@@ -285,7 +285,10 @@ pub enum EventType {
 /// This guarantees that there are no type errors involved in the definition of its PGs,
 /// and thus the CS will always be in a consistent state.
 ///
-/// Use the [`<ChannelSystem::new_instance`] to obtain a runnable CS object.
+/// The only way to execute the [`ChannelSystem`] is to generate a new [`ChannelSystemRun`] through [`ChannelSystem::generate`].
+/// The [`ChannelSystemRun`] cannot outlive its [`ChannelSystem`], as it holds references to it.
+/// This allows to cheaply generate multiple [`ChannelSystemRun`]s from the same [`ChannelSystem`].
+///
 /// Example:
 ///
 /// ```
