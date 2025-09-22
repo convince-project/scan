@@ -1,3 +1,4 @@
+use crate::TransitionSystemGenerator;
 use crate::channel_system::{
     Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
@@ -59,20 +60,19 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
     }
 }
 
-impl<'a, R: Rng + SeedableRng + 'a> CsModel<R> {
-    fn new_instance(&'a self) -> CsModelRun<'a, R> {
+impl<R: Rng + SeedableRng> TransitionSystemGenerator for CsModel<R> {
+    type Ts<'a>
+        = CsModelRun<'a, R>
+    where
+        Self: 'a;
+
+    fn generate<'a>(&'a self) -> Self::Ts<'a> {
         CsModelRun {
             cs: self.cs.new_instance(),
             ports: self.ports.clone(),
             predicates: &self.predicates,
             last_event: None,
         }
-    }
-}
-
-impl<'a, R: Rng + SeedableRng> From<&'a CsModel<R>> for CsModelRun<'a, R> {
-    fn from(value: &'a CsModel<R>) -> Self {
-        value.new_instance()
     }
 }
 
@@ -85,11 +85,13 @@ pub struct CsModelRun<'def, R: Rng + SeedableRng> {
     cs: ChannelSystemRun<'def, R>,
     ports: Vec<Option<Val>>,
     // TODO: predicates should not use rng
-    predicates: &'def Vec<FnExpression<Atom, DummyRng>>,
+    predicates: &'def [FnExpression<Atom, DummyRng>],
     last_event: Option<Event>,
 }
 
-impl<'def, R: Rng + SeedableRng> TransitionSystem<Event> for CsModelRun<'def, R> {
+impl<'def, R: Rng + SeedableRng> TransitionSystem for CsModelRun<'def, R> {
+    type Event = Event;
+
     fn transition(&mut self, duration: Time) -> Option<Event> {
         let event = self.cs.montecarlo_execution(duration);
         if let Some(ref event) = event

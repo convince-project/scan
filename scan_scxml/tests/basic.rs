@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use scan_core::{CsModelRun, channel_system::Event};
-
 #[test]
 fn fsm() -> anyhow::Result<()> {
     test(Path::new("./tests/assets/test_fsm/model.xml"))
@@ -69,6 +67,6 @@ fn elif() -> anyhow::Result<()> {
 
 fn test(path: &Path) -> anyhow::Result<()> {
     let (scan, ..) = scan_scxml::load(path, &[], true)?;
-    scan.adaptive::<Event, CsModelRun<_>>(0.95, 0.01, 100);
+    scan.adaptive(0.95, 0.01, 100);
     Ok(())
 }

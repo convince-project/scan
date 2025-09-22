@@ -6,6 +6,7 @@ use crate::{
     program_graph::{
         Action, PgExpression, ProgramGraph, ProgramGraphBuilder, ProgramGraphRun, Var,
     },
+    transition_system::TransitionSystemGenerator,
 };
 
 /// A [`ProgramGraph`]-based model implementing [`TransitionSystem`] with synchronous concurrency.
@@ -36,13 +37,18 @@ impl<R: Clone + Rng + 'static> PgModel<R> {
     }
 }
 
-impl<'a, R: Rng + SeedableRng> From<&'a PgModel<R>> for PgModelRun<'a, R> {
-    fn from(value: &'a PgModel<R>) -> Self {
+impl<R: Clone + Rng + SeedableRng + Send + Sync> TransitionSystemGenerator for PgModel<R> {
+    type Ts<'a>
+        = PgModelRun<'a, R>
+    where
+        Self: 'a;
+
+    fn generate<'a>(&'a self) -> Self::Ts<'a> {
         PgModelRun {
-            pg: value.pg.new_instance(),
+            pg: self.pg.new_instance(),
             rng: R::from_os_rng(),
-            global_vars: &value.global_vars,
-            predicates: &value.predicates,
+            global_vars: &self.global_vars,
+            predicates: &self.predicates,
         }
     }
 }
@@ -57,9 +63,9 @@ pub struct PgModelRun<'def, R: Rng> {
     predicates: &'def [FnExpression<Var, DummyRng>],
 }
 
-impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem<Action>
-    for PgModelRun<'def, R>
-{
+impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem for PgModelRun<'def, R> {
+    type Event = Action;
+
     fn transition(&mut self, _duration: crate::Time) -> Option<Action> {
         self.pg.montecarlo(&mut self.rng)
     }

@@ -1,4 +1,4 @@
-use crate::{Oracle, Time};
+use crate::{Oracle, OracleGenerator, Time};
 
 /// An Metric Temporal Logic (MTL) formula.
 #[derive(Debug, Clone)]
@@ -27,6 +27,18 @@ impl MtlOracle {
     /// Add a new assume property to the [`Oracle`].
     pub fn add_assume(&mut self, mtl: Mtl<usize>) {
         self.guarantees.push((mtl, None));
+    }
+}
+
+impl OracleGenerator for MtlOracle {
+    type O<'a>
+        = MtlOracle
+    where
+        Self: 'a;
+
+    fn generate<'a>(&'a self) -> Self::O<'a> {
+        // TODO real implementation
+        self.clone()
     }
 }
 

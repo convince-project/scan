@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time, TransitionSystem};
+use scan_core::{OracleGenerator, Scan, Time, TransitionSystemGenerator};
 
 use super::report::Report;
 
@@ -81,16 +81,15 @@ impl VerifyArgs {
         }
     }
 
-    pub(crate) fn verify<'a, D, O, Event, Ts>(&self, model: String, scan: &'a Scan<D, O>) -> Report
+    pub(crate) fn verify<'a, Ts, O>(&self, model: String, scan: &'a Scan<Ts, O>) -> Report
     where
-        D: Sync + 'a,
-        Ts: TransitionSystem<Event> + From<&'a D>,
-        O: Oracle,
+        Ts: TransitionSystemGenerator + Sync + 'a,
+        O: OracleGenerator + Sync + 'a,
     {
         if self.single_thread {
-            scan.adaptive::<Event, Ts>(self.confidence, self.precision, self.duration);
+            scan.adaptive(self.confidence, self.precision, self.duration);
         } else {
-            scan.par_adaptive::<Event, Ts>(self.confidence, self.precision, self.duration);
+            scan.par_adaptive(self.confidence, self.precision, self.duration);
         }
         let successes = scan.successes();
         let failures = scan.failures();

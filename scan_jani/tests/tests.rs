@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use scan_core::{PgModelRun, program_graph::Action};
-
 #[test]
 fn jani_test() {
     test(Path::new("./tests/test.jani"))
@@ -39,5 +37,5 @@ fn leader_sync_5_4() {
 
 fn test(path: &Path) {
     let (scan, ..) = scan_jani::load(path, &[]).expect("load");
-    scan.adaptive::<Action, PgModelRun<_>>(0.95, 0.01, 10000);
+    scan.adaptive(0.95, 0.01, 10000);
 }

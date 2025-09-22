@@ -21,3 +21,14 @@ pub trait Oracle: Clone + Sync {
     /// As the trace ends, the values of the "guarantee" properties is determined to be either true or false.
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool>;
 }
+
+/// A type that can generate instances of an [`Oracle`].
+pub trait OracleGenerator {
+    /// The type of [`Oracle`] to be generated.
+    type O<'a>: Oracle
+    where
+        Self: 'a;
+
+    /// Generate a new instance of the [`Oracle`].
+    fn generate<'a>(&'a self) -> Self::O<'a>;
+}

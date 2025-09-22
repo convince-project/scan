@@ -25,7 +25,7 @@ fn counter_pg() -> Result<(), PgError> {
             .unwrap();
     }
     let pg = PgModel::new(pg, Vec::new(), Vec::new());
-    let mut pg: PgModelRun<SmallRng> = (&pg).into();
+    let mut pg: PgModelRun<SmallRng> = pg.generate();
     while pg.transition(0).is_some() {}
 
     // while let Some((action, post)) = pg

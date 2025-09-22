@@ -32,13 +32,27 @@ impl<A> Tracer<A> for () {
     fn finalize(self, _outcome: &RunOutcome) {}
 }
 
+/// A type that can generate instances of a [`TransitionSystem`].
+pub trait TransitionSystemGenerator {
+    /// The type of [`TransitionSystem`] to be generated.
+    type Ts<'a>: TransitionSystem
+    where
+        Self: 'a;
+
+    /// Generate a new instance of the [`TransitionSystem`].
+    fn generate<'a>(&'a self) -> Self::Ts<'a>;
+}
+
 /// Trait for types that can execute like a transition system.
 ///
 /// Together with an [`Oracle`], it provides a verifiable system.
-pub trait TransitionSystem<Event> {
+pub trait TransitionSystem {
+    /// The type of events produced by the execution of the system.
+    type Event;
+
     /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
     /// unless the execution is terminated and no further events can happen.
-    fn transition(&mut self, duration: Time) -> Option<Event>;
+    fn transition(&mut self, duration: Time) -> Option<Self::Event>;
 
     /// Current time of the [`TransitionSystem`] (for timed systems).
     fn time(&self) -> Time;
@@ -87,7 +101,7 @@ pub trait TransitionSystem<Event> {
     /// and process the execution trace via the given [`Tracer`].
     fn trace<P, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: P)
     where
-        P: Tracer<Event>,
+        P: Tracer<Self::Event>,
     {
         // let mut current_len = 0;
         trace!("new run starting");
