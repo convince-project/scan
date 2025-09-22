@@ -598,7 +598,7 @@ Recv_arg -> Result<RecvArg, Box<dyn Error>>:
         let sign = match $1 {
             Ok(Some(_)) => true,  
             Ok(None) => false,    
-            Err(_) => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Error in the SignOpt rule"))),
+            Err(_) => return Err(Box::new(std::io::Error::other("Error in the SignOpt rule"))),
 
         };
         Ok(RecvArg::new_const(sign, $2?))
@@ -682,13 +682,13 @@ pub enum Module {
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Module::Proctype(p) => write!(f, "Proctype_Struct: {}\n", p),
-            Module::Init(i) => write!(f, "Init_Struct:\n {}\n", i),
-            Module::Never(n) => write!(f, "Never_Struct:\n {}\n", n),
-            Module::Trace(t) => write!(f, "Trace_Struct:\n {}\n", t),
-            Module::Utype(u) => write!(f, "Utype_Struct:\n {}\n", u),
-            Module::Mtype(m) => write!(f, "Mtype_Struct: {}\n", m),
-            Module::DeclList(d) => write!(f, "DeclList_Struct:\n {}\n", d),
+            Module::Proctype(p) => writeln!(f, "Proctype_Struct: {p}"),
+            Module::Init(i) => writeln!(f, "Init_Struct:\n {i}"),
+            Module::Never(n) => writeln!(f, "Never_Struct:\n {n}"),
+            Module::Trace(t) => writeln!(f, "Trace_Struct:\n {t}"),
+            Module::Utype(u) => writeln!(f, "Utype_Struct:\n {u}"),
+            Module::Mtype(m) => writeln!(f, "Mtype_Struct: {m}"),
+            Module::DeclList(d) => writeln!(f, "DeclList_Struct:\n {d}"),
         }
     }
 }
@@ -799,7 +799,7 @@ impl fmt::Display for Const {
             Const::True => write!(f, "True"),
             Const::False => write!(f, "False"),
             Const::Skip => write!(f, "Skip"),
-            Const::Number(n) => write!(f, "{}", n),
+            Const::Number(n) => write!(f, "{n}"),
         }
     }
 }
@@ -1754,7 +1754,7 @@ fn flatten_recv_args(args: RecvArgs, arg: RecvArg) -> Result<Vec<RecvArg>, Box<d
             flattened.push(arg);
             match *boxed_args {
                 RecvArgs::Simple(mut vec) => flattened.append(&mut vec),
-                RecvArgs::Nested(_, _) => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Annidamento complesso non supportato"))),
+                RecvArgs::Nested(_, _) => return Err(Box::new(std::io::Error::other("Annidamento complesso non supportato"))),
             }
         }
     }

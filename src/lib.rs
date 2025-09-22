@@ -219,7 +219,7 @@ impl Cli {
                     args.properties = scxml_model.guarantees.clone();
                 }
                 let scxml_model = Arc::new(scxml_model);
-                let tracer = TracePrinter::new(scxml_model);
+                let tracer = TracePrinter::new(&scxml_model);
                 eprint!("Trace computation in progress...");
                 args.trace::<CsModel<_>, PmtlOracle, _>(&scan_def, tracer);
                 eprintln!(" done");
