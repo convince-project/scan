@@ -285,7 +285,7 @@ pub enum EventType {
 /// This guarantees that there are no type errors involved in the definition of its PGs,
 /// and thus the CS will always be in a consistent state.
 ///
-/// The only way to execute the [`ChannelSystem`] is to generate a new [`ChannelSystemRun`] through [`ChannelSystem::generate`].
+/// The only way to execute the [`ChannelSystem`] is to generate a new [`ChannelSystemRun`] through [`ChannelSystem::new_instance`].
 /// The [`ChannelSystemRun`] cannot outlive its [`ChannelSystem`], as it holds references to it.
 /// This allows to cheaply generate multiple [`ChannelSystemRun`]s from the same [`ChannelSystem`].
 ///
@@ -395,7 +395,7 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
     /// (the pre-state being necessarily the current state of the machine).
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
-    /// See also [`ProgramGraph::possible_transitions`].
+    /// See also [`ProgramGraphRun::possible_transitions`].
     pub fn possible_transitions(
         &self,
     ) -> impl Iterator<
@@ -522,7 +522,7 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
     ///
     /// Fails if the requested transition is not admissible.
     ///
-    /// See also [`ProgramGraph::transition`].
+    /// See also [`ProgramGraphRun::transition`].
     pub fn transition(
         &mut self,
         pg_id: PgId,

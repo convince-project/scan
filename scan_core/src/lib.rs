@@ -181,9 +181,9 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
         info!("verification terminating");
     }
 
-    fn trace<'a, P>(&'a self, tracer: P, duration: Time)
+    fn trace<'a, T>(&'a self, tracer: T, duration: Time)
     where
-        P: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
         let oracle = self.oracle.generate();
         let mut ts = self.tsd.generate();

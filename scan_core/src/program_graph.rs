@@ -204,7 +204,7 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// This guarantees that there are no type errors involved in the definition of action's effects and transitions' guards,
 /// and thus the PG will always be in a consistent state.
 ///
-/// The only way to execute the [`ProgramGraph`] is to generate a new [`ProgramGraphRun`] through [`ProgramGraph::generate`].
+/// The only way to execute the [`ProgramGraph`] is to generate a new [`ProgramGraphRun`] through [`ProgramGraph::new_instance`].
 /// The [`ProgramGraphRun`] cannot outlive its [`ProgramGraph`], as it holds references to it.
 /// This allows to cheaply generate multiple [`ProgramGraphRun`]s from the same [`ProgramGraph`].
 ///

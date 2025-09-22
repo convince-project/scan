@@ -24,7 +24,7 @@ pub struct CsModel<R: Rng> {
 }
 
 impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
-    /// Creates new [`CsModelBuilder`] from a [`ChannelSystem`].
+    /// Creates a new [`CsModel`] from a [`ChannelSystemBuilder`].
     pub fn new(cs: ChannelSystemBuilder<R>) -> Self {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         let cs = cs.build();
@@ -35,14 +35,14 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
         }
     }
 
-    /// Adds a new port to the [`CsModelBuilder`],
+    /// Adds a new port to the [`CsModel`],
     /// which is given by an [`Channel`] and a default [`Val`] value.
     pub fn add_port(&mut self, channel: Channel, default: Val) {
         // TODO FIXME: error handling and type checking.
         self.ports[u16::from(channel) as usize] = Some(default);
     }
 
-    /// Adds a new predicate to the [`CsModelBuilder`],
+    /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
     pub fn add_predicate(&mut self, predicate: Expression<Atom>) -> usize {
         let predicate = FnExpression::<Atom, _>::from(predicate);
