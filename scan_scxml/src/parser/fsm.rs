@@ -59,16 +59,11 @@ pub struct Data {
 impl Data {
     fn parse(
         tag: events::BytesStart<'_>,
-        // ident: Option<String>,
         omg_type: Option<String>,
         interner: &mut Interner,
     ) -> anyhow::Result<Data> {
         let attrs = attrs(tag, &[ATTR_ID], &[ATTR_EXPR, ATTR_TYPE])?;
         let id = attrs[ATTR_ID].to_string();
-        // Check id is matching
-        // if id != ident {
-        //     return Err(anyhow!(ParserError::NoTypeAnnotation));
-        // }
         let omg_type = attrs
             .get(ATTR_TYPE)
             .cloned()
@@ -291,10 +286,6 @@ impl Param {
         let attrs = attrs(tag, &[ATTR_NAME], &[ATTR_TYPE, ATTR_LOCATION, ATTR_EXPR])?;
         let name = attrs[ATTR_NAME].clone();
         let omg_type = omg_type.or(attrs.get(ATTR_TYPE).cloned());
-        // .ok_or(anyhow!(ParserError::NoTypeAnnotation))?;
-        // if name != ident {
-        //     return Err(anyhow!(ParserError::NoTypeAnnotation));
-        // }
         let expr = attrs
             .get(ATTR_LOCATION)
             .or_else(|| attrs.get(ATTR_EXPR))
@@ -341,7 +332,6 @@ pub(super) fn parse<R: BufRead>(
 ) -> anyhow::Result<Scxml> {
     let mut buf = Vec::new();
     let mut stack: Vec<ScxmlTag> = Vec::new();
-    // let mut type_annotation: Option<(String, String)> = None;
     let mut type_annotation: Option<String> = None;
     info!(target: "parser", "parsing fsm");
     loop {
@@ -360,13 +350,12 @@ pub(super) fn parse<R: BufRead>(
             }
             Event::End(tag) => {
                 let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
-                // if let Some(tag) = stack.pop().is_some_and(|tag| <&str>::from(tag) == tag_name) {
                 if let Some(tag) = stack.pop() {
                     if <&str>::from(&tag) != tag_name {
                         error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
                         bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
                     } else {
-                        trace!(target: "parser", "end tag '{}'", tag_name);
+                        trace!(target: "parser", "end tag '{tag_name}'");
                         match tag {
                             ScxmlTag::Scxml(fsm) if stack.is_empty() => {
                                 return Ok(fsm);
@@ -445,38 +434,38 @@ pub(super) fn parse<R: BufRead>(
                     .into_owned();
                 parse_empty_tag(tag_name, &mut stack, tag, &mut type_annotation, interner)?;
             }
-            // Ignore text between tags
-            Event::Text(_) => continue,
+            Event::Text(text) => {
+                let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
+                let text = String::from_utf8(text)?;
+                if !text.trim().is_empty() {
+                    error!(target: "parser", "text elements not allowed, ignoring");
+                }
+                continue;
+            }
             Event::Comment(comment) => {
                 // Convert comment into string (is there no easier way?)
                 let comment = comment
                     .bytes()
-                    .collect::<Result<Vec<u8>, std::io::Error>>()
-                    .with_context(|| reader.buffer_position())?;
-                let comment =
-                    String::from_utf8(comment).with_context(|| reader.buffer_position())?;
-                type_annotation =
-                    parse_comment(comment).with_context(|| reader.buffer_position())?;
+                    .collect::<Result<Vec<u8>, std::io::Error>>()?;
+                let comment = String::from_utf8(comment)?;
+                type_annotation = parse_comment(comment)?;
             }
             Event::CData(_) => {
-                return Err(anyhow!("CData not supported"))
-                    .with_context(|| reader.buffer_position());
+                return Err(anyhow!("CData not supported"));
             }
-            // Ignore XML declaration
             Event::Decl(_) => continue,
             Event::PI(_) => {
-                return Err(anyhow!("Processing Instructions not supported"))
-                    .with_context(|| reader.buffer_position());
+                return Err(anyhow!("Processing Instructions not supported"));
             }
             Event::DocType(_) => {
-                return Err(anyhow!("DocType not supported"))
-                    .with_context(|| reader.buffer_position());
+                return Err(anyhow!("DocType not supported"));
             }
-            // exits the loop when reaching end of file
             Event::Eof => {
                 error!(target: "parser", "parsing completed with unclosed tags");
-                return Err(anyhow!(ParserError::UnclosedTags))
-                    .with_context(|| reader.buffer_position());
+                return Err(anyhow!(ParserError::UnclosedTags));
+            }
+            Event::GeneralRef(_bytes_ref) => {
+                return Err(anyhow!("General References not supported"));
             }
         }
         // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
@@ -538,10 +527,6 @@ fn parse_empty_tag(
                 .last()
                 .is_some_and(|tag| matches!(*tag, ScxmlTag::Send(_))) =>
         {
-            // let (ident, omg_type) = type_annotation
-            //     .take()
-            //     .ok_or(anyhow::Error::from(ParserError::NoTypeAnnotation))
-            //     .with_context(|| reader.buffer_position())?;
             let param = Param::parse(tag, type_annotation.take(), interner)
                 .with_context(|| ParserError::Tag(tag_name))?;
             if let ScxmlTag::Send(send) = stack.last_mut().expect("param must be inside other tag")
@@ -657,7 +642,6 @@ fn parse_comment(comment: String) -> anyhow::Result<Option<String>> {
             .split_once(':')
             .ok_or(anyhow!("badly formatted type declaration"))?;
         trace!(target: "parser", "found ident: {ident}, type: {omg_type}");
-        // Ok(Some((ident.to_string(), omg_type.to_string())))
         Ok(Some(omg_type.to_string()))
     } else {
         Ok(None)

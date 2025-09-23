@@ -1,0 +1,28 @@
+[package]
+name = "scan_promela"
+version = "0.1.0"
+edition = "2024"
+documentation = "https://convince-project.github.io/scan/crates/scan_promela/index.html"
+homepage = "https://convince-project.github.io/scan/"
+repository = "https://github.com/convince-project/scan"
+license = "Apache-2.0"
+
+[lib]
+name = "scan_promela"  # The name of the target.
+crate-type = ["lib"]   # The crate types to generate.
+
+[build-dependencies]
+cfgrammar = "0.13"
+lrlex = "0.13.10"
+lrpar = "0.13.10"
+
+[dependencies]
+cfgrammar = "0.13"
+lrlex = "0.13.10"
+lrpar = "0.13.10"
+regex = "1"
+scan_core = { path="../scan_core" }
+anyhow = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }

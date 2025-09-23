@@ -1,7 +1,10 @@
-use crate::channel_system::{Channel, ChannelSystem, CsError, Event, EventType};
-use crate::{DummyRng, Expression, FnExpression, Time, TransitionSystem, Val};
+use crate::TransitionSystemGenerator;
+use crate::channel_system::{
+    Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
+};
+use crate::grammar::FnExpression;
+use crate::{DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
 use rand::{Rng, SeedableRng};
-use std::sync::Arc;
 
 /// An atomic variable for [`crate::Pmtl`] formulae.
 #[derive(Debug, Clone)]
@@ -12,32 +15,34 @@ pub enum Atom {
     Event(Event),
 }
 
-/// A builder type for [`CsModel`].
-pub struct CsModelBuilder<R: Rng + SeedableRng> {
+/// A definition type that instances new [`CsModelRun`].
+#[derive(Debug, Clone)]
+pub struct CsModel<R: Rng> {
     cs: ChannelSystem<R>,
     ports: Vec<Option<Val>>,
     predicates: Vec<FnExpression<Atom, DummyRng>>,
 }
 
-impl<R: Rng + SeedableRng> CsModelBuilder<R> {
-    /// Creates new [`CsModelBuilder`] from a [`ChannelSystem`].
-    pub fn new(initial_state: ChannelSystem<R>) -> Self {
+impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
+    /// Creates a new [`CsModel`] from a [`ChannelSystemBuilder`].
+    pub fn new(cs: ChannelSystemBuilder<R>) -> Self {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
+        let cs = cs.build();
         Self {
-            ports: vec![None; initial_state.channels().len()],
-            cs: initial_state,
+            ports: vec![None; cs.channels().len()],
+            cs,
             predicates: Vec::new(),
         }
     }
 
-    /// Adds a new port to the [`CsModelBuilder`],
+    /// Adds a new port to the [`CsModel`],
     /// which is given by an [`Channel`] and a default [`Val`] value.
     pub fn add_port(&mut self, channel: Channel, default: Val) {
         // TODO FIXME: error handling and type checking.
         self.ports[u16::from(channel) as usize] = Some(default);
     }
 
-    /// Adds a new predicate to the [`CsModelBuilder`],
+    /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
     pub fn add_predicate(&mut self, predicate: Expression<Atom>) -> usize {
         let predicate = FnExpression::<Atom, _>::from(predicate);
@@ -53,16 +58,19 @@ impl<R: Rng + SeedableRng> CsModelBuilder<R> {
         self.predicates.push(predicate);
         self.predicates.len() - 1
     }
+}
 
-    /// Creates a new [`CsModel`] with the given underlying [`ChannelSystem`] and set of predicates.
-    ///
-    /// Predicates have to be passed all at once,
-    /// as it is not possible to add any further ones after the [`CsModel`] has been initialized.
-    pub fn build(self) -> CsModel<R> {
-        CsModel {
-            cs: self.cs,
-            ports: self.ports,
-            predicates: Arc::new(self.predicates),
+impl<R: Rng + SeedableRng> TransitionSystemGenerator for CsModel<R> {
+    type Ts<'a>
+        = CsModelRun<'a, R>
+    where
+        Self: 'a;
+
+    fn generate<'a>(&'a self) -> Self::Ts<'a> {
+        CsModelRun {
+            cs: self.cs.new_instance(),
+            ports: self.ports.clone(),
+            predicates: &self.predicates,
             last_event: None,
         }
     }
@@ -72,33 +80,31 @@ impl<R: Rng + SeedableRng> CsModelBuilder<R> {
 ///
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
-#[derive(Clone)]
-pub struct CsModel<R: Rng + SeedableRng> {
-    cs: ChannelSystem<R>,
+#[derive(Debug, Clone)]
+pub struct CsModelRun<'def, R: Rng + SeedableRng> {
+    cs: ChannelSystemRun<'def, R>,
     ports: Vec<Option<Val>>,
     // TODO: predicates should not use rng
-    predicates: Arc<Vec<FnExpression<Atom, DummyRng>>>,
+    predicates: &'def [FnExpression<Atom, DummyRng>],
     last_event: Option<Event>,
 }
 
-impl<R: Rng + Clone + Send + Sync + SeedableRng> TransitionSystem<Event> for CsModel<R> {
-    type Err = CsError;
+impl<'def, R: Rng + SeedableRng> TransitionSystem for CsModelRun<'def, R> {
+    type Event = Event;
 
-    fn transition(&mut self, duration: Time) -> Result<Option<Event>, CsError> {
+    fn transition(&mut self, duration: Time) -> Option<Event> {
         let event = self.cs.montecarlo_execution(duration);
-        if let Some(ref event) = event {
-            if let EventType::Send(ref val) = event.event_type {
-                if let Some(port) = self
-                    .ports
-                    .get_mut(u16::from(event.channel) as usize)
-                    .expect("port must exist")
-                {
-                    *port = val.clone();
-                }
-            }
+        if let Some(ref event) = event
+            && let EventType::Send(ref val) = event.event_type
+            && let Some(port) = self
+                .ports
+                .get_mut(u16::from(event.channel) as usize)
+                .expect("port must exist")
+        {
+            *port = val.clone();
         }
         self.last_event = event.clone();
-        Ok(event)
+        event
     }
 
     fn time(&self) -> Time {

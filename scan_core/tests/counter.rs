@@ -1,13 +1,12 @@
-use rand::{SeedableRng, rngs::SmallRng};
+use rand::rngs::SmallRng;
 use scan_core::{program_graph::*, *};
 
 #[test]
 fn counter_pg() -> Result<(), PgError> {
-    let mut rng = SmallRng::from_seed([0; 32]);
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();
-    let var = pg.new_var_with_rng(Expression::Const(Val::Integer(0)), &mut rng)?;
+    let var = pg.new_var(Expression::Const(Val::Integer(0)))?;
     pg.add_effect(
         action,
         var,
@@ -25,18 +24,21 @@ fn counter_pg() -> Result<(), PgError> {
         pg.add_transition(initial, action, initial, Some(guard))
             .unwrap();
     }
-    let mut pg = pg.build();
-    while let Some((action, post)) = pg
-        .possible_transitions()
-        .filter_map(|(a, iter)| {
-            iter.into_iter()
-                .map(|v| v.last())
-                .collect::<Option<Vec<_>>>()
-                .map(|l| (a, l))
-        })
-        .last()
-    {
-        assert!(pg.transition(action, post.as_slice(), &mut rng).is_ok());
-    }
+    let pg = PgModel::new(pg, Vec::new(), Vec::new());
+    let mut pg: PgModelRun<SmallRng> = pg.generate();
+    while pg.transition(0).is_some() {}
+
+    // while let Some((action, post)) = pg
+    //     .possible_transitions()
+    //     .filter_map(|(a, iter)| {
+    //         iter.into_iter()
+    //             .map(|v| v.last())
+    //             .collect::<Option<Vec<_>>>()
+    //             .map(|l| (a, l))
+    //     })
+    //     .last()
+    // {
+    //     assert!(pg.transition(action, post.as_slice(), &mut rng).is_ok());
+    // }
     Ok(())
 }

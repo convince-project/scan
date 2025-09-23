@@ -1,66 +1,48 @@
 use super::{
-    Action, ActionIdx, Clock, EPSILON, FnEffect, FnExpression, Location, LocationIdx, PgError,
-    PgExpression, ProgramGraph, ProgramGraphDef, TimeConstraint, Var,
+    Action, ActionIdx, Clock, EPSILON, Effect, FnExpression, Location, LocationData, LocationIdx,
+    PgError, PgExpression, ProgramGraph, TimeConstraint, Var,
 };
-use crate::grammar::{Type, Val};
+use crate::{
+    DummyRng,
+    grammar::{Type, Val},
+};
 use log::info;
-use rand::{Rng, SeedableRng, rngs::SmallRng};
-use std::sync::Arc;
+use rand::Rng;
+use smallvec::SmallVec;
 
-#[derive(Debug, Clone)]
-enum Effect {
-    Effects(Vec<(Var, PgExpression)>, Vec<Clock>),
-    Send(PgExpression),
-    Receive(Var),
-}
+pub(crate) type Guard = FnExpression<Var, DummyRng>;
 
-impl<R: Rng + 'static> From<Effect> for FnEffect<R> {
-    fn from(value: Effect) -> Self {
-        match value {
-            Effect::Effects(effects, resets) => {
-                let mut effects = effects
-                    .into_iter()
-                    .map(|(var, expr)| -> (Var, FnExpression<Var, _>) {
-                        (var, FnExpression::<Var, _>::from(expr))
-                    })
-                    .collect::<Vec<_>>();
-                effects.shrink_to_fit();
-                FnEffect::Effects(effects, resets)
-            }
-            Effect::Send(msg) => FnEffect::Send(msg.into()),
-            Effect::Receive(var) => FnEffect::Receive(var),
-        }
-    }
-}
-
-type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
+// type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
+pub(crate) type Transition = (Location, Option<Guard>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
-#[derive(Clone)]
-pub struct ProgramGraphBuilder {
-    initial_states: Vec<Location>,
+#[derive(Debug, Clone)]
+pub struct ProgramGraphBuilder<R: Rng> {
+    // initial_states: Vec<Location>,
+    initial_states: SmallVec<[Location; 8]>,
     // Effects are indexed by actions
-    effects: Vec<Effect>,
+    effects: Vec<Effect<R>>,
     // Transitions are indexed by locations
-    locations: Vec<(Vec<(Action, Vec<TransitionBuilder>)>, Vec<TimeConstraint>)>,
     // Time invariants of each location
+    locations: Vec<LocationData>,
+    // Local variables with initial value.
     vars: Vec<Val>,
     // Number of clocks
     clocks: u16,
 }
 
-impl Default for ProgramGraphBuilder {
+impl<R: Clone + Rng + 'static> Default for ProgramGraphBuilder<R> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ProgramGraphBuilder {
+impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
     /// Creates a new [`ProgramGraphBuilder`].
     /// At creation, this will only have the initial location with no variables, no actions and no transitions.
     pub fn new() -> Self {
         Self {
-            initial_states: Vec::new(),
+            initial_states: SmallVec::new(),
             effects: Vec::new(),
             vars: Vec::new(),
             locations: Vec::new(),
@@ -83,7 +65,8 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // Create a new action
     /// let action = pg_builder.new_action();
     ///
@@ -93,42 +76,46 @@ impl ProgramGraphBuilder {
     ///     .expect_err("expression is badly-typed");
     /// ```
     pub fn new_var(&mut self, init: PgExpression) -> Result<Var, PgError> {
-        let mut rng = SmallRng::from_os_rng();
-        self.new_var_with_rng(init, &mut rng)
-    }
-
-    /// Adds a new variable with the given initial value (and the inferred type) to the PG,
-    /// using the given RNG for probabilistic expressions.
-    ///
-    /// It fails if the expression giving the initial value of the variable is not well-typed.
-    ///
-    /// ```
-    /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder, Var};
-    /// # use rand::rngs::SmallRng;
-    /// # use rand::{Rng, SeedableRng};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
-    /// // Create RNG using `rand`
-    /// let mut rng = SmallRng::from_os_rng();
-    ///
-    /// // Create a new variable
-    /// let var: Var = pg_builder
-    ///     .new_var_with_rng(PgExpression::RandBool(0.5), &mut rng)
-    ///     .expect("expression is well-typed");
-    /// ```
-    pub fn new_var_with_rng<R: Rng + 'static>(
-        &mut self,
-        init: PgExpression,
-        rng: &mut R,
-    ) -> Result<Var, PgError> {
         let idx = self.vars.len();
         // We check the type to make sure the expression is well-formed
         let _ = init.r#type().map_err(PgError::Type)?;
         init.context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
             .map_err(PgError::Type)?;
-        let val = FnExpression::from(init).eval(&|var| self.vars[var.0 as usize].clone(), rng);
+        let val =
+            FnExpression::from(init).eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng);
         self.vars.push(val);
         Ok(Var(idx as u16))
     }
+
+    // /// Adds a new variable with the given initial value (and the inferred type) to the PG,
+    // /// using the given RNG for probabilistic expressions.
+    // ///
+    // /// It fails if the expression giving the initial value of the variable is not well-typed.
+    // ///
+    // /// ```
+    // /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder, Var};
+    // /// # use rand::rngs::SmallRng;
+    // /// # use rand::{Rng, SeedableRng};
+    // /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+    // /// // Create RNG using `rand`
+    // /// let mut rng = SmallRng::from_os_rng();
+    // ///
+    // /// // Create a new variable
+    // /// let var: Var = pg_builder
+    // ///     .new_var_with_rng(PgExpression::RandBool(0.5), &mut rng)
+    // ///     .expect("expression is well-typed");
+    // /// ```
+    // pub fn new_var_with_rng(&mut self, init: PgExpression) -> Result<Var, PgError> {
+    //     let idx = self.vars.len();
+    //     // We check the type to make sure the expression is well-formed
+    //     let _ = init.r#type().map_err(PgError::Type)?;
+    //     init.context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
+    //         .map_err(PgError::Type)?;
+    //     let val =
+    //         FnExpression::from(init).eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng);
+    //     self.vars.push(val);
+    //     Ok(Var(idx as u16))
+    // }
 
     /// Adds a new clock and returns a [`Clock`] id object.
     ///
@@ -144,7 +131,8 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{Action, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // Create a new action
     /// let action: Action = pg_builder.new_action();
     /// ```
@@ -161,8 +149,9 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{Clock, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
-    /// # let mut other_pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+    /// # let mut other_pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// let action = pg_builder.new_action();
     /// let clock = other_pg_builder.new_clock();
     /// // Associate action with clock reset
@@ -198,7 +187,8 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{Action, PgExpression, ProgramGraphBuilder, Var};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // Create a new action
     /// let action: Action = pg_builder.new_action();
     ///
@@ -237,7 +227,7 @@ impl ProgramGraphBuilder {
                 .ok_or(PgError::MissingAction(action))?
             {
                 Effect::Effects(effects, _) => {
-                    effects.push((var, effect));
+                    effects.push((var, effect.into()));
                     Ok(())
                 }
                 Effect::Send(_) => Err(PgError::EffectOnSend),
@@ -255,7 +245,7 @@ impl ProgramGraphBuilder {
         let _ = msg.r#type().map_err(PgError::Type)?;
         // Actions are indexed progressively
         let idx = self.effects.len();
-        self.effects.push(Effect::Send(msg));
+        self.effects.push(Effect::Send(msg.into()));
         Ok(Action(idx as ActionIdx))
     }
 
@@ -340,7 +330,8 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
@@ -374,7 +365,8 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
@@ -423,7 +415,7 @@ impl ProgramGraphBuilder {
                     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
-            let transition = (post, guard, constraints);
+            let transition = (post, guard.map(|g| g.into()), constraints);
             match transitions.binary_search_by_key(&action, |(a, _)| *a) {
                 Ok(idx) => transitions[idx].1.push(transition),
                 Err(idx) => transitions.insert(idx, (action, vec![transition])),
@@ -443,7 +435,8 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
@@ -473,7 +466,8 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
-    /// # let mut pg_builder = ProgramGraphBuilder::new();
+    /// # use rand::rngs::SmallRng;
+    /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
     ///
@@ -503,7 +497,7 @@ impl ProgramGraphBuilder {
     ///
     /// Since the construction of the builder is already checked ad every step,
     /// this method cannot fail.
-    pub fn build<R: Rng + 'static>(mut self) -> ProgramGraph<R> {
+    pub fn build(mut self) -> ProgramGraph<R> {
         // Since vectors of effects and transitions will become immutable,
         // they should be shrunk to take as little space as possible
         self.effects.iter_mut().for_each(|effect| {
@@ -529,7 +523,7 @@ impl ProgramGraphBuilder {
                                 .into_iter()
                                 .map(|(p, guard, mut c)| {
                                     c.sort_unstable();
-                                    (p, guard.map(FnExpression::from), c)
+                                    (p, guard, c)
                                 })
                                 .collect::<Vec<_>>(),
                         )
@@ -550,17 +544,14 @@ impl ProgramGraphBuilder {
             self.effects.len(),
             self.vars.len()
         );
-        let def = ProgramGraphDef {
-            effects: self.effects.into_iter().map(FnEffect::from).collect(),
-            locations,
-        };
         self.initial_states.sort_unstable();
         self.initial_states.shrink_to_fit();
         ProgramGraph {
-            current_states: self.initial_states.into(),
+            initial_states: self.initial_states,
+            effects: self.effects.into_iter().collect(),
+            locations,
             vars: self.vars,
-            def: Arc::new(def),
-            clocks: vec![0; self.clocks as usize],
+            clocks: self.clocks,
         }
     }
 }

@@ -5,6 +5,7 @@
 //! The language features base types and product types,
 //! Boolean logic and basic arithmetic expressions.
 
+use dyn_clone::DynClone;
 use rand::Rng;
 use std::hash::Hash;
 use thiserror::Error;
@@ -158,6 +159,8 @@ where
     Mod(Box<(Expression<V>, Expression<V>)>),
     /// Div operation
     Div(Box<(Expression<V>, Expression<V>)>),
+    /// Floor
+    Floor(Box<Expression<V>>),
     // ------------
     // (In)Equality
     // ------------
@@ -356,6 +359,13 @@ where
                     Err(TypeError::TypeMismatch)
                 }
             }
+            Expression::Floor(expression) => {
+                if matches!(expression.r#type()?, Type::Float) {
+                    Ok(Type::Integer)
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
         }
     }
 
@@ -464,6 +474,13 @@ where
             Expression::Truncate(_expression) => todo!(),
             Expression::Len(_expression) => todo!(),
             Expression::Ite(_) => todo!(),
+            Expression::Floor(expression) => {
+                if let Val::Float(f) = expression.eval_constant()? {
+                    Ok(Val::Integer(f.floor() as Integer))
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
         }
     }
 
@@ -510,6 +527,7 @@ where
                 .context(vars)
                 .and_then(|_| exprs.1.context(vars))
                 .and_then(|_| exprs.2.context(vars)),
+            Expression::Floor(expression) => expression.context(vars),
         }
     }
 
@@ -700,9 +718,14 @@ where
     }
 }
 
-type DynFnExpr<V, R> = dyn Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync;
+trait DynFnExpr<V, R>: Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync + DynClone {}
 
-pub(crate) struct FnExpression<V, R: Rng>(Box<DynFnExpr<V, R>>);
+impl<V, R, T: Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync + Clone> DynFnExpr<V, R> for T {}
+
+dyn_clone::clone_trait_object!(<V, R> DynFnExpr<V, R>);
+
+#[derive(Clone)]
+pub(crate) struct FnExpression<V, R>(Box<dyn DynFnExpr<V, R>>);
 
 impl<C, R: Rng> std::fmt::Debug for FnExpression<C, R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -710,14 +733,14 @@ impl<C, R: Rng> std::fmt::Debug for FnExpression<C, R> {
     }
 }
 
-impl<V, R: Rng> FnExpression<V, R> {
+impl<V, R> FnExpression<V, R> {
     #[inline(always)]
     pub fn eval(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Val {
         self.0(vars, rng)
     }
 }
 
-impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
+impl<V: Clone + Send + Sync + 'static, R: Clone + Rng + 'static> From<Expression<V>>
     for FnExpression<V, R>
 {
     fn from(value: Expression<V>) -> Self {
@@ -1031,6 +1054,16 @@ impl<V: Clone + Send + Sync + 'static, R: Rng + 'static> From<Expression<V>>
                         } else {
                             r#else.eval(vars, rng)
                         }
+                    } else {
+                        panic!("type mismatch");
+                    }
+                })
+            }
+            Expression::Floor(expression) => {
+                let f = FnExpression::from(*expression);
+                Box::new(move |vars, rng| {
+                    if let Val::Float(f) = f.eval(vars, rng) {
+                        Val::Integer(f.floor() as Integer)
                     } else {
                         panic!("type mismatch");
                     }

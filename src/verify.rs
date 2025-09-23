@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time, TransitionSystem};
+use scan_core::{OracleGenerator, Scan, Time, TransitionSystemGenerator};
 
 use super::report::Report;
 
@@ -81,22 +81,16 @@ impl VerifyArgs {
         }
     }
 
-    pub(crate) fn verify<E, Ts, O>(
-        &self,
-        model: String,
-        scan: Scan<E, Ts, O>,
-    ) -> anyhow::Result<Report>
+    pub(crate) fn verify<'a, Ts, O>(&self, model: String, scan: &'a Scan<Ts, O>) -> Report
     where
-        Ts: TransitionSystem<E> + 'static,
-        E: Clone + Send + Sync + 'static,
-        O: Oracle + 'static,
+        Ts: TransitionSystemGenerator + Sync + 'a,
+        O: OracleGenerator + Sync + 'a,
     {
-        scan.adaptive(
-            self.confidence,
-            self.precision,
-            self.duration,
-            self.single_thread,
-        )?;
+        if self.single_thread {
+            scan.adaptive(self.confidence, self.precision, self.duration);
+        } else {
+            scan.par_adaptive(self.confidence, self.precision, self.duration);
+        }
         let successes = scan.successes();
         let failures = scan.failures();
         let runs = successes + failures;
@@ -107,7 +101,7 @@ impl VerifyArgs {
             .cloned()
             .zip(scan.violations().into_iter().chain([0].into_iter().cycle()))
             .collect::<HashMap<String, u32>>();
-        let report = Report {
+        Report {
             model,
             precision: self.precision,
             confidence: self.confidence,
@@ -117,7 +111,6 @@ impl VerifyArgs {
             successes,
             failures,
             property_failures,
-        };
-        Ok(report)
+        }
     }
 }

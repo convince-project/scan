@@ -9,14 +9,18 @@ pub use builder::JaniModelData;
 use builder::build;
 use log::info;
 use parser::Model;
-use scan_core::program_graph::Action;
-use scan_core::{MtlOracle, PgModel, Scan};
+use rand::rngs::SmallRng;
+use scan_core::PgModel;
+use scan_core::{MtlOracle, Scan};
 use std::{fs::File, io::Read, path::Path};
 pub use tracer::TracePrinter;
 
-pub type JaniScan = Scan<Action, PgModel, MtlOracle>;
+pub type JaniScan = Scan<PgModel<SmallRng>, MtlOracle>;
 
-pub fn load(path: &Path, properties: &[String]) -> anyhow::Result<(JaniScan, JaniModelData)> {
+pub fn load<'def>(
+    path: &'def Path,
+    properties: &'def [String],
+) -> anyhow::Result<(JaniScan, JaniModelData)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parsing JANI model file '{}'", path.display());
     // NOTE: See <https://github.com/serde-rs/json/issues/160>
@@ -40,7 +44,5 @@ pub fn load(path: &Path, properties: &[String]) -> anyhow::Result<(JaniScan, Jan
     info!(target: "build", "building JANI model");
     let (pg_model, oracle, jani_info) = build(jani_model, properties)?;
     info!("building model completed in {:?}", time.elapsed());
-    let scan = Scan::new(pg_model, oracle);
-
-    Ok((scan, jani_info))
+    Ok((Scan::new(pg_model, oracle), jani_info))
 }

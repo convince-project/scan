@@ -1,59 +1,73 @@
-use std::sync::Arc;
-
-use rand::{SeedableRng, rngs::SmallRng};
+use rand::{Rng, SeedableRng};
 
 use crate::{
-    DummyRng, FnExpression, TransitionSystem, Val,
-    program_graph::{Action, PgError, PgExpression, ProgramGraph, Var},
+    DummyRng, TransitionSystem, Val,
+    grammar::FnExpression,
+    program_graph::{
+        Action, PgExpression, ProgramGraph, ProgramGraphBuilder, ProgramGraphRun, Var,
+    },
+    transition_system::TransitionSystemGenerator,
 };
 
 /// A [`ProgramGraph`]-based model implementing [`TransitionSystem`] with synchronous concurrency.
-pub struct PgModel {
-    pg: ProgramGraph<SmallRng>,
-    rng: SmallRng,
-    global_vars: Arc<Vec<Var>>,
-    predicates: Arc<Vec<FnExpression<Var, DummyRng>>>,
+#[derive(Debug, Clone)]
+pub struct PgModel<R: Rng> {
+    pg: ProgramGraph<R>,
+    global_vars: Vec<Var>,
+    predicates: Vec<FnExpression<Var, DummyRng>>,
 }
 
-impl PgModel {
+impl<R: Clone + Rng + 'static> PgModel<R> {
     /// Create a new [`PgModel`] from the given [`ProgramGraph`] and predicates over its internal state.
     pub fn new(
-        pg: ProgramGraph<SmallRng>,
-        rng: SmallRng,
+        pg: ProgramGraphBuilder<R>,
         global_vars: Vec<Var>,
         predicates: Vec<PgExpression>,
     ) -> Self {
+        let pg = pg.build();
         let predicates = predicates
             .into_iter()
             .map(Into::<FnExpression<Var, DummyRng>>::into)
             .collect();
-        let predicates = Arc::new(predicates);
-        let global_vars = Arc::new(global_vars);
         Self {
             pg,
-            rng,
             global_vars,
             predicates,
         }
     }
 }
 
-impl Clone for PgModel {
-    fn clone(&self) -> Self {
-        Self {
-            pg: self.pg.clone(),
-            rng: SmallRng::from_os_rng(),
-            global_vars: Arc::clone(&self.global_vars),
-            predicates: Arc::clone(&self.predicates),
+impl<R: Clone + Rng + SeedableRng + Send + Sync> TransitionSystemGenerator for PgModel<R> {
+    type Ts<'a>
+        = PgModelRun<'a, R>
+    where
+        Self: 'a;
+
+    fn generate<'a>(&'a self) -> Self::Ts<'a> {
+        PgModelRun {
+            pg: self.pg.new_instance(),
+            rng: R::from_os_rng(),
+            global_vars: &self.global_vars,
+            predicates: &self.predicates,
         }
     }
 }
 
-impl TransitionSystem<Action> for PgModel {
-    type Err = PgError;
+/// A model based on a single [`ProgramGraph`],
+/// with predicates over the PG's variables.
+#[derive(Debug, Clone)]
+pub struct PgModelRun<'def, R: Rng> {
+    pg: ProgramGraphRun<'def, R>,
+    rng: R,
+    global_vars: &'def [Var],
+    predicates: &'def [FnExpression<Var, DummyRng>],
+}
 
-    fn transition(&mut self, _duration: crate::Time) -> Result<Option<Action>, PgError> {
-        Ok(self.pg.montecarlo(&mut self.rng))
+impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem for PgModelRun<'def, R> {
+    type Event = Action;
+
+    fn transition(&mut self, _duration: crate::Time) -> Option<Action> {
+        self.pg.montecarlo(&mut self.rng)
     }
 
     fn time(&self) -> crate::Time {
@@ -70,7 +84,7 @@ impl TransitionSystem<Action> for PgModel {
         })
     }
 
-    fn state(&self) -> impl Iterator<Item = &crate::Val> {
+    fn state(&self) -> impl Iterator<Item = &Val> {
         self.global_vars
             .as_ref()
             .iter()

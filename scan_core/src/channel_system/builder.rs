@@ -1,14 +1,13 @@
 use super::{
-    Action, Channel, ChannelSystem, ChannelSystemDef, Clock, CsError, Location, Message, PgError,
-    PgExpression, PgId, ProgramGraph, ProgramGraphBuilder, TimeConstraint, Var,
+    Action, Channel, ChannelSystem, Clock, CsError, Location, Message, PgError, PgExpression, PgId,
+    ProgramGraphBuilder, TimeConstraint, Var,
 };
 use crate::Expression;
 use crate::grammar::Type;
+use crate::program_graph::ProgramGraph;
 use log::info;
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use rand::Rng;
+use std::collections::HashMap;
 
 /// An expression using CS's [`Var`] as variables.
 pub type CsExpression = Expression<Var>;
@@ -109,42 +108,34 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
                 (pg_id, exprs.1).try_into()?,
                 (pg_id, exprs.2).try_into()?,
             )))),
+            Expression::Floor(expression) => Ok(Expression::Floor(Box::new(
+                (pg_id, *expression).try_into()?,
+            ))),
         }
     }
 }
 
 /// The object used to define and build a CS.
-#[derive(Clone)]
 pub struct ChannelSystemBuilder<R: Rng> {
-    program_graphs: Vec<ProgramGraphBuilder>,
+    program_graphs: Vec<ProgramGraphBuilder<R>>,
     channels: Vec<(Type, Option<usize>)>,
     communications: HashMap<Action, (Channel, Message)>,
-    rng: R,
 }
 
-impl ChannelSystemBuilder<SmallRng> {
-    /// Create a new [`ProgramGraphBuilder`] with a default RNG (see also `ChannelSystemBuilder::new_with_rng`).
-    /// At creation, this will be completely empty.
-    pub fn new() -> Self {
-        Self::new_with_rng(SmallRng::from_os_rng())
-    }
-}
-
-impl Default for ChannelSystemBuilder<SmallRng> {
+impl<R: Clone + Rng + 'static> Default for ChannelSystemBuilder<R> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<R: Rng + 'static> ChannelSystemBuilder<R> {
+impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
     /// Create a new [`ProgramGraphBuilder`] with the given RNG (see also `ChannelSystemBuilder::new`).
     /// At creation, this will be completely empty.
-    pub fn new_with_rng(rng: R) -> Self {
+    pub fn new() -> Self {
         Self {
             program_graphs: Vec::new(),
             channels: Vec::new(),
             communications: HashMap::new(),
-            rng,
         }
     }
 
@@ -168,7 +159,7 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
             .ok_or(CsError::MissingPg(pg_id))?;
         let init = PgExpression::try_from((pg_id, init))?;
         let var = pg
-            .new_var_with_rng(init, &mut self.rng)
+            .new_var(init)
             .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
         Ok(Var(pg_id, var))
     }
@@ -229,9 +220,10 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
     ///
     /// ```
     /// # use scan_core::*;
+    /// # use rand::rngs::SmallRng;
     /// # use scan_core::channel_system::*;
     /// // Create a new CS builder
-    /// let mut cs_builder = ChannelSystemBuilder::new();
+    /// let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
     ///
     /// // Add a new PG to the CS
     /// let pg = cs_builder.new_program_graph();
@@ -716,30 +708,11 @@ impl<R: Rng + 'static> ChannelSystemBuilder<R> {
         }
         assert_eq!(communications_pg_idxs.len(), program_graphs.len() + 1);
 
-        let message_queue = self
-            .channels
-            .iter()
-            .map(|(_, cap)| {
-                if let Some(cap) = cap {
-                    VecDeque::with_capacity(*cap)
-                } else {
-                    VecDeque::default()
-                }
-            })
-            .collect();
-
-        let def = ChannelSystemDef {
+        ChannelSystem {
             channels: self.channels,
             communications,
             communications_pg_idxs,
-        };
-
-        ChannelSystem {
-            rng: self.rng,
-            time: 0,
             program_graphs,
-            message_queue,
-            def: Arc::new(def),
         }
     }
 }

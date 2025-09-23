@@ -11,7 +11,7 @@
 //! At the moment the following languages are planned or implemented:
 //!
 //! - [x] [State Chart XML (SCXML)](https://www.w3.org/TR/scxml/).
-//! - [ ] [Promela](https://spinroot.com/spin/Man/Manual.html)
+//! - [x] [Promela](https://spinroot.com/spin/Man/Manual.html)
 //! - [x] [JANI](https://jani-spec.org/)
 //!
 //! [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
@@ -27,7 +27,9 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{Oracle, Scan, TransitionSystem};
+use scan_core::{
+    CsModel, MtlOracle, OracleGenerator, PgModel, PmtlOracle, Scan, TransitionSystemGenerator,
+};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -60,6 +62,14 @@ enum Format {
     ///
     /// WARNING: JANI support is still experimental.
     Jani,
+    /// Promela format, passed as the path to the .pml or .prm file.
+    ///
+    /// Promela models are composed by a single .pml or .prm file.
+    ///
+    /// The model has to be passed to SCAN as the path to the .pml or .prm file.
+    ///
+    /// WARNING: Promela support is still experimental.
+    Promela,
 }
 
 /// SCAN's available commands.
@@ -69,11 +79,12 @@ enum Commands {
     /// Validate the syntactical and semantical correctness of the model, without running it.
     Validate,
     /// Verify properties of the given model.
+    /// At least one property has to be verified.
     ///
     /// Examples:
-    /// 'scan PATH/TO/MODEL verify PROPERTY' verifies the property PROPERTY over the model
-    /// 'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' verifies the properties PROPERTY_1 and PROPERTY_2 together over the model
-    /// 'scan PATH/TO/MODEL verify --all' verifies all specified properties together over the model
+    /// 'scan PATH/TO/MODEL verify PROPERTY' verifies the property PROPERTY over the model.
+    /// 'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' verifies the properties PROPERTY_1 and PROPERTY_2 together over the model.
+    /// 'scan PATH/TO/MODEL verify --all' verifies all specified properties together over the model.
     #[clap(verbatim_doc_comment)]
     Verify {
         /// Args for model verification.
@@ -94,7 +105,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Produce execution traces and save them to file in csv format.
+    /// Produce execution traces and save them to file in csv format, separating executions that verify the given properties from those that do not.
+    /// Executions are always run to completion, regardless of verification outcome.
+    /// It is possible to verify no property at all, in which case all executions are successful but still executed to completion.
+    ///
+    /// Examples:
+    /// 'scan PATH/TO/MODEL trace' executes the model once and writes the trace to disk, without verifying any property.
+    /// 'scan PATH/TO/MODEL verify PROPERTY_1 PROPERTY_2' executes the model once and writes the trace to disk, classifying it according to verification outcome of the properties PROPERTY_1 and PROPERTY_2 together over the model.
+    /// 'scan PATH/TO/MODEL verify --all' executes the model once and writes the trace to disk, and classifying it according to verification outcome of all specified properties together over the model.
+    #[clap(verbatim_doc_comment)]
     Trace(TraceArgs),
 }
 
@@ -141,11 +160,12 @@ impl Cli {
 
         if let Some(format) = self.format {
             match format {
-                Format::Scxml => self.run_scxml(model),
-                Format::Jani => self.run_jani(model),
+                Format::Scxml => self.run_scxml(&model),
+                Format::Promela => self.run_promela(&model),
+                Format::Jani => self.run_jani(&model),
             }
         } else if self.model.is_dir() {
-            self.run_scxml(model)
+            self.run_scxml(&model)
         } else {
             let ext = self
                 .model
@@ -155,14 +175,15 @@ impl Cli {
                 .to_str()
                 .ok_or(anyhow!("file extension not recognized"))?
             {
-                "xml" => self.run_scxml(model),
-                "jani" => self.run_jani(model),
+                "xml" => self.run_scxml(&model),
+                "jani" => self.run_jani(&model),
+                "pml" | "prm" => self.run_promela(&model),
                 _ => bail!("unsupported file format"),
             }
         }
     }
 
-    fn run_scxml(self, model: String) -> anyhow::Result<()> {
+    fn run_scxml(self, model: &str) -> anyhow::Result<()> {
         use scan_scxml::*;
 
         match self.command {
@@ -173,36 +194,41 @@ impl Cli {
             } => {
                 args.validate()?;
                 eprint!("Processing {model}...");
-                let (scan, scxml_model) = load(&self.model, &args.properties)?;
+                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 if args.all {
                     args.properties = scxml_model.guarantees.clone();
                 }
-                run_verification(model, args, progress, scan)?.print(json);
+                run_verification::<CsModel<_>, PmtlOracle>(model, &args, progress, &scan_def)
+                    .print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
-                let (_scan, _scxml_model) = load(&self.model, &[])?;
+                let (_scan, _scxml_model) = load(&self.model, &[], true)?;
                 // At this point the model has been validated
                 eprintln!(" done");
                 println!("Model {model} successfully validated");
             }
-            Commands::Trace(args) => {
+            Commands::Trace(mut args) => {
                 eprint!("Processing {model}...");
-                let (scan, scxml_model) = load(&self.model, &[])?;
+                let (scan_def, scxml_model) = load(&self.model, &[], args.all)?;
                 eprintln!(" done");
+                validate_properties(&args.properties, &scxml_model.guarantees)?;
+                if args.all {
+                    args.properties = scxml_model.guarantees.clone();
+                }
                 let scxml_model = Arc::new(scxml_model);
-                let tracer = TracePrinter::new(scxml_model);
+                let tracer = TracePrinter::new(&scxml_model);
                 eprint!("Trace computation in progress...");
-                args.trace(scan, tracer)?;
+                args.trace::<CsModel<_>, PmtlOracle, _>(&scan_def, tracer);
                 eprintln!(" done");
             }
         }
         Ok(())
     }
 
-    fn run_jani(self, model: String) -> anyhow::Result<()> {
+    fn run_jani(self, model: &str) -> anyhow::Result<()> {
         use scan_jani::*;
 
         match self.command {
@@ -213,13 +239,15 @@ impl Cli {
             } => {
                 args.validate()?;
                 eprint!("Processing {model}...");
-                let (scan, jani_model) = load(&self.model, &args.properties)?;
+                let properties = args.properties.clone();
+                let (scan, jani_model) = load(&self.model, &properties)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 if args.all {
                     args.properties = jani_model.guarantees;
                 }
-                run_verification(model, args, progress, scan)?.print(json);
+                run_verification::<PgModel<_>, MtlOracle>(model, &args, progress, &scan)
+                    .print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -228,14 +256,58 @@ impl Cli {
                 println!("Model {model} successfully validated");
             }
             Commands::Trace(args) => {
+                args.validate()?;
                 eprint!("Processing {model}...");
                 let (scan, jani_model) = load(&self.model, &[])?;
                 eprintln!(" done");
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
                 eprint!("Trace computation in progress...");
-                args.trace(scan, tracer)?;
+                args.trace::<PgModel<_>, MtlOracle, _>(&scan, tracer);
                 eprintln!(" done");
+            }
+        }
+        Ok(())
+    }
+
+    fn run_promela(self, model: &str) -> anyhow::Result<()> {
+        use scan_promela::*;
+
+        match self.command {
+            Commands::Verify {
+                args,
+                progress,
+                json,
+            } => {
+                args.validate()?;
+                eprint!("Processing {model}...");
+                let properties = args.properties.clone();
+                let (scan, _promela_model) = load(&self.model, &properties, args.all)?;
+                eprintln!(" done");
+                // validate_properties(&args.properties, &jani_model.guarantees)?;
+                // if args.all {
+                //     args.properties = jani_model.guarantees;
+                // }
+                run_verification::<CsModel<_>, PmtlOracle>(model, &args, progress, &scan)
+                    .print(json);
+            }
+            Commands::Validate => {
+                eprint!("Processing {model}...");
+                let (_scan, _jani_model) = load(&self.model, &[], true)?;
+                eprintln!(" done");
+                println!("Model {model} successfully validated");
+            }
+            Commands::Trace(args) => {
+                args.validate()?;
+                eprint!("Processing {model}...");
+                let (_scan, _promela_model) = load(&self.model, &[], args.all)?;
+                eprintln!(" done");
+                // let jani_model = Arc::new(jani_model);
+                todo!()
+                // let tracer = TracePrinter::new(jani_model);
+                // eprint!("Trace computation in progress...");
+                // args.trace(&scan, tracer);
+                // eprintln!(" done");
             }
         }
         Ok(())
@@ -245,47 +317,47 @@ impl Cli {
 fn validate_properties(props: &[String], all_props: &[String]) -> anyhow::Result<()> {
     if let Some(prop) = props.iter().find(|prop| !all_props.contains(prop)) {
         Err(anyhow!(
-            "no property named '{prop}' found in model.\n\nHint: maybe it is mispelled?"
+            "no property named '{prop}' found in model.\n\nHint: maybe it is misspelled?"
         ))
     } else {
         Ok(())
     }
 }
 
-fn run_verification<E, Ts, O>(
-    model: String,
-    args: VerifyArgs,
+fn run_verification<'a, Ts, O>(
+    model: &str,
+    args: &VerifyArgs,
     progress: Option<Bar>,
-    scan: Scan<E, Ts, O>,
-) -> anyhow::Result<Report>
+    scan: &'a Scan<Ts, O>,
+) -> Report
 where
-    Ts: TransitionSystem<E> + 'static,
-    E: Clone + Send + Sync + 'static,
-    O: Oracle + 'static,
+    Ts: 'a + TransitionSystemGenerator + Sync,
+    O: 'a + OracleGenerator + Sync,
 {
     if let Some(bar) = progress {
         eprintln!(
             "Verifying {model} (-p {} -c {} -d {}) {:?}",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let scan_clone = scan.clone();
-        let confidence = args.confidence;
-        let precision = args.precision;
-        let guarantees = args.properties.clone();
-        let handle = std::thread::spawn(move || {
-            bar.print_progress_bar(confidence, precision, guarantees, scan_clone);
-        });
-        let report = args.verify(model.to_owned(), scan)?;
-        handle.join().expect("terminate process");
-        Ok(report)
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                bar.print_progress_bar::<Ts, O>(
+                    args.confidence,
+                    args.precision,
+                    &args.properties,
+                    scan,
+                );
+            });
+            args.verify::<Ts, O>(model.to_owned(), scan)
+        })
     } else {
         eprint!(
             "Verifying {model} (-p {} -c {} -d {}) {:?}...",
             args.precision, args.confidence, args.duration, args.properties
         );
-        let report = args.verify(model, scan)?;
+        let report = args.verify::<Ts, O>(model.to_owned(), scan);
         eprintln!(" done");
-        Ok(report)
+        report
     }
 }
 

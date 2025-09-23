@@ -6,7 +6,10 @@ use boa_interner::Interner;
 use log::{error, info, trace};
 use quick_xml::{Reader, events::Event};
 use scan_core::Pmtl;
-use std::{collections::HashMap, io::BufRead};
+use std::{
+    collections::HashMap,
+    io::{BufRead, Read},
+};
 
 const TAG_PORTS: &str = "ports";
 const TAG_PORT: &str = "scxml_event_send";
@@ -102,7 +105,7 @@ impl Properties {
                         {
                             let attrs = attrs(tag, &[ATTR_EVENT, ATTR_ORIGIN, ATTR_TARGET], &[])
                                 .with_context(|| {
-                                    format!("failed to parse '{}' tag attributes", TAG_PORT)
+                                    format!("failed to parse '{TAG_PORT}' tag attributes")
                                 })?;
                             stack.push(PropertyTag::Port(
                                 attrs[ATTR_EVENT].clone(),
@@ -132,8 +135,11 @@ impl Properties {
                 }
                 Event::End(tag) => {
                     let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
-                    if stack.pop().is_some_and(|state| Into::<&str>::into(&state) == tag_name) {
-                        trace!(target: "parser", "end tag '{}'", tag_name);
+                    if stack
+                        .pop()
+                        .is_some_and(|state| Into::<&str>::into(&state) == tag_name)
+                    {
+                        trace!(target: "parser", "end tag '{tag_name}'");
                     } else {
                         error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
                         bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
@@ -151,7 +157,7 @@ impl Properties {
                         {
                             if let Some(PropertyTag::Port(event, origin, target)) = stack.last() {
                                 let attrs = attrs(tag, &[ATTR_ID], &[]).with_context(|| {
-                                    format!("failed to parse '{}' tag attributes", TAG_EVENT_VAR)
+                                    format!("failed to parse '{TAG_EVENT_VAR}' tag attributes")
                                 })?;
                                 let id = attrs[ATTR_ID].clone();
                                 self.ports.insert(
@@ -178,10 +184,7 @@ impl Properties {
                                 let attrs =
                                     attrs(tag, &[ATTR_ID, ATTR_PARAM, ATTR_EXPR, ATTR_TYPE], &[])
                                         .with_context(|| {
-                                        format!(
-                                            "failed to parse '{}' tag attributes",
-                                            TAG_STATE_VAR
-                                        )
+                                        format!("failed to parse '{TAG_STATE_VAR}' tag attributes")
                                     })?;
                                 let expression = ecmascript(
                                     attrs[ATTR_EXPR].as_str(),
@@ -189,10 +192,7 @@ impl Properties {
                                     interner,
                                 )
                                 .with_context(|| {
-                                    format!(
-                                        "failed parsing expression in '{}' attribute",
-                                        ATTR_EXPR
-                                    )
+                                    format!("failed parsing expression in '{ATTR_EXPR}' attribute")
                                 })?;
                                 let id = attrs[ATTR_ID].clone();
                                 self.ports.insert(
@@ -212,25 +212,31 @@ impl Properties {
                         TAG_PROPERTY => {
                             let attrs = attrs(tag, &[ATTR_ID, ATTR_EXPR], &[ATTR_LOGIC])
                                 .with_context(|| {
-                                    format!("failed to parse '{}' tag attributes", TAG_PROPERTY)
+                                    format!("failed to parse '{TAG_PROPERTY}' tag attributes")
                                 })?;
                             let id = attrs[ATTR_ID].to_owned();
                             let expr = attrs[ATTR_EXPR].as_str();
                             let formula = super::rye::parse(expr)
                                 .map_err(|err| anyhow!(err))
                                 .with_context(|| {
-                                    format!("failed to parse '{}' Rye expression", expr)
+                                    format!("failed to parse '{expr}' Rye expression")
                                 })?;
                             let property =
                                 parse_predicates(formula, &mut self.predicates, interner)
                                     .context("failed to parse predicates in Rye expression")?;
-                            if self.assumes.iter().any(|(i, _)| i == &id) || self.guarantees.iter().any(|(i, _)| i == &id) {
+                            if self.assumes.iter().any(|(i, _)| i == &id)
+                                || self.guarantees.iter().any(|(i, _)| i == &id)
+                            {
                                 bail!("property defined multiple times");
                             }
                             match stack.last() {
-                                Some(PropertyTag::Guarantees) => self.guarantees.push((id, property)),
+                                Some(PropertyTag::Guarantees) => {
+                                    self.guarantees.push((id, property))
+                                }
                                 Some(PropertyTag::Assumes) => self.assumes.push((id, property)),
-                                _ => bail!("'{TAG_PROPERTY}' tag found outside '{TAG_GUARANTEES}' or '{TAG_ASSUMES}'"),
+                                _ => bail!(
+                                    "'{TAG_PROPERTY}' tag found outside '{TAG_GUARANTEES}' or '{TAG_ASSUMES}'"
+                                ),
                             }
                         }
                         _ => {
@@ -239,33 +245,34 @@ impl Properties {
                         }
                     }
                 }
-                // Ignore comments
-                Event::Comment(_)
-                // Ignore XML declaration
-                | Event::Decl(_) => continue,
-                Event::Text(t) => {
-                    let text = &*reader.decoder().decode(t.as_ref())?;
+                Event::Text(text) => {
+                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
+                    let text = String::from_utf8(text)?;
                     if !text.trim().is_empty() {
-                        error!(target: "parser", "text content not supported");
-                        bail!("text content not supported");
+                        error!(target: "parser", "text elements not allowed, ignoring");
                     }
+                    continue;
                 }
+                Event::Comment(_comment) => continue,
                 Event::CData(_) => {
-                    error!(target: "parser", "CData not supported");
-                    bail!("CData not supported");
+                    return Err(anyhow!("CData not supported"));
                 }
+                Event::Decl(_) => continue,
                 Event::PI(_) => {
-                    error!(target: "parser", "Processing Instructions not supported");
-                    bail!("Processing Instructions not supported");
+                    return Err(anyhow!("Processing Instructions not supported"));
                 }
                 Event::DocType(_) => {
-                    error!(target: "parser", "DocType not supported");
-                    bail!("DocType not supported");
+                    return Err(anyhow!("DocType not supported"));
                 }
-                // exits the loop when reaching end of file
                 Event::Eof => {
-                    info!(target: "parser", "parsing completed");
+                    info!("parsing completed");
+                    if !stack.is_empty() {
+                        return Err(anyhow!(ParserError::UnclosedTags,));
+                    }
                     break;
+                }
+                Event::GeneralRef(_bytes_ref) => {
+                    return Err(anyhow!("General References not supported"));
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low

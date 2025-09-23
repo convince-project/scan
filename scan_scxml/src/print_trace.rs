@@ -9,19 +9,19 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct TracePrinter {
+pub struct TracePrinter<'a> {
     index: Arc<AtomicU32>,
     path: PathBuf,
     writer: Option<csv::Writer<flate2::write::GzEncoder<File>>>,
-    model: Arc<ScxmlModel>,
+    model: &'a ScxmlModel,
 }
 
-impl TracePrinter {
-    const FOLDER: &str = "traces";
-    const TEMP: &str = ".temp";
-    const SUCCESSES: &str = "successes";
-    const FAILURES: &str = "failures";
-    const HEADER: [&str; 7] = [
+impl<'a> TracePrinter<'a> {
+    const FOLDER: &'static str = "traces";
+    const TEMP: &'static str = ".temp";
+    const SUCCESSES: &'static str = "successes";
+    const FAILURES: &'static str = "failures";
+    const HEADER: [&'static str; 7] = [
         "Time",
         "Send/Receive",
         "Origin",
@@ -31,7 +31,7 @@ impl TracePrinter {
         "Value",
     ];
 
-    pub fn new(model: Arc<ScxmlModel>) -> Self {
+    pub fn new(model: &'a ScxmlModel) -> Self {
         let mut path = current_dir().expect("current dir");
         for i in 0.. {
             path.push(format!("{}_{i:02}", Self::FOLDER));
@@ -60,7 +60,7 @@ impl TracePrinter {
     }
 }
 
-impl Clone for TracePrinter {
+impl<'a> Clone for TracePrinter<'a> {
     fn clone(&self) -> Self {
         // Get the temp folder
         let mut path = self.path.clone();
@@ -71,12 +71,12 @@ impl Clone for TracePrinter {
             index: Arc::clone(&self.index),
             path,
             writer: None,
-            model: Arc::clone(&self.model),
+            model: self.model,
         }
     }
 }
 
-impl Tracer<Event> for TracePrinter {
+impl<'a> Tracer<Event> for TracePrinter<'a> {
     fn init(&mut self) {
         let idx = self
             .index
@@ -102,7 +102,7 @@ impl Tracer<Event> for TracePrinter {
         self.writer = Some(writer);
     }
 
-    fn trace<'a, I: IntoIterator<Item = &'a Val>>(&mut self, event: &Event, time: Time, ports: I) {
+    fn trace<'b, I: IntoIterator<Item = &'b Val>>(&mut self, event: &Event, time: Time, ports: I) {
         let mut fields = Vec::new();
         let time = time.to_string();
         let mut action = String::new();
@@ -251,7 +251,6 @@ impl Tracer<Event> for TracePrinter {
                     new_path.push(Self::SUCCESSES);
                 } else {
                     new_path.push(Self::FAILURES);
-                    // new_path.push(self.model.guarantees.get(violation).unwrap());
                     // This path might not exist yet
                     if !exists(new_path.as_path()).expect("check folder") {
                         create_dir_all(new_path.clone()).expect("create missing folder");
