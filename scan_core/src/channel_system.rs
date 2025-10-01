@@ -352,12 +352,15 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
         let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
         let lower = self.communications_pg_idxs[pg_id.0 as usize];
         (self.communications[lower as usize..higher as usize])
-            .binary_search_by_key(&pg_action, |(a, _, _)| *a)
-            .map(|i| {
-                let (_, c, m) = self.communications[lower as usize + i];
-                (c, m)
-            })
-            .ok()
+            // .binary_search_by_key(&pg_action, |(a, _, _)| *a)
+            .iter()
+            .find(|(a, _, _)| *a == pg_action)
+            .map(|(_, c, m)| (*c, *m))
+        // .map(|i| {
+        //     let (_, c, m) = self.communications[lower as usize + i];
+        //     (c, m)
+        // })
+        // .ok()
     }
 
     /// Returns the list of defined channels, given as the pair of their type and capacity
