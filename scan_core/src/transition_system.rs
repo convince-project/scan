@@ -15,7 +15,7 @@ pub trait Tracer<A>: Clone + Send + Sync {
     fn init(&mut self);
 
     /// Stream a new state of the trace.
-    fn trace<'a, I: IntoIterator<Item = &'a Val>>(&mut self, action: &A, time: Time, ports: I);
+    fn trace<I: IntoIterator<Item = Val>>(&mut self, action: &A, time: Time, ports: I);
 
     /// Finalize and close streaming.
     ///
@@ -27,7 +27,7 @@ pub trait Tracer<A>: Clone + Send + Sync {
 impl<A> Tracer<A> for () {
     fn init(&mut self) {}
 
-    fn trace<'a, I: IntoIterator<Item = &'a Val>>(&mut self, _action: &A, _time: Time, _ports: I) {}
+    fn trace<I: IntoIterator<Item = Val>>(&mut self, _action: &A, _time: Time, _ports: I) {}
 
     fn finalize(self, _outcome: &RunOutcome) {}
 }
@@ -61,7 +61,7 @@ pub trait TransitionSystem {
     fn labels(&self) -> impl Iterator<Item = bool>;
 
     /// The current internal state of the [`TransitionSystem`].
-    fn state(&self) -> impl Iterator<Item = &Val>;
+    fn state(&self) -> impl Iterator<Item = Val>;
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
     fn experiment<O: Oracle>(

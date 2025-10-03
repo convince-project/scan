@@ -4,7 +4,7 @@ use crate::Time;
 // each interval being represented by lower and upper bounds.
 // So, `(lower_bound, upper_bound)` represents the closed interval `lower_bound..=upper_bound`.
 // We assume that the intervals are always disjoint and non-consecutive.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NumSet(Vec<(Time, Time)>);
 
 impl NumSet {
@@ -41,105 +41,236 @@ impl NumSet {
     pub(super) fn add_interval(&self, lower_bound: Time, upper_bound: Time) -> Self {
         assert!(lower_bound <= upper_bound);
         let mut new = Vec::with_capacity(self.0.len() + 1);
-        match self.0.binary_search_by_key(&lower_bound, |&(t, _)| t) {
+
+        match self
+            .0
+            .binary_search_by_key(&lower_bound.saturating_sub(1), |&(_, t)| t)
+        {
             Ok(i) => {
-                // self.0[i].0 = lower_bound
+                // self.0[i].1 = lower_bound - 1
                 Vec::extend_from_slice(&mut new, &self.0[..i]);
-                match self.0.binary_search_by_key(&upper_bound, |&(_, t)| t) {
+                match self
+                    .0
+                    .binary_search_by_key(&upper_bound.saturating_add(1), |&(t, _)| t)
+                {
                     Ok(j) => {
-                        // self.0[j].1 = upper_bound
-                        new.push((lower_bound, upper_bound));
+                        // self.0[j].0 = upper_bound + 1
+                        new.push((self.0[i].0, self.0[j].1));
                         Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
                     }
-                    Err(j) if j > 0 && j < self.0.len() => {
-                        // self.0[j - 1].1 < upper_bound < self.0[j].1
-                        if upper_bound + 1 < self.0[j].0 {
-                            // upper_bound and self.0[j].0 are neither the same nor consecutive
-                            new.push((lower_bound, upper_bound));
-                            Vec::extend_from_slice(&mut new, &self.0[j..]);
+                    Err(j) => {
+                        // self.0[j - 1].0 < upper_bound + 1 < self.0[j].0
+                        if j == 0 {
+                            new.push((self.0[i].0, upper_bound));
                         } else {
-                            new.push((lower_bound, self.0[j].1));
-                            Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+                            new.push((self.0[i].0, upper_bound.max(self.0[j - 1].1)));
                         }
+                        Vec::extend_from_slice(&mut new, &self.0[j..]);
                     }
-                    Err(j) if j > 0 && j == self.0.len() => {
-                        // self.0[self.0.len() - 1].1 < upper_bound
-                        new.push((lower_bound, upper_bound));
-                    }
-                    _ => unreachable!(),
                 }
             }
-            Err(i @ 1..) => {
-                // self.0[i - 1].0 < lower_bound < self.0[i].0
-                Vec::extend_from_slice(&mut new, &self.0[..i - 1]);
-                match self.0.binary_search_by_key(&upper_bound, |&(_, t)| t) {
+            Err(i) => {
+                // self.0[i - 1].1 < lower_bound - 1 < self.0[i].1
+                Vec::extend_from_slice(&mut new, &self.0[..i]);
+
+                match self
+                    .0
+                    .binary_search_by_key(&upper_bound.saturating_add(1), |&(t, _)| t)
+                {
                     Ok(j) => {
-                        // self.0[j].1 = upper_bound
-                        if self.0[i - 1].1 + 1 < lower_bound {
-                            new.push(self.0[i - 1]);
+                        // self.0[j].0 = upper_bound + 1
+                        if i == self.0.len() {
                             new.push((lower_bound, self.0[j].1));
                         } else {
-                            new.push((self.0[i - 1].0, self.0[j].1));
+                            new.push((lower_bound.min(self.0[i].0), self.0[j].1));
                         }
                         Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
                     }
-                    Err(j) if j > 0 && j < self.0.len() => {
-                        // self.0[j - 1].1 < upper_bound < self.0[j].1
-                        if self.0[i - 1].1 + 1 < lower_bound {
-                            new.push(self.0[i - 1]);
-                            if upper_bound + 1 < self.0[j].0 {
+                    Err(j) => {
+                        // self.0[j - 1].0 < upper_bound + 1 < self.0[j].0
+                        if i == self.0.len() {
+                            if j == 0 {
                                 new.push((lower_bound, upper_bound));
-                                Vec::extend_from_slice(&mut new, &self.0[j..]);
                             } else {
-                                new.push((lower_bound, self.0[j].1));
-                                Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+                                new.push((lower_bound, upper_bound.max(self.0[j - 1].1)));
                             }
-                        } else if upper_bound + 1 < self.0[j].0 {
-                            new.push((self.0[i - 1].0, upper_bound));
-                            Vec::extend_from_slice(&mut new, &self.0[j..]);
+                        } else if j == 0 {
+                            new.push((lower_bound.min(self.0[i].0), upper_bound));
                         } else {
-                            new.push((self.0[i - 1].0, self.0[j].1));
-                            Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+                            new.push((
+                                lower_bound.min(self.0[i].0),
+                                upper_bound.max(self.0[j - 1].1),
+                            ));
                         }
-                    }
-                    Err(j) if j > 0 && j == self.0.len() => {
-                        // self.0[self.0.len() - 1].1 < upper_bound
-                        new.push((self.0[i - 1].0, upper_bound));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            Err(0) => {
-                // lower_bound < self.0[0].0
-                match self.0.binary_search_by_key(&upper_bound, |&(_, t)| t) {
-                    Ok(j) => {
-                        // self.0[j].1 = upper_bound
-                        new.push((lower_bound, self.0[j].1));
-                        Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
-                    }
-                    Err(j @ 1..) => {
-                        // self.0[j - 1].1 < upper_bound < self.0[j].1
-                        if upper_bound + 1 < self.0[j].0 {
-                            new.push((lower_bound, upper_bound));
-                            Vec::extend_from_slice(&mut new, &self.0[j..]);
-                        } else {
-                            new.push((lower_bound, self.0[j].1));
-                            Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
-                        }
-                    }
-                    Err(0) => {
-                        new.push((lower_bound, upper_bound));
+                        Vec::extend_from_slice(&mut new, &self.0[j..]);
                     }
                 }
             }
         }
+
+        // match self.0.binary_search_by_key(&lower_bound, |&(t, _)| t) {
+        //     Ok(i) => {
+        //         // self.0[i].0 = lower_bound
+        //         Vec::extend_from_slice(&mut new, &self.0[..i]);
+        //         match self.0.binary_search_by_key(&upper_bound, |&(_, t)| t) {
+        //             Ok(j) => {
+        //                 // self.0[j].1 = upper_bound
+        //                 new.push((lower_bound, upper_bound));
+        //                 Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+        //             }
+        //             Err(j) if j < self.0.len() => {
+        //                 // self.0[j - 1].1 < upper_bound < self.0[j].1
+        //                 if upper_bound.saturating_add(1) < self.0[j].0 {
+        //                     // upper_bound and self.0[j].0 are neither the same nor consecutive
+        //                     new.push((lower_bound, upper_bound));
+        //                     Vec::extend_from_slice(&mut new, &self.0[j..]);
+        //                 } else {
+        //                     new.push((lower_bound, self.0[j].1));
+        //                     Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+        //                 }
+        //             }
+        //             Err(j) if j == self.0.len() => {
+        //                 // self.0[self.0.len() - 1].1 < upper_bound
+        //                 new.push((lower_bound, upper_bound));
+        //             }
+        //             _ => unreachable!(),
+        //         }
+        //     }
+        //     Err(i @ 1..) => {
+        //         // self.0[i - 1].0 < lower_bound < self.0[i].0
+        //         Vec::extend_from_slice(&mut new, &self.0[..i - 1]);
+        //         match self.0.binary_search_by_key(&upper_bound, |&(_, t)| t) {
+        //             Ok(j) => {
+        //                 // self.0[j].1 = upper_bound
+        //                 if self.0[i - 1].1.saturating_add(1) < lower_bound {
+        //                     new.push(self.0[i - 1]);
+        //                     new.push((lower_bound, self.0[j].1));
+        //                 } else {
+        //                     new.push((self.0[i - 1].0, self.0[j].1));
+        //                 }
+        //                 Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+        //             }
+        //             Err(j) if j < self.0.len() => {
+        //                 // self.0[j - 1].1 < upper_bound < self.0[j].1
+        //                 if self.0[i - 1].1.saturating_add(1) < lower_bound {
+        //                     new.push(self.0[i - 1]);
+        //                     if upper_bound + 1 < self.0[j].0 {
+        //                         new.push((lower_bound, upper_bound));
+        //                         Vec::extend_from_slice(&mut new, &self.0[j..]);
+        //                     } else {
+        //                         new.push((lower_bound, self.0[j].1));
+        //                         Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+        //                     }
+        //                 } else if upper_bound.saturating_add(1) < self.0[j].0 {
+        //                     new.push((self.0[i - 1].0, upper_bound));
+        //                     Vec::extend_from_slice(&mut new, &self.0[j..]);
+        //                 } else {
+        //                     new.push((self.0[i - 1].0, self.0[j].1));
+        //                     Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+        //                 }
+        //             }
+        //             Err(j) if j == self.0.len() => {
+        //                 // self.0[self.0.len() - 1].1 < upper_bound
+        //                 Vec::extend_from_slice(&mut new, &self.0[..i]);
+        //                 new.push((lower_bound, upper_bound));
+        //             }
+        //             _ => unreachable!(),
+        //         }
+        //     }
+        //     Err(0) => {
+        //         // lower_bound < self.0[0].0
+        //         match self.0.binary_search_by_key(&upper_bound, |&(_, t)| t) {
+        //             Ok(j) => {
+        //                 // self.0[j].1 = upper_bound
+        //                 new.push((lower_bound, self.0[j].1));
+        //                 Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+        //             }
+        //             Err(j @ 1..) if j < self.0.len() => {
+        //                 // self.0[j - 1].1 < upper_bound < self.0[j].1
+        //                 if upper_bound.saturating_add(1) < self.0[j].0 {
+        //                     new.push((lower_bound, upper_bound));
+        //                     Vec::extend_from_slice(&mut new, &self.0[j..]);
+        //                 } else {
+        //                     new.push((lower_bound, self.0[j].1));
+        //                     Vec::extend_from_slice(&mut new, &self.0[j + 1..]);
+        //                 }
+        //             }
+        //             Err(j) if j == self.0.len() => {
+        //                 // self.0[j - 1].1 < upper_bound
+        //                 new.push((lower_bound, upper_bound));
+        //             }
+        //             Err(0) => {
+        //                 new.push((lower_bound, upper_bound));
+        //                 Vec::extend_from_slice(&mut new, &self.0);
+        //             }
+        //             _ => unreachable!(),
+        //         }
+        //     }
+        // }
         Self(new)
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_interval_1() {
+        let empty = NumSet::empty();
+
+        let set = empty.add_interval(0, 1);
+        assert_eq!(set, NumSet(vec![(0, 1)]));
+
+        let set = empty.add_interval(1, 1);
+        assert_eq!(set, NumSet(vec![(1, 1)]));
+
+        let set = empty.add_interval(1, Time::MAX);
+        assert_eq!(set, NumSet(vec![(1, Time::MAX)]));
+    }
+
+    #[test]
+    fn add_interval_2() {
+        let full = NumSet::from_range(0, Time::MAX);
+
+        let set = full.add_interval(0, 1);
+        assert_eq!(set, full);
+
+        let set = full.add_interval(1, 1);
+        assert_eq!(set, full);
+
+        let set = full.add_interval(1, Time::MAX);
+        assert_eq!(set, full);
+    }
+
+    #[test]
+    fn add_interval_3() {
+        let interval = NumSet::from_range(5, 10);
+
+        let set = interval.add_interval(0, 1);
+        assert_eq!(set, NumSet(vec![(0, 1), (5, 10)]));
+
+        let set = interval.add_interval(12, 13);
+        assert_eq!(set, NumSet(vec![(5, 10), (12, 13)]));
+
+        let set = interval.add_interval(7, 8);
+        assert_eq!(set, interval);
+
+        let set = interval.add_interval(3, 12);
+        assert_eq!(set, NumSet(vec![(3, 12)]));
+    }
+
+    #[test]
+    fn add_interval_4() {
+        let interval = NumSet::from_range(5, 10);
+
+        let set = interval.add_interval(0, 5);
+        assert_eq!(set, NumSet(vec![(0, 10)]));
+
+        let set = interval.add_interval(0, 4);
+        assert_eq!(set, NumSet(vec![(0, 10)]));
+    }
+}
 
 //     #[test]
 //     fn from_range() {

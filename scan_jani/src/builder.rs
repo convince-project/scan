@@ -634,7 +634,7 @@ impl JaniBuilder {
                             .get(r#ref)
                             .or_else(|| self.global_vars.get(r#ref))
                             .ok_or(anyhow!("variable {} not found", r#ref))?;
-                        let expr = scan_core::Expression::Const(val.clone());
+                        let expr = scan_core::Expression::Const(*val);
                         pgb.add_effect(*action, *var, expr).context(
                             "failed setting transient variable {r#ref} to initial value",
                         )?;
@@ -705,7 +705,7 @@ impl JaniBuilder {
             Expression::Identifier(id) => local_vars
                 .get(id)
                 .or_else(|| self.global_vars.get(id))
-                .map(|(var, _, t)| PgExpression::Var(*var, t.clone()))
+                .map(|(var, _, t)| PgExpression::Var(*var, *t))
                 .or_else(|| {
                     self.global_constants
                         .get(id)
@@ -844,7 +844,7 @@ impl JaniBuilder {
             PropertyExpression::Identifier(id) => self
                 .global_vars
                 .get(id)
-                .map(|(var, _, t)| PgExpression::Var(*var, t.clone()))
+                .map(|(var, _, t)| PgExpression::Var(*var, *t))
                 .or_else(|| {
                     self.global_constants
                         .get(id)

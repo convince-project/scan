@@ -495,7 +495,7 @@ impl<'a> Oracle for PmtlOracleRun<'a> {
                         );
                     } else {
                         self.valuations[idx] = NumSet::empty();
-                    };
+                    }
                     self.outputs.push(self.valuations[idx].contains(time));
                 }
             }
@@ -671,7 +671,7 @@ mod tests {
         state.update(&[false], 0);
         assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true], 1);
-        assert!(state.final_output_guarantees().any(|b| b));
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[false], 2);
         assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false], 3);
@@ -679,6 +679,6 @@ mod tests {
         state.update(&[false], 3);
         assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true], 4);
-        assert!(state.final_output_guarantees().any(|b| b));
+        assert!(state.final_output_guarantees().any(|b| !b));
     }
 }

@@ -84,7 +84,7 @@ impl<'def, R: Rng + SeedableRng + Clone + Send + Sync> TransitionSystem for PgMo
         })
     }
 
-    fn state(&self) -> impl Iterator<Item = &Val> {
+    fn state(&self) -> impl Iterator<Item = Val> {
         self.global_vars
             .as_ref()
             .iter()

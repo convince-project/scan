@@ -269,9 +269,9 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventType {
     /// Sending a value to a channel.
-    Send(Val),
+    Send(SmallVec<[Val; 2]>),
     /// Retrieving a value out of a channel.
-    Receive(Val),
+    Receive(SmallVec<[Val; 2]>),
     /// Checking whether a channel is empty.
     ProbeEmptyQueue,
     /// Checking whether a channel is full.
@@ -316,7 +316,7 @@ pub enum EventType {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ChannelSystem<R: Rng> {
-    channels: Vec<(Type, Option<usize>)>,
+    channels: Vec<(Vec<Type>, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
     communications_pg_idxs: Vec<u16>,
     program_graphs: Vec<ProgramGraph<R>>,
@@ -352,20 +352,21 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
         let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
         let lower = self.communications_pg_idxs[pg_id.0 as usize];
         (self.communications[lower as usize..higher as usize])
-            // .binary_search_by_key(&pg_action, |(a, _, _)| *a)
-            .iter()
-            .find(|(a, _, _)| *a == pg_action)
-            .map(|(_, c, m)| (*c, *m))
-        // .map(|i| {
-        //     let (_, c, m) = self.communications[lower as usize + i];
-        //     (c, m)
-        // })
-        // .ok()
+            .binary_search_by_key(&pg_action, |(a, _, _)| *a)
+            // .iter()
+            // .find(|(a, _, _)| *a == pg_action)
+            // .map(|(_, c, m)| (*c, *m))
+            .map(|i| {
+                let (_, c, m) = self.communications[lower as usize + i];
+                (c, m)
+            })
+            .ok()
     }
 
     /// Returns the list of defined channels, given as the pair of their type and capacity
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
-    pub fn channels(&self) -> &Vec<(Type, Option<usize>)> {
+    #[inline(always)]
+    pub fn channels(&self) -> &Vec<(Vec<Type>, Option<usize>)> {
         &self.channels
     }
 }
@@ -380,7 +381,7 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
 pub struct ChannelSystemRun<'def, R: Rng> {
     rng: R,
     time: Time,
-    message_queue: Vec<VecDeque<Val>>,
+    message_queue: Vec<VecDeque<SmallVec<[Val; 2]>>>,
     program_graphs: Vec<ProgramGraphRun<'def, R>>,
     def: &'def ChannelSystem<R>,
 }
@@ -551,7 +552,7 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     return Err(CsError::OutOfCapacity(channel));
                 }
                 Message::Send => {
-                    let val = self.program_graphs[pg_id.0 as usize]
+                    let vals = self.program_graphs[pg_id.0 as usize]
                         .send(
                             action.1,
                             post.iter()
@@ -561,8 +562,8 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                             &mut self.rng,
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
-                    self.message_queue[channel.0 as usize].push_back(val.clone());
-                    EventType::Send(val)
+                    self.message_queue[channel.0 as usize].push_back(vals.clone());
+                    EventType::Send(vals)
                 }
                 Message::Receive if self.message_queue[channel.0 as usize].is_empty() => {
                     return Err(CsError::Empty(channel));
@@ -747,14 +748,14 @@ mod tests {
     #[test]
     fn add_communication() -> Result<(), CsError> {
         let mut cs = ChannelSystemBuilder::<SmallRng>::new();
-        let ch = cs.new_channel(Type::Boolean, Some(1));
+        let ch = cs.new_channel(vec![Type::Boolean], Some(1));
 
         let pg1 = cs.new_program_graph();
         let initial1 = cs.new_initial_location(pg1)?;
         let post1 = cs.new_location(pg1)?;
         let effect = CsExpression::Const(Val::Boolean(true));
-        let send = cs.new_send(pg1, ch, effect.clone())?;
-        let _ = cs.new_send(pg1, ch, effect)?;
+        let send = cs.new_send(pg1, ch, vec![effect.clone()])?;
+        let _ = cs.new_send(pg1, ch, vec![effect])?;
         cs.add_transition(pg1, initial1, send, post1, None)?;
 
         let var1 = cs.new_var(pg1, Expression::Const(Val::Integer(0)))?;
@@ -766,9 +767,9 @@ mod tests {
         let initial2 = cs.new_initial_location(pg2)?;
         let post2 = cs.new_location(pg2)?;
         let var2 = cs.new_var(pg2, Expression::Const(Val::Boolean(false)))?;
-        let receive = cs.new_receive(pg2, ch, var2)?;
-        let _ = cs.new_receive(pg2, ch, var2)?;
-        let _ = cs.new_receive(pg2, ch, var2)?;
+        let receive = cs.new_receive(pg2, ch, vec![var2])?;
+        let _ = cs.new_receive(pg2, ch, vec![var2])?;
+        let _ = cs.new_receive(pg2, ch, vec![var2])?;
         cs.add_transition(pg2, initial2, receive, post2, None)?;
 
         let cs_def = cs.build();

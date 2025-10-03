@@ -325,7 +325,7 @@ impl Builder {
                         Some(OptInit::ChInit(ch_init)) => {
                             Self::channel_initialization(ch_init, ctx)?
                         }
-                        None => ctx.cs.new_channel(Type::Integer, None),
+                        None => ctx.cs.new_channel(vec![Type::Integer], None),
                         _ => {
                             return Err(BuilderError::UnsupportedDeclaration(
                                 "illegal init on chan".into(),
@@ -794,7 +794,7 @@ impl Builder {
         let elem_type = typename_to_type(&ch_init.typename_list[0])?;
 
         // 4. create the channel
-        Ok(ctx.cs.new_channel(elem_type, cap))
+        Ok(ctx.cs.new_channel(vec![elem_type], cap))
     }
 
     /// Generates the graph nodes for a channel send operation (`ch ! msg`).
@@ -806,7 +806,7 @@ impl Builder {
     ) -> Result<Location, BuilderError> {
         let ch = lookup_chan(&msg.varref, ctx, gctx)?;
 
-        let mut payload: Vec<Expression<_>> = match &msg.args {
+        let payload: Vec<Expression<_>> = match &msg.args {
             SendArgs::Simple(v) => v,
             SendArgs::WithExpr(_, v) => v,
         }
@@ -818,15 +818,16 @@ impl Builder {
         //  SCAN accepts a single Expression: we pack them into a Tuple,
         //  or leave the single field as it is.)
         // TODO
-        let value_expr = if payload.len() == 1 {
-            payload.pop().unwrap()
-        } else {
-            Expression::Tuple(payload)
-        };
+        // let value_expr = if payload.len() == 1 {
+        //     payload.pop().unwrap()
+        // } else {
+        //     todo!();
+        //     Expression::Tuple(payload)
+        // };
 
         let send_act = ctx
             .cs
-            .new_send(ctx.pg, ch, value_expr)
+            .new_send(ctx.pg, ch, payload)
             .map_err(|_| BuilderError::TypeError("send".into()))?;
 
         let out = fresh_loc(ctx)?;
@@ -847,14 +848,15 @@ impl Builder {
         let ch = lookup_chan(&recv.varref, ctx, gctx)?;
 
         let dest_vr = match &recv.recv_args {
-            RecvArgs::Simple(v) if v.len() == 1 => match &v[0] {
-                RecvArg::Varref(vr) => vr,
-                _ => {
-                    return Err(BuilderError::UnsupportedStatement(
+            RecvArgs::Simple(v) => v
+                .iter()
+                .map(|v| match v {
+                    RecvArg::Varref(vr) => Ok(vr),
+                    _ => Err(BuilderError::UnsupportedStatement(
                         "complex recv pattern".into(),
-                    ));
-                }
-            },
+                    )),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             _ => {
                 return Err(BuilderError::UnsupportedStatement(
                     "multi-field receive not yet supported".into(),
@@ -862,7 +864,10 @@ impl Builder {
             }
         };
 
-        let dest_var = lookup_var(dest_vr, ctx, gctx)?;
+        let dest_var = dest_vr
+            .iter()
+            .map(|dest_vr| lookup_var(dest_vr, ctx, gctx))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let recv_act = ctx
             .cs

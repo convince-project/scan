@@ -21,15 +21,8 @@ impl<'a> TracePrinter<'a> {
     const TEMP: &'static str = ".temp";
     const SUCCESSES: &'static str = "successes";
     const FAILURES: &'static str = "failures";
-    const HEADER: [&'static str; 7] = [
-        "Time",
-        "Send/Receive",
-        "Origin",
-        "Target",
-        "Event",
-        "Message",
-        "Value",
-    ];
+    const HEADER: [&'static str; 6] =
+        ["Time", "Send/Receive", "Origin", "Target", "Event", "Value"];
 
     pub fn new(model: &'a ScxmlModel) -> Self {
         let mut path = current_dir().expect("current dir");
@@ -102,70 +95,58 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
         self.writer = Some(writer);
     }
 
-    fn trace<'b, I: IntoIterator<Item = &'b Val>>(&mut self, event: &Event, time: Time, ports: I) {
+    fn trace<I: IntoIterator<Item = Val>>(&mut self, event: &Event, time: Time, ports: I) {
         let mut fields = Vec::new();
         let time = time.to_string();
-        let mut action = String::new();
+        let action;
         let origin_name;
         let target_name;
         let event_name;
-        let mut param_name = String::new();
-        let mut param_value = String::new();
+        let mut params = String::new();
         fields.push(time.as_str());
 
-        if let Some((src, trg, event_idx, param)) = self.model.parameters.get(&event.channel) {
+        if let Some((src, trg, event_idx)) = self.model.parameters.get(&event.channel) {
             origin_name = self.model.fsm_names.get(src).unwrap().to_owned();
             target_name = self.model.fsm_names.get(trg).unwrap().to_owned();
             event_name = self.model.events.get(*event_idx).unwrap().clone();
-            param_name = param.to_owned();
             match event.event_type {
                 EventType::Send(ref val) => {
                     action = "S".to_string();
-                    param_value = format!("{val:?}");
+                    params = format!("{val:?}");
                 }
                 EventType::Receive(ref val) => {
                     action = "R".to_string();
-                    param_value = format!("{val:?}");
+                    params = format!("{val:?}");
                 }
                 EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
             }
         } else if let Some(trg) = self.model.ext_queues.get(&event.channel) {
             target_name = self.model.fsm_names.get(trg).unwrap().to_owned();
             match event.event_type {
-                EventType::Send(ref val) => {
+                EventType::Send(ref vals) => {
                     action = "S".to_string();
-                    if let Val::Tuple(e) = val {
-                        if let (Val::Integer(sent_event), Val::Integer(origin)) = (&e[0], &e[1]) {
-                            origin_name = self
-                                .model
-                                .fsm_indexes
-                                .get(&(*origin as usize))
-                                .unwrap()
-                                .to_owned();
-                            event_name =
-                                self.model.events.get(*sent_event as usize).unwrap().clone();
-                        } else {
-                            panic!("events should be pairs");
-                        }
+                    if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
+                        origin_name = self
+                            .model
+                            .fsm_indexes
+                            .get(&(origin as usize))
+                            .unwrap()
+                            .to_owned();
+                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
                     } else {
                         panic!("events should be pairs");
                     }
                 }
-                EventType::Receive(ref val) => {
+                EventType::Receive(ref vals) => {
                     action = "R".to_string();
-                    if let Val::Tuple(e) = val {
-                        if let (Val::Integer(sent_event), Val::Integer(origin)) = (&e[0], &e[1]) {
-                            origin_name = self
-                                .model
-                                .fsm_indexes
-                                .get(&(*origin as usize))
-                                .unwrap()
-                                .to_owned();
-                            event_name =
-                                self.model.events.get(*sent_event as usize).unwrap().clone();
-                        } else {
-                            panic!("events should be pairs");
-                        }
+                    if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
+                        origin_name = self
+                            .model
+                            .fsm_indexes
+                            .get(&(origin as usize))
+                            .unwrap()
+                            .to_owned();
+                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
                     } else {
                         panic!("events should be pairs");
                     }
@@ -176,18 +157,18 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
             origin_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
             target_name = origin_name.clone();
             match event.event_type {
-                EventType::Send(ref val) => {
+                EventType::Send(ref vals) => {
                     action = "S".to_string();
-                    if let Val::Integer(sent_event) = val {
-                        event_name = self.model.events.get(*sent_event as usize).unwrap().clone();
+                    if let Val::Integer(sent_event) = vals[0] {
+                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
                     } else {
                         panic!("events should be indexed by integer");
                     }
                 }
-                EventType::Receive(ref val) => {
+                EventType::Receive(ref vals) => {
                     action = "R".to_string();
-                    if let Val::Integer(sent_event) = val {
-                        event_name = self.model.events.get(*sent_event as usize).unwrap().clone();
+                    if let Val::Integer(sent_event) = vals[0] {
+                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
                     } else {
                         panic!("events should be indexed by integer");
                     }
@@ -195,18 +176,19 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
                 EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
             }
         } else {
-            event_name = String::new();
-            param_name = String::new();
+            event_name = String::from("?");
             match event.event_type {
                 EventType::Send(ref val) => {
+                    action = "S".to_string();
                     origin_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
                     target_name = format!("{:?}", event.channel);
-                    param_value = format!("{val:?}");
+                    params = format!("{val:?}");
                 }
                 EventType::Receive(ref val) => {
+                    action = "R".to_string();
                     origin_name = format!("{:?}", event.channel);
                     target_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
-                    param_value = format!("{val:?}");
+                    params = format!("{val:?}");
                 }
                 EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
             }
@@ -222,8 +204,7 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
                     origin_name,
                     target_name,
                     event_name,
-                    param_name,
-                    param_value,
+                    params,
                 ]
                 .into_iter()
                 .chain(ports.into_iter().map(format_val)),
@@ -268,21 +249,11 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
     }
 }
 
-fn format_val(val: &Val) -> String {
+fn format_val(val: Val) -> String {
     match val {
         Val::Boolean(true) => "true".to_string(),
         Val::Boolean(false) => "false".to_string(),
         Val::Integer(i) => i.to_string(),
         Val::Float(ordered_float) => ordered_float.to_string(),
-        Val::Tuple(vec) => {
-            vec.iter()
-                .fold("(".to_string(), |acc, v| acc + format_val(v).as_str())
-                + ")"
-        }
-        Val::List(_, vec) => {
-            vec.iter()
-                .fold("[".to_string(), |acc, v| acc + format_val(v).as_str())
-                + "]"
-        }
     }
 }

@@ -10,7 +10,7 @@ use rand::{Rng, SeedableRng};
 #[derive(Debug, Clone)]
 pub enum Atom {
     /// A predicate.
-    State(Channel),
+    State(Channel, usize),
     /// An event.
     Event(Event),
 }
@@ -19,7 +19,7 @@ pub enum Atom {
 #[derive(Debug, Clone)]
 pub struct CsModel<R: Rng> {
     cs: ChannelSystem<R>,
-    ports: Vec<Option<Val>>,
+    ports: Vec<Vec<Option<Val>>>,
     predicates: Vec<FnExpression<Atom, DummyRng>>,
 }
 
@@ -29,7 +29,11 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         let cs = cs.build();
         Self {
-            ports: vec![None; cs.channels().len()],
+            ports: cs
+                .channels()
+                .iter()
+                .map(|(types, _)| vec![None; types.len()])
+                .collect(),
             cs,
             predicates: Vec::new(),
         }
@@ -37,9 +41,9 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
 
     /// Adds a new port to the [`CsModel`],
     /// which is given by an [`Channel`] and a default [`Val`] value.
-    pub fn add_port(&mut self, channel: Channel, default: Val) {
+    pub fn add_port(&mut self, channel: Channel, idx: usize, default: Val) {
         // TODO FIXME: error handling and type checking.
-        self.ports[u16::from(channel) as usize] = Some(default);
+        self.ports[u16::from(channel) as usize][idx] = Some(default);
     }
 
     /// Adds a new predicate to the [`CsModel`],
@@ -48,8 +52,7 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
         let predicate = FnExpression::<Atom, _>::from(predicate);
         let _ = predicate.eval(
             &|port| match port {
-                Atom::State(channel) => self.ports[u16::from(channel) as usize]
-                    .clone()
+                Atom::State(channel, idx) => self.ports[u16::from(channel) as usize][idx]
                     .expect("port must have been initialized"),
                 Atom::Event(_event) => Val::Boolean(false),
             },
@@ -83,7 +86,7 @@ impl<R: Rng + SeedableRng> TransitionSystemGenerator for CsModel<R> {
 #[derive(Debug, Clone)]
 pub struct CsModelRun<'def, R: Rng + SeedableRng> {
     cs: ChannelSystemRun<'def, R>,
-    ports: Vec<Option<Val>>,
+    ports: Vec<Vec<Option<Val>>>,
     // TODO: predicates should not use rng
     predicates: &'def [FnExpression<Atom, DummyRng>],
     last_event: Option<Event>,
@@ -95,13 +98,17 @@ impl<'def, R: Rng + SeedableRng> TransitionSystem for CsModelRun<'def, R> {
     fn transition(&mut self, duration: Time) -> Option<Event> {
         let event = self.cs.montecarlo_execution(duration);
         if let Some(ref event) = event
-            && let EventType::Send(ref val) = event.event_type
-            && let Some(port) = self
+            && let EventType::Send(ref vals) = event.event_type
+        {
+            let port = self
                 .ports
                 .get_mut(u16::from(event.channel) as usize)
-                .expect("port must exist")
-        {
-            *port = val.clone();
+                .expect("port must exist");
+            port.iter_mut().zip(vals).for_each(|(p, &v)| {
+                if p.is_some() {
+                    *p = Some(v)
+                }
+            });
         }
         self.last_event = event.clone();
         event
@@ -115,8 +122,7 @@ impl<'def, R: Rng + SeedableRng> TransitionSystem for CsModelRun<'def, R> {
         self.predicates.iter().map(|prop| {
             if let Val::Boolean(b) = prop.eval(
                 &|port| match port {
-                    Atom::State(channel) => self.ports[u16::from(channel) as usize]
-                        .clone()
+                    Atom::State(channel, idx) => self.ports[u16::from(channel) as usize][idx]
                         .expect("port must exist and be initialized"),
                     Atom::Event(event) => {
                         Val::Boolean(self.last_event.as_ref().is_some_and(|e| e == &event))
@@ -132,7 +138,7 @@ impl<'def, R: Rng + SeedableRng> TransitionSystem for CsModelRun<'def, R> {
         })
     }
 
-    fn state(&self) -> impl Iterator<Item = &Val> {
-        self.ports.iter().filter_map(|p| p.as_ref())
+    fn state(&self) -> impl Iterator<Item = Val> {
+        self.ports.iter().flat_map(|p| p.iter().filter_map(|p| *p))
     }
 }

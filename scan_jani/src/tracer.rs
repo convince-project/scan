@@ -92,12 +92,7 @@ impl Tracer<Action> for TracePrinter {
         self.writer = Some(writer);
     }
 
-    fn trace<'a, I: IntoIterator<Item = &'a Val>>(
-        &mut self,
-        action: &Action,
-        time: Time,
-        ports: I,
-    ) {
+    fn trace<I: IntoIterator<Item = Val>>(&mut self, action: &Action, time: Time, ports: I) {
         let time = time.to_string();
         let action_name = self.model.actions.get(action).cloned().unwrap_or_default();
 
@@ -150,21 +145,11 @@ impl Tracer<Action> for TracePrinter {
     }
 }
 
-fn format_val(val: &Val) -> String {
+fn format_val(val: Val) -> String {
     match val {
         Val::Boolean(true) => "true".to_string(),
         Val::Boolean(false) => "false".to_string(),
         Val::Integer(i) => i.to_string(),
         Val::Float(ordered_float) => ordered_float.to_string(),
-        Val::Tuple(vec) => {
-            vec.iter()
-                .fold("(".to_string(), |acc, v| acc + format_val(v).as_str())
-                + ")"
-        }
-        Val::List(_, vec) => {
-            vec.iter()
-                .fold("[".to_string(), |acc, v| acc + format_val(v).as_str())
-                + "]"
-        }
     }
 }

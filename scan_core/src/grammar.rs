@@ -35,7 +35,7 @@ pub enum TypeError {
 }
 
 /// The types supported by the language internally used by PGs and CSs.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum Type {
     /// Boolean type.
     Boolean,
@@ -43,24 +43,16 @@ pub enum Type {
     Integer,
     /// Floating-point numerical type.
     Float,
-    /// Product of a list of types (including other products).
-    Product(Vec<Type>),
-    /// List type
-    List(Box<Type>),
 }
 
 impl Type {
     /// The default value for a given type.
     /// Used to initialize variables.
-    pub fn default_value(&self) -> Val {
+    pub fn default_value(self) -> Val {
         match self {
             Type::Boolean => Val::Boolean(false),
             Type::Integer => Val::Integer(0),
             Type::Float => Val::Float(0.0),
-            Type::Product(tuple) => {
-                Val::Tuple(Vec::from_iter(tuple.iter().map(Self::default_value)))
-            }
-            Type::List(t) => Val::List((**t).clone(), Vec::new()),
         }
     }
 }
@@ -72,7 +64,7 @@ pub type Integer = i32;
 pub type Float = f64;
 
 /// Possible values for each [`Type`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Val {
     /// Boolean values.
     Boolean(bool),
@@ -80,20 +72,14 @@ pub enum Val {
     Integer(Integer),
     /// Floating-point values.
     Float(Float),
-    /// Values for product types, i.e., tuples of suitable values.
-    Tuple(Vec<Val>),
-    /// Values for list types
-    List(Type, Vec<Val>),
 }
 
 impl Val {
     /// Returns the [`Type`] of the value.
-    pub fn r#type(&self) -> Type {
+    pub fn r#type(self) -> Type {
         match self {
             Val::Boolean(_) => Type::Boolean,
             Val::Integer(_) => Type::Integer,
-            Val::Tuple(comps) => Type::Product(comps.iter().map(Val::r#type).collect()),
-            Val::List(t, _) => Type::List(Box::new(t.clone())),
             Val::Float(_) => Type::Float,
         }
     }
@@ -122,10 +108,6 @@ where
     Const(Val),
     /// A typed variable.
     Var(V, Type),
-    /// A tuple of expressions.
-    Tuple(Vec<Expression<V>>),
-    /// The component of a tuple.
-    Component(usize, Box<Expression<V>>),
     // -------------
     // Random values
     // -------------
@@ -175,17 +157,6 @@ where
     /// Inequality of numerical expressions: LHS less than, or equal to, RHS.
     LessEq(Box<(Expression<V>, Expression<V>)>),
     // -----
-    // Lists
-    // -----
-    /// Append element to the end of a list.
-    Append(Box<(Expression<V>, Expression<V>)>),
-    /// Truncate last element from a list.
-    Truncate(Box<Expression<V>>),
-    /// Take length of a list.
-    Len(Box<Expression<V>>),
-    // /// The component of a tuple.
-    // Entry(Box<(Expression<V>, Expression<V>)>),
-    // -----
     // Flow
     // -----
     /// If-Then-Else construct, where If must be a boolean expression,
@@ -205,12 +176,7 @@ where
     pub fn r#type(&self) -> Result<Type, TypeError> {
         match self {
             Expression::Const(val) => Ok(val.r#type()),
-            Expression::Tuple(tuple) => tuple
-                .iter()
-                .map(|e| e.r#type())
-                .collect::<Result<Vec<Type>, TypeError>>()
-                .map(Type::Product),
-            Expression::Var(_var, t) => Ok(t.clone()),
+            Expression::Var(_var, t) => Ok(*t),
             Expression::And(props) | Expression::Or(props) => {
                 if props
                     .iter()
@@ -286,45 +252,6 @@ where
                     Err(TypeError::TypeMismatch)
                 }
             }
-            Expression::Component(index, expr) => {
-                if let Type::Product(components) = expr.r#type()? {
-                    components
-                        .get(*index)
-                        .cloned()
-                        .ok_or(TypeError::MissingComponent)
-                } else {
-                    Err(TypeError::TypeMismatch)
-                }
-            }
-            Expression::Append(exprs) => {
-                let list_type = exprs.0.r#type()?;
-                let element_type = exprs.1.r#type()?;
-                if let Type::List(ref elements_type) = list_type {
-                    if &element_type == elements_type.as_ref() {
-                        Ok(list_type)
-                    } else {
-                        Err(TypeError::TypeMismatch)
-                    }
-                } else {
-                    Err(TypeError::TypeMismatch)
-                }
-            }
-            Expression::Truncate(list) => {
-                let list_type = list.r#type()?;
-                if let Type::List(_) = list_type {
-                    Ok(list_type)
-                } else {
-                    Err(TypeError::TypeMismatch)
-                }
-            }
-            Expression::Len(list) => {
-                let list_type = list.r#type()?;
-                if let Type::List(_) = list_type {
-                    Ok(Type::Integer)
-                } else {
-                    Err(TypeError::TypeMismatch)
-                }
-            }
             Expression::Mod(exprs) => {
                 if matches!(exprs.0.r#type()?, Type::Integer)
                     && matches!(exprs.1.r#type()?, Type::Integer)
@@ -373,12 +300,7 @@ where
     /// Returns an error if expression contains variables.
     pub fn eval_constant(&self) -> Result<Val, TypeError> {
         match self {
-            Expression::Const(val) => Ok(val.clone()),
-            Expression::Tuple(tuple) => tuple
-                .iter()
-                .map(|e| e.eval_constant())
-                .collect::<Result<Vec<Val>, TypeError>>()
-                .map(Val::Tuple),
+            Expression::Const(val) => Ok(*val),
             Expression::Var(_, _) => Err(TypeError::UnknownVar),
             Expression::And(props) => props
                 .iter()
@@ -460,7 +382,6 @@ where
                     _ => Err(TypeError::TypeMismatch),
                 }
             }
-            Expression::Component(_, _expression) => todo!(),
             Expression::RandBool(_) => todo!(),
             Expression::RandInt(_, _) => todo!(),
             Expression::RandFloat(_, _) => todo!(),
@@ -470,9 +391,6 @@ where
             Expression::GreaterEq(_) => todo!(),
             Expression::Less(_) => todo!(),
             Expression::LessEq(_) => todo!(),
-            Expression::Append(_) => todo!(),
-            Expression::Truncate(_expression) => todo!(),
-            Expression::Len(_expression) => todo!(),
             Expression::Ite(_) => todo!(),
             Expression::Floor(expression) => {
                 if let Val::Float(f) = expression.eval_constant()? {
@@ -501,16 +419,11 @@ where
             | Expression::RandBool(_)
             | Expression::RandInt(_, _)
             | Expression::RandFloat(_, _) => Ok(()),
-            Expression::Tuple(tuple)
-            | Expression::And(tuple)
+            Expression::And(tuple)
             | Expression::Or(tuple)
             | Expression::Sum(tuple)
             | Expression::Mult(tuple) => tuple.iter().try_for_each(|expr| expr.context(vars)),
-            Expression::Component(_, expr)
-            | Expression::Not(expr)
-            | Expression::Opposite(expr)
-            | Expression::Truncate(expr)
-            | Expression::Len(expr) => expr.context(vars),
+            Expression::Not(expr) | Expression::Opposite(expr) => expr.context(vars),
             Expression::Implies(exprs)
             | Expression::Equal(exprs)
             | Expression::Greater(exprs)
@@ -518,10 +431,7 @@ where
             | Expression::Less(exprs)
             | Expression::LessEq(exprs)
             | Expression::Mod(exprs)
-            | Expression::Div(exprs)
-            | Expression::Append(exprs) => {
-                exprs.0.context(vars).and_then(|_| exprs.1.context(vars))
-            }
+            | Expression::Div(exprs) => exprs.0.context(vars).and_then(|_| exprs.1.context(vars)),
             Expression::Ite(exprs) => exprs
                 .0
                 .context(vars)
@@ -580,17 +490,6 @@ where
                 }
                 Ok(Expression::Or(subformulae))
             }
-        }
-    }
-
-    /// Creates the component of an expression.
-    ///
-    /// Optimizes automatically the component of a tuple.
-    pub fn component(self, index: usize) -> Self {
-        if let Expression::Tuple(args) = self {
-            args[index].clone()
-        } else {
-            Expression::Component(index, Box::new(self))
         }
     }
 }
@@ -745,38 +644,17 @@ impl<V: Clone + Send + Sync + 'static, R: Clone + Rng + 'static> From<Expression
 {
     fn from(value: Expression<V>) -> Self {
         FnExpression(match value {
-            Expression::Const(val) => Box::new(move |_, _| val.clone()),
-            Expression::Var(var, t) => Box::new(move |vars, _| {
-                // vars(var.clone())
-                let val = vars(var.clone());
-                if t == val.r#type() {
-                    val
-                } else {
-                    panic!("value and variable type mismatch");
-                }
+            Expression::Const(val) => Box::new(move |_, _| val),
+
+            Expression::Var(var, _t) => Box::new(move |vars, _| {
+                vars(var.clone())
+                // let val = vars(var.clone());
+                // if t == val.r#type() {
+                //     val
+                // } else {
+                //     panic!("value and variable type mismatch");
+                // }
             }),
-            Expression::Tuple(exprs) => {
-                let exprs: Vec<FnExpression<_, _>> =
-                    exprs.into_iter().map(FnExpression::from).collect();
-                Box::new(move |vars, rng| {
-                    Val::Tuple(
-                        exprs
-                            .iter()
-                            .map(|expr| expr.eval(vars, rng))
-                            .collect::<Vec<_>>(),
-                    )
-                })
-            }
-            Expression::Component(index, expr) => {
-                let expr = Self::from(*expr);
-                Box::new(move |vars, rng| {
-                    if let Val::Tuple(vals) = expr.eval(vars, rng) {
-                        vals[index].clone()
-                    } else {
-                        panic!("index out of bounds");
-                    }
-                })
-            }
             Expression::And(exprs) => {
                 let exprs: Vec<FnExpression<_, _>> = exprs.into_iter().map(Self::from).collect();
                 Box::new(move |vars, rng| {
@@ -954,49 +832,6 @@ impl<V: Clone + Send + Sync + 'static, R: Clone + Rng + 'static> From<Expression
                         _ => panic!("type mismatch"),
                     },
                     _ => panic!("type mismatch"),
-                })
-            }
-            Expression::Append(exprs) => {
-                let (list, element) = *exprs;
-                let list = FnExpression::from(list);
-                let element = FnExpression::from(element);
-                Box::new(move |vars, rng| {
-                    if let Val::List(t, mut l) = list.eval(vars, rng) {
-                        let element = element.eval(vars, rng);
-                        if element.r#type() == t {
-                            l.push(element);
-                            Val::List(t, l)
-                        } else {
-                            panic!("type mismatch");
-                        }
-                    } else {
-                        panic!("type mismatch");
-                    }
-                })
-            }
-            Expression::Truncate(list) => {
-                let list = FnExpression::from(*list);
-                Box::new(move |vars, rng| {
-                    if let Val::List(t, mut l) = list.eval(vars, rng) {
-                        if !l.is_empty() {
-                            let _ = l.pop();
-                            Val::List(t, l)
-                        } else {
-                            panic!("type mismatch");
-                        }
-                    } else {
-                        panic!("type mismatch");
-                    }
-                })
-            }
-            Expression::Len(list) => {
-                let list = FnExpression::from(*list);
-                Box::new(move |vars, rng| {
-                    if let Val::List(_t, l) = list.eval(vars, rng) {
-                        Val::Integer(l.len() as Integer)
-                    } else {
-                        panic!("type mismatch");
-                    }
                 })
             }
             Expression::Mod(exprs) => {

@@ -54,7 +54,7 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
     pub(crate) fn var_type(&self, var: Var) -> Result<Type, PgError> {
         self.vars
             .get(var.0 as usize)
-            .map(Val::r#type)
+            .map(|val| Val::r#type(*val))
             .ok_or(PgError::MissingVar(var))
     }
 
@@ -79,10 +79,9 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
         let idx = self.vars.len();
         // We check the type to make sure the expression is well-formed
         let _ = init.r#type().map_err(PgError::Type)?;
-        init.context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
+        init.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
             .map_err(PgError::Type)?;
-        let val =
-            FnExpression::from(init).eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng);
+        let val = FnExpression::from(init).eval(&|var| self.vars[var.0 as usize], &mut DummyRng);
         self.vars.push(val);
         Ok(Var(idx as u16))
     }
@@ -213,12 +212,12 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
             return Err(PgError::NoEffects);
         }
         effect
-            .context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
+            .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
             .map_err(PgError::Type)?;
         let var_type = self
             .vars
             .get(var.0 as usize)
-            .map(Val::r#type)
+            .map(|val| Val::r#type(*val))
             .ok_or_else(|| PgError::MissingVar(var.to_owned()))?;
         if var_type == effect.r#type().map_err(PgError::Type)? {
             match self
@@ -238,24 +237,30 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
         }
     }
 
-    pub(crate) fn new_send(&mut self, msg: PgExpression) -> Result<Action, PgError> {
+    pub(crate) fn new_send(&mut self, msgs: Vec<PgExpression>) -> Result<Action, PgError> {
         // Check message is well-typed
-        msg.context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
+        msgs.iter()
+            .try_for_each(|msg| {
+                msg.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+            })
             .map_err(PgError::Type)?;
-        let _ = msg.r#type().map_err(PgError::Type)?;
+        msgs.iter()
+            .try_for_each(|msg| msg.r#type().map_err(PgError::Type).map(|_| ()))?;
         // Actions are indexed progressively
         let idx = self.effects.len();
-        self.effects.push(Effect::Send(msg.into()));
+        self.effects.push(Effect::Send(
+            msgs.into_iter().map(|msg| msg.into()).collect(),
+        ));
         Ok(Action(idx as ActionIdx))
     }
 
-    pub(crate) fn new_receive(&mut self, var: Var) -> Result<Action, PgError> {
-        if self.vars.len() as u16 <= var.0 {
+    pub(crate) fn new_receive(&mut self, vars: Vec<Var>) -> Result<Action, PgError> {
+        if let Some(var) = vars.iter().find(|var| self.vars.len() as u16 <= var.0) {
             Err(PgError::MissingVar(var.to_owned()))
         } else {
             // Actions are indexed progressively
             let idx = self.effects.len();
-            self.effects.push(Effect::Receive(var));
+            self.effects.push(Effect::Receive(vars.into()));
             Ok(Action(idx as ActionIdx))
         }
     }
@@ -411,7 +416,7 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
         } else {
             if let Some(ref guard) = guard {
                 guard
-                    .context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
+                    .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
                     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];

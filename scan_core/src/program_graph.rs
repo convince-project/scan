@@ -191,8 +191,8 @@ pub enum PgError {
 enum Effect<R: Rng> {
     // NOTE: Could use a SmallVec for clock resets
     Effects(Vec<(Var, FnExpression<Var, R>)>, Vec<Clock>),
-    Send(FnExpression<Var, R>),
-    Receive(Var),
+    Send(SmallVec<[FnExpression<Var, R>; 2]>),
+    Receive(SmallVec<[Var; 2]>),
 }
 
 type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
@@ -421,8 +421,7 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            if let Val::Boolean(pass) =
-                guard.eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng)
+            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
             {
                 pass
             } else {
@@ -449,8 +448,7 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            if let Val::Boolean(pass) =
-                guard.eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng)
+            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
             {
                 pass
             } else {
@@ -531,8 +529,7 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         {
             if self.active_transitions(action, post_states, resets) {
                 effects.iter().for_each(|(var, effect)| {
-                    self.vars[var.0 as usize] =
-                        effect.eval(&|var| self.vars[var.0 as usize].clone(), rng)
+                    self.vars[var.0 as usize] = effect.eval(&|var| self.vars[var.0 as usize], rng)
                 });
                 resets
                     .iter()
@@ -577,14 +574,17 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         action: Action,
         post_states: &[Location],
         rng: &'a mut R,
-    ) -> Result<Val, PgError> {
+    ) -> Result<SmallVec<[Val; 2]>, PgError> {
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
-            if let Effect::Send(effect) = &self.def.effects[action.0 as usize] {
-                let val = effect.eval(&|var| self.vars[var.0 as usize].clone(), rng);
+            if let Effect::Send(effects) = &self.def.effects[action.0 as usize] {
+                let vals = effects
+                    .iter()
+                    .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], rng))
+                    .collect();
                 self.current_states.copy_from_slice(post_states);
-                Ok(val)
+                Ok(vals)
             } else {
                 Err(PgError::NotSend(action))
             }
@@ -597,15 +597,25 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         &mut self,
         action: Action,
         post_states: &[Location],
-        val: Val,
+        vals: SmallVec<[Val; 2]>,
     ) -> Result<(), PgError> {
         if action == EPSILON {
             Err(PgError::NotReceive(action))
         } else if self.active_transitions(action, post_states, &[]) {
-            if let Effect::Receive(var) = self.def.effects[action.0 as usize] {
-                let var_content = self.vars.get_mut(var.0 as usize).expect("variable exists");
-                if var_content.r#type() == val.r#type() {
-                    *var_content = val;
+            if let Effect::Receive(ref vars) = self.def.effects[action.0 as usize] {
+                // let var_content = self.vars.get_mut(var.0 as usize).expect("variable exists");
+                if vars.len() == vals.len()
+                    && vals.iter().zip(vars).all(|(val, var)| {
+                        self.vars
+                            .get(var.0 as usize)
+                            .expect("variable exists")
+                            .r#type()
+                            == val.r#type()
+                    })
+                {
+                    vals.into_iter().zip(vars).for_each(|(val, var)| {
+                        *self.vars.get_mut(var.0 as usize).expect("variable exists") = val
+                    });
                     self.current_states.copy_from_slice(post_states);
                     // self.current_states = post_states;
                     // self.update_buf();
@@ -623,14 +633,15 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
 
     pub(crate) fn eval(&self, expr: &FnExpression<Var, DummyRng>) -> Val {
         expr.eval(
-            &|v: Var| self.vars.get(v.0 as usize).unwrap().clone(),
+            &|v: Var| *self.vars.get(v.0 as usize).unwrap(),
             &mut DummyRng,
         )
     }
 
-    pub(crate) fn val(&self, var: Var) -> Result<&Val, PgError> {
+    pub(crate) fn val(&self, var: Var) -> Result<Val, PgError> {
         self.vars
             .get(var.0 as usize)
+            .copied()
             .ok_or(PgError::MissingVar(var))
     }
 }
