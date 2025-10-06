@@ -336,11 +336,11 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
             program_graphs: Vec::from_iter(
                 self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
             ),
-            message_queue: Vec::from_iter(
-                self.channels
-                    .iter()
-                    .map(|(_, cap)| cap.map_or_else(VecDeque::new, VecDeque::with_capacity)),
-            ),
+            message_queue: Vec::from_iter(self.channels.iter().map(|(types, cap)| {
+                cap.map_or_else(VecDeque::new, |cap| {
+                    VecDeque::with_capacity(types.len() * cap)
+                })
+            })),
             def: self,
         }
     }
@@ -381,7 +381,7 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
 pub struct ChannelSystemRun<'def, R: Rng> {
     rng: R,
     time: Time,
-    message_queue: Vec<VecDeque<SmallVec<[Val; 2]>>>,
+    message_queue: Vec<VecDeque<Val>>,
     program_graphs: Vec<ProgramGraphRun<'def, R>>,
     def: &'def ChannelSystem<R>,
 }
@@ -562,16 +562,17 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                             &mut self.rng,
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
-                    self.message_queue[channel.0 as usize].push_back(vals.clone());
+                    self.message_queue[channel.0 as usize].extend(vals.iter().copied());
                     EventType::Send(vals)
                 }
                 Message::Receive if self.message_queue[channel.0 as usize].is_empty() => {
                     return Err(CsError::Empty(channel));
                 }
                 Message::Receive => {
-                    let val = self.message_queue[channel.0 as usize]
-                        .pop_front()
-                        .expect("communication has been verified before");
+                    let (types, _) = &self.def.channels[channel.0 as usize];
+                    let vals = self.message_queue[channel.0 as usize]
+                        .drain(..types.len())
+                        .collect::<SmallVec<[Val; 2]>>();
                     self.program_graphs[pg_id.0 as usize]
                         .receive(
                             action.1,
@@ -579,10 +580,10 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                                 .map(|loc| loc.1)
                                 .collect::<SmallVec<[PgLocation; 8]>>()
                                 .as_slice(),
-                            val.clone(),
+                            vals.as_slice(),
                         )
                         .expect("communication has been verified before");
-                    EventType::Receive(val)
+                    EventType::Receive(vals)
                 }
                 Message::ProbeEmptyQueue | Message::ProbeFullQueue
                     if matches!(capacity, Some(0)) =>

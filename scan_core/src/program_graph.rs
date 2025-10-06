@@ -597,7 +597,7 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         &mut self,
         action: Action,
         post_states: &[Location],
-        vals: SmallVec<[Val; 2]>,
+        vals: &[Val],
     ) -> Result<(), PgError> {
         if action == EPSILON {
             Err(PgError::NotReceive(action))
@@ -613,7 +613,7 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
                             == val.r#type()
                     })
                 {
-                    vals.into_iter().zip(vars).for_each(|(val, var)| {
+                    vals.into_iter().zip(vars).for_each(|(&val, var)| {
                         *self.vars.get_mut(var.0 as usize).expect("variable exists") = val
                     });
                     self.current_states.copy_from_slice(post_states);
