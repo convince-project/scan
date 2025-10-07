@@ -315,23 +315,23 @@ pub enum EventType {
 /// cs.transition(pg_id, e, &[initial]).expect("transition is active");
 /// ```
 #[derive(Debug, Clone)]
-pub struct ChannelSystem<R: Rng> {
+pub struct ChannelSystem {
     channels: Vec<(Vec<Type>, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
     communications_pg_idxs: Vec<u16>,
-    program_graphs: Vec<ProgramGraph<R>>,
+    program_graphs: Vec<ProgramGraph>,
 }
 
-impl<R: Rng + SeedableRng> ChannelSystem<R> {
+impl ChannelSystem {
     /// Creates a new [`ChannelSystemRun`] which allows to execute the CS as defined.
     ///
     /// The new instance borrows the caller to refer to the CS definition without copying its data,
     /// so that spawning instances is (relatively) inexpensive.
     ///
     /// See also [`ProgramGraph::new_instance`].
-    pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def, R> {
+    pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
         ChannelSystemRun {
-            rng: R::from_os_rng(),
+            rng: SmallRng::from_os_rng(),
             time: 0,
             program_graphs: Vec::from_iter(
                 self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
@@ -349,18 +349,18 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
     fn communication(&self, action: Action) -> Option<(Channel, Message)> {
         let pg_id = action.0;
         let pg_action = action.1;
-        let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
-        let lower = self.communications_pg_idxs[pg_id.0 as usize];
-        (self.communications[lower as usize..higher as usize])
-            .binary_search_by_key(&pg_action, |(a, _, _)| *a)
-            // .iter()
-            // .find(|(a, _, _)| *a == pg_action)
-            // .map(|(_, c, m)| (*c, *m))
-            .map(|i| {
-                let (_, c, m) = self.communications[lower as usize + i];
+        self.program_graphs[pg_id.0 as usize]
+            .is_communication(pg_action)
+            .expect("this function should only be called with validated args")
+            .then(|| {
+                let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
+                let lower = self.communications_pg_idxs[pg_id.0 as usize];
+                let idx = (self.communications[lower as usize..higher as usize])
+                    .binary_search_by_key(&pg_action, |(a, _, _)| *a)
+                    .expect("communication");
+                let (_, c, m) = self.communications[lower as usize + idx];
                 (c, m)
             })
-            .ok()
     }
 
     /// Returns the list of defined channels, given as the pair of their type and capacity
@@ -378,15 +378,15 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
 /// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
 /// because only the internal state needs to be duplicated.
 #[derive(Debug, Clone)]
-pub struct ChannelSystemRun<'def, R: Rng> {
-    rng: R,
+pub struct ChannelSystemRun<'def> {
+    rng: SmallRng,
     time: Time,
     message_queue: Vec<VecDeque<Val>>,
-    program_graphs: Vec<ProgramGraphRun<'def, R>>,
-    def: &'def ChannelSystem<R>,
+    program_graphs: Vec<ProgramGraphRun<'def>>,
+    def: &'def ChannelSystem,
 }
 
-impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
+impl<'def> ChannelSystemRun<'def> {
     /// Returns the current time of the CS.
     #[inline(always)]
     pub fn time(&self) -> Time {
@@ -432,42 +432,52 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
         while self.time <= duration {
             // Resets PG queue
             pg_list = pg_vec.clone();
-            pg_list.swap(self.rng.random_range(0..pgs), pgs - 1);
-            while let Some(pg_id) = pg_list.pop() {
+            while !pg_list.is_empty() {
+                let pg_id = pg_list.swap_remove(self.rng.random_range(0..pg_list.len()));
                 // Execute randomly chosen transitions on the picked PG until an event is generated,
                 // or no more transition is possible
                 while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
                     .possible_transitions()
-                    .filter_map(|(action, post_state)| {
-                        if self.def.communication(Action(pg_id, action)).is_none_or(
+                    // .filter(|(_, post_states)| post_states.clone().all(|mut i| i.next().is_some()))
+                    .filter(|&(action, _)| {
+                        self.def.communication(Action(pg_id, action)).is_none_or(
                             |(channel, message)| {
                                 let (_, capacity) = self.def.channels[channel.0 as usize];
                                 let queue = &self.message_queue[channel.0 as usize];
                                 // Channel capacity must never be exceeded!
-                                assert!(capacity.is_none_or(|cap| queue.len() <= cap));
+                                debug_assert!(capacity.is_none_or(|cap| queue.len() <= cap));
                                 // NOTE FIXME currently handshake is unsupported
-                                !matches!(capacity, Some(0))
-                                    && match message {
-                                        Message::Send => {
-                                            capacity.is_none_or(|cap| queue.len() < cap)
-                                        }
-                                        Message::Receive => !queue.is_empty(),
-                                        Message::ProbeFullQueue => {
-                                            capacity.is_some_and(|cap| queue.len() == cap)
-                                        }
-                                        Message::ProbeEmptyQueue => queue.is_empty(),
+                                // !matches!(capacity, Some(0))
+                                match message {
+                                    Message::Send => capacity.is_none_or(|cap| queue.len() < cap),
+                                    Message::Receive => !queue.is_empty(),
+                                    Message::ProbeFullQueue => {
+                                        capacity.is_some_and(|cap| queue.len() == cap)
                                     }
+                                    Message::ProbeEmptyQueue => queue.is_empty(),
+                                }
                             },
-                        ) {
-                            post_state
-                                .map(|locs| locs.choose(&mut self.rng).map(|l| Location(pg_id, l)))
-                                .collect::<Option<SmallVec<[Location; 4]>>>()
-                                .map(|s| (action, s))
-                        } else {
-                            None
-                        }
+                        )
+                    })
+                    .filter_map(|(action, post_states)| {
+                        post_states
+                            .map(|locs| {
+                                locs.choose(&mut self.rng).map(|loc| Location(pg_id, loc)) //.expect("non-empty"))
+                            })
+                            .collect::<Option<SmallVec<[Location; 4]>>>()
+                            .map(|locs| (action, locs))
                     })
                     .choose(&mut rand)
+                // .map(|(action, post_states)| {
+                //     (
+                //         action,
+                //         post_states
+                //             .map(|locs| {
+                //                 Location(pg_id, locs.choose(&mut self.rng).unwrap()) //.expect("non-empty"))
+                //             })
+                //             .collect::<SmallVec<[Location; 4]>>(),
+                //     )
+                // })
                 {
                     let event = self
                         .transition(pg_id, Action(pg_id, action), post_states.as_slice())
@@ -475,11 +485,6 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     if event.is_some() {
                         return event;
                     }
-                }
-                // Pick a random PG id from the list and move it to the end
-                let len = pg_list.len();
-                if len > 1 {
-                    pg_list.swap(self.rng.random_range(0..len), len - 1);
                 }
             }
             self.wait(1).ok()?;
@@ -594,8 +599,8 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     return Err(CsError::NotEmpty(channel));
                 }
                 Message::ProbeEmptyQueue => {
-                    self.program_graphs[pg_id.0 as usize]
-                        .transition(
+                    let _ = self.program_graphs[pg_id.0 as usize]
+                        .send(
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
@@ -616,8 +621,8 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     return Err(CsError::ProbingInfiniteQueue(channel));
                 }
                 Message::ProbeFullQueue => {
-                    self.program_graphs[pg_id.0 as usize]
-                        .transition(
+                    let _ = self.program_graphs[pg_id.0 as usize]
+                        .send(
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
@@ -675,18 +680,18 @@ mod tests {
 
     #[test]
     fn builder() {
-        let _cs: ChannelSystemBuilder<SmallRng> = ChannelSystemBuilder::new();
+        let _cs: ChannelSystemBuilder = ChannelSystemBuilder::new();
     }
 
     #[test]
     fn new_pg() {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let _ = cs.new_program_graph();
     }
 
     #[test]
     fn new_action() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let _action = cs.new_action(pg)?;
         Ok(())
@@ -694,7 +699,7 @@ mod tests {
 
     #[test]
     fn new_var() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let _var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
         let _var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
@@ -703,7 +708,7 @@ mod tests {
 
     #[test]
     fn add_effect() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let action = cs.new_action(pg)?;
         let var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
@@ -721,7 +726,7 @@ mod tests {
 
     #[test]
     fn new_location() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let initial = cs.new_initial_location(pg)?;
         let location = cs.new_location(pg)?;
@@ -731,7 +736,7 @@ mod tests {
 
     #[test]
     fn add_transition() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let initial = cs.new_initial_location(pg)?;
         let action = cs.new_action(pg)?;
@@ -748,7 +753,7 @@ mod tests {
 
     #[test]
     fn add_communication() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let ch = cs.new_channel(vec![Type::Boolean], Some(1));
 
         let pg1 = cs.new_program_graph();

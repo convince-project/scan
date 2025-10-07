@@ -1,5 +1,4 @@
 use crate::spinv4_y::*;
-use rand::rngs::SmallRng;
 use scan_core::channel_system::CsError;
 use scan_core::channel_system::{Channel, ChannelSystemBuilder, Location, PgId, Var};
 use scan_core::{Expression, Type, Val};
@@ -49,7 +48,7 @@ impl From<CsError> for BuilderError {
 /// It holds all local definitions and a mutable reference to the main builder.
 struct PgCtx<'a> {
     /// Mutable reference to the global `ChannelSystemBuilder`.
-    cs: &'a mut ChannelSystemBuilder<SmallRng>,
+    cs: &'a mut ChannelSystemBuilder,
     /// Identifier of the program‑graph currently under construction.
     pg: PgId,
     /// Symbol table for local variables: maps a Promela identifier to a SCAN `Var` handle.                              
@@ -154,9 +153,7 @@ impl Builder {
     /// Main entry point of the builder.
     ///
     /// Consumes the parsed Promela AST and returns a fully built `ChannelSystem`.
-    pub fn create_channel_system(
-        ast: Vec<Module>,
-    ) -> Result<ChannelSystemBuilder<SmallRng>, BuilderError> {
+    pub fn create_channel_system(ast: Vec<Module>) -> Result<ChannelSystemBuilder, BuilderError> {
         let mut cs_builder = ChannelSystemBuilder::new();
         let mut gctx = GlobalCtx::default();
         Self::visit_ast(ast, &mut cs_builder, &mut gctx)?;
@@ -166,7 +163,7 @@ impl Builder {
     /// Top-level visitor that dispatches to the appropriate handler for each `Module` type.
     fn visit_ast(
         ast: Vec<Module>,
-        cs_builder: &mut ChannelSystemBuilder<SmallRng>,
+        cs_builder: &mut ChannelSystemBuilder,
         gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         for module in ast {
@@ -188,7 +185,7 @@ impl Builder {
     /// Policy: only `chan` declarations are allowed at top level; any global var is rejected.
     fn visit_decl_list(
         dl: &DeclList,
-        cs: &mut ChannelSystemBuilder<SmallRng>,
+        cs: &mut ChannelSystemBuilder,
         gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         // ---- pre-scan: ensure ALL decls are channels ----
@@ -241,7 +238,7 @@ impl Builder {
     /// by visiting each `Step` in the process body.
     fn visit_proctype(
         proctype: &Proctype,
-        cs_builder: &mut ChannelSystemBuilder<SmallRng>,
+        cs_builder: &mut ChannelSystemBuilder,
         gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         let pg = cs_builder.new_program_graph();
@@ -932,7 +929,7 @@ impl Builder {
 
     fn visit_init(
         init: &Init,
-        cs_builder: &mut ChannelSystemBuilder<SmallRng>,
+        cs_builder: &mut ChannelSystemBuilder,
         _gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         let pg = cs_builder.new_program_graph();
@@ -958,7 +955,7 @@ impl Builder {
 
     fn visit_never(
         _never: &Never,
-        _cs: &mut ChannelSystemBuilder<SmallRng>,
+        _cs: &mut ChannelSystemBuilder,
         _gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         Ok(())
@@ -966,7 +963,7 @@ impl Builder {
 
     fn visit_trace(
         _trace: &Trace,
-        _cs: &mut ChannelSystemBuilder<SmallRng>,
+        _cs: &mut ChannelSystemBuilder,
         _gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         Ok(())

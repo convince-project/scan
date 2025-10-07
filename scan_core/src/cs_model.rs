@@ -2,9 +2,7 @@ use crate::TransitionSystemGenerator;
 use crate::channel_system::{
     Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
-use crate::grammar::FnExpression;
 use crate::{DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
-use rand::{Rng, SeedableRng};
 
 /// An atomic variable for [`crate::Pmtl`] formulae.
 #[derive(Debug, Clone)]
@@ -17,15 +15,15 @@ pub enum Atom {
 
 /// A definition type that instances new [`CsModelRun`].
 #[derive(Debug, Clone)]
-pub struct CsModel<R: Rng> {
-    cs: ChannelSystem<R>,
+pub struct CsModel {
+    cs: ChannelSystem,
     ports: Vec<Vec<Option<Val>>>,
-    predicates: Vec<FnExpression<Atom, DummyRng>>,
+    predicates: Vec<Expression<Atom>>,
 }
 
-impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
+impl CsModel {
     /// Creates a new [`CsModel`] from a [`ChannelSystemBuilder`].
-    pub fn new(cs: ChannelSystemBuilder<R>) -> Self {
+    pub fn new(cs: ChannelSystemBuilder) -> Self {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         let cs = cs.build();
         Self {
@@ -49,7 +47,6 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
     /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
     pub fn add_predicate(&mut self, predicate: Expression<Atom>) -> usize {
-        let predicate = FnExpression::<Atom, _>::from(predicate);
         let _ = predicate.eval(
             &|port| match port {
                 Atom::State(channel, idx) => self.ports[u16::from(channel) as usize][idx]
@@ -63,9 +60,9 @@ impl<R: Clone + Rng + SeedableRng + 'static> CsModel<R> {
     }
 }
 
-impl<R: Rng + SeedableRng> TransitionSystemGenerator for CsModel<R> {
+impl TransitionSystemGenerator for CsModel {
     type Ts<'a>
-        = CsModelRun<'a, R>
+        = CsModelRun<'a>
     where
         Self: 'a;
 
@@ -84,15 +81,15 @@ impl<R: Rng + SeedableRng> TransitionSystemGenerator for CsModel<R> {
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
 #[derive(Debug, Clone)]
-pub struct CsModelRun<'def, R: Rng + SeedableRng> {
-    cs: ChannelSystemRun<'def, R>,
+pub struct CsModelRun<'def> {
+    cs: ChannelSystemRun<'def>,
     ports: Vec<Vec<Option<Val>>>,
     // TODO: predicates should not use rng
-    predicates: &'def [FnExpression<Atom, DummyRng>],
+    predicates: &'def [Expression<Atom>],
     last_event: Option<Event>,
 }
 
-impl<'def, R: Rng + SeedableRng> TransitionSystem for CsModelRun<'def, R> {
+impl<'def> TransitionSystem for CsModelRun<'def> {
     type Event = Event;
 
     fn transition(&mut self, duration: Time) -> Option<Event> {

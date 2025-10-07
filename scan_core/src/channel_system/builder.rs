@@ -6,7 +6,6 @@ use crate::Expression;
 use crate::grammar::Type;
 use crate::program_graph::ProgramGraph;
 use log::info;
-use rand::Rng;
 use std::collections::HashMap;
 
 /// An expression using CS's [`Var`] as variables.
@@ -99,19 +98,19 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
 }
 
 /// The object used to define and build a CS.
-pub struct ChannelSystemBuilder<R: Rng> {
-    program_graphs: Vec<ProgramGraphBuilder<R>>,
+pub struct ChannelSystemBuilder {
+    program_graphs: Vec<ProgramGraphBuilder>,
     channels: Vec<(Vec<Type>, Option<usize>)>,
     communications: HashMap<Action, (Channel, Message)>,
 }
 
-impl<R: Clone + Rng + 'static> Default for ChannelSystemBuilder<R> {
+impl Default for ChannelSystemBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
+impl ChannelSystemBuilder {
     /// Create a new [`ProgramGraphBuilder`] with the given RNG (see also `ChannelSystemBuilder::new`).
     /// At creation, this will be completely empty.
     pub fn new() -> Self {
@@ -617,7 +616,9 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
                 .program_graphs
                 .get_mut(pg_id.0 as usize)
                 .ok_or(CsError::MissingPg(pg_id))?
-                .new_action();
+                // create a vacuous send action so the PG knows it's a communication
+                .new_send(Vec::new())
+                .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, (channel, Message::ProbeEmptyQueue));
@@ -648,7 +649,9 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
                 .program_graphs
                 .get_mut(pg_id.0 as usize)
                 .ok_or(CsError::MissingPg(pg_id))?
-                .new_action();
+                // create a vacuous send action so the PG knows it's a communication
+                .new_send(Vec::new())
+                .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, (channel, Message::ProbeFullQueue));
@@ -657,13 +660,13 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
     }
 
     /// Produces a [`ChannelSystem`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
-    pub fn build(mut self) -> ChannelSystem<R> {
+    pub fn build(mut self) -> ChannelSystem {
         info!(
             "create Channel System with:\n{} Program Graphs\n{} channels",
             self.program_graphs.len(),
             self.channels.len(),
         );
-        let mut program_graphs: Vec<ProgramGraph<R>> = self
+        let mut program_graphs: Vec<ProgramGraph> = self
             .program_graphs
             .into_iter()
             .map(|builder| builder.build())

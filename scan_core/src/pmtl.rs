@@ -322,7 +322,7 @@ impl OracleGenerator for PmtlOracle {
             guarantees: &self.guarantees,
             subformulae: &self.subformulae,
             valuations: vec![NumSet::empty(); self.subformulae.len()],
-            outputs: Vec::new(),
+            outputs: vec![true; self.subformulae.len()],
         }
     }
 }

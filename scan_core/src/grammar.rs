@@ -5,7 +5,6 @@
 //! The language features base types and product types,
 //! Boolean logic and basic arithmetic expressions.
 
-use dyn_clone::DynClone;
 use rand::Rng;
 use std::hash::Hash;
 use thiserror::Error;
@@ -291,6 +290,200 @@ where
                     Ok(Type::Integer)
                 } else {
                     Err(TypeError::TypeMismatch)
+                }
+            }
+        }
+    }
+
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Val {
+        match self {
+            Expression::Const(val) => *val,
+            Expression::Var(var, _t) => vars(var.clone()),
+            Expression::And(exprs) => Val::Boolean(exprs.iter().all(|expr| {
+                if let Val::Boolean(b) = expr.eval(vars, rng) {
+                    b
+                } else {
+                    panic!("type mismatch");
+                }
+            })),
+            Expression::Or(exprs) => Val::Boolean(exprs.iter().any(|expr| {
+                if let Val::Boolean(b) = expr.eval(vars, rng) {
+                    b
+                } else {
+                    panic!("type mismatch");
+                }
+            })),
+            Expression::Implies(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                if let (Val::Boolean(lhs), Val::Boolean(rhs)) =
+                    (lhs.eval(vars, rng), rhs.eval(vars, rng))
+                {
+                    Val::Boolean(rhs || !lhs)
+                } else {
+                    panic!("type mismatch");
+                }
+            }
+            Expression::Not(expr) => {
+                if let Val::Boolean(b) = expr.eval(vars, rng) {
+                    Val::Boolean(!b)
+                } else {
+                    panic!("type mismatch");
+                }
+            }
+            Expression::Opposite(expr) => match expr.eval(vars, rng) {
+                Val::Integer(i) => Val::Integer(-i),
+                Val::Float(f) => Val::Float(-f),
+                _ => panic!("type mismatch"),
+            },
+            Expression::Sum(exprs) => exprs.iter().fold(Val::Integer(0), |val, expr| match val {
+                Val::Integer(acc) => match expr.eval(vars, rng) {
+                    Val::Integer(i) => Val::Integer(acc + i),
+                    Val::Float(f) => Val::Float(f64::from(acc) + f),
+                    _ => panic!("type mismatch"),
+                },
+                Val::Float(acc) => match expr.eval(vars, rng) {
+                    Val::Integer(i) => Val::Float(acc + f64::from(i)),
+                    Val::Float(f) => Val::Float(acc + f),
+                    _ => panic!("type mismatch"),
+                },
+                _ => panic!("type mismatch"),
+            }),
+            Expression::Mult(exprs) => exprs.iter().fold(Val::Integer(1), |val, expr| match val {
+                Val::Integer(acc) => match expr.eval(vars, rng) {
+                    Val::Integer(i) => Val::Integer(acc * i),
+                    Val::Float(f) => Val::Float(f64::from(acc) * f),
+                    _ => panic!("type mismatch"),
+                },
+                Val::Float(acc) => match expr.eval(vars, rng) {
+                    Val::Integer(i) => Val::Float(acc * f64::from(i)),
+                    Val::Float(f) => Val::Float(acc * f),
+                    _ => panic!("type mismatch"),
+                },
+                _ => panic!("type mismatch"),
+            }),
+            Expression::Equal(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                match (lhs.eval(vars, rng), rhs.eval(vars, rng)) {
+                    (Val::Integer(lhs), Val::Integer(rhs)) => Val::Boolean(lhs == rhs),
+                    (Val::Integer(lhs), Val::Float(rhs)) => Val::Boolean(lhs as Float == rhs),
+                    (Val::Float(lhs), Val::Integer(rhs)) => Val::Boolean(lhs == rhs as Float),
+                    (Val::Float(lhs), Val::Float(rhs)) => Val::Boolean(lhs == rhs),
+                    (Val::Boolean(lhs), Val::Boolean(rhs)) => Val::Boolean(lhs == rhs),
+                    _ => panic!("type mismatch"),
+                }
+            }
+            Expression::Greater(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                match lhs.eval(vars, rng) {
+                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs > rhs),
+                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) > rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    Val::Float(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs > f64::from(rhs)),
+                        Val::Float(rhs) => Val::Boolean(lhs > rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    _ => panic!("type mismatch"),
+                }
+            }
+            Expression::GreaterEq(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                match lhs.eval(vars, rng) {
+                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs >= rhs),
+                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) >= rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    Val::Float(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs >= f64::from(rhs)),
+                        Val::Float(rhs) => Val::Boolean(lhs >= rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    _ => panic!("type mismatch"),
+                }
+            }
+            Expression::Less(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                match lhs.eval(vars, rng) {
+                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs < rhs),
+                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) < rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    Val::Float(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs < f64::from(rhs)),
+                        Val::Float(rhs) => Val::Boolean(lhs < rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    _ => panic!("type mismatch"),
+                }
+            }
+            Expression::LessEq(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                match lhs.eval(vars, rng) {
+                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs <= rhs),
+                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) <= rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    Val::Float(lhs) => match rhs.eval(vars, rng) {
+                        Val::Integer(rhs) => Val::Boolean(lhs <= f64::from(rhs)),
+                        Val::Float(rhs) => Val::Boolean(lhs <= rhs),
+                        _ => panic!("type mismatch"),
+                    },
+                    _ => panic!("type mismatch"),
+                }
+            }
+            Expression::Mod(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                if let (Val::Integer(lhs), Val::Integer(rhs)) =
+                    (lhs.eval(vars, rng), rhs.eval(vars, rng))
+                {
+                    Val::Integer(lhs % rhs)
+                } else {
+                    panic!("type mismatch");
+                }
+            }
+            Expression::Div(exprs) => {
+                let (lhs, rhs) = exprs.as_ref();
+                let num = lhs.eval(vars, rng);
+                let den = rhs.eval(vars, rng);
+                match (num, den) {
+                    (Val::Integer(num), Val::Integer(den)) if den != 0 => {
+                        Val::Float(num as f64 / den as f64)
+                    }
+                    (Val::Integer(num), Val::Float(den)) if den != 0. => {
+                        Val::Float(num as f64 / den)
+                    }
+                    (Val::Float(num), Val::Integer(den)) if den != 0 => {
+                        Val::Float(num / den as f64)
+                    }
+                    (Val::Float(num), Val::Float(den)) if den != 0. => Val::Float(num / den),
+                    _ => panic!("type mismatch"),
+                }
+            }
+            Expression::RandBool(p) => Val::Boolean(rng.random_bool(*p)),
+            Expression::RandInt(l, u) => Val::Integer(rng.random_range(*l..*u)),
+            Expression::RandFloat(l, u) => Val::Float(rng.random_range(*l..*u)),
+            Expression::Ite(exprs) => {
+                let (r#if, then, r#else) = exprs.as_ref();
+                if let Val::Boolean(r#if) = r#if.eval(vars, rng) {
+                    if r#if {
+                        then.eval(vars, rng)
+                    } else {
+                        r#else.eval(vars, rng)
+                    }
+                } else {
+                    panic!("type mismatch");
+                }
+            }
+            Expression::Floor(expression) => {
+                if let Val::Float(f) = expression.eval(vars, rng) {
+                    Val::Integer(f.floor() as Integer)
+                } else {
+                    panic!("type mismatch");
                 }
             }
         }
@@ -614,296 +807,5 @@ where
 {
     fn from(value: Float) -> Self {
         Expression::Const(Val::Float(value))
-    }
-}
-
-trait DynFnExpr<V, R>: Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync + DynClone {}
-
-impl<V, R, T: Fn(&dyn Fn(V) -> Val, &mut R) -> Val + Send + Sync + Clone> DynFnExpr<V, R> for T {}
-
-dyn_clone::clone_trait_object!(<V, R> DynFnExpr<V, R>);
-
-#[derive(Clone)]
-pub(crate) struct FnExpression<V, R>(Box<dyn DynFnExpr<V, R>>);
-
-impl<C, R: Rng> std::fmt::Debug for FnExpression<C, R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Expression")
-    }
-}
-
-impl<V, R> FnExpression<V, R> {
-    #[inline(always)]
-    pub fn eval(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Val {
-        self.0(vars, rng)
-    }
-}
-
-impl<V: Clone + Send + Sync + 'static, R: Clone + Rng + 'static> From<Expression<V>>
-    for FnExpression<V, R>
-{
-    fn from(value: Expression<V>) -> Self {
-        FnExpression(match value {
-            Expression::Const(val) => Box::new(move |_, _| val),
-
-            Expression::Var(var, _t) => Box::new(move |vars, _| {
-                vars(var.clone())
-                // let val = vars(var.clone());
-                // if t == val.r#type() {
-                //     val
-                // } else {
-                //     panic!("value and variable type mismatch");
-                // }
-            }),
-            Expression::And(exprs) => {
-                let exprs: Vec<FnExpression<_, _>> = exprs.into_iter().map(Self::from).collect();
-                Box::new(move |vars, rng| {
-                    Val::Boolean(exprs.iter().all(|expr| {
-                        if let Val::Boolean(b) = expr.eval(vars, rng) {
-                            b
-                        } else {
-                            panic!("type mismatch");
-                        }
-                    }))
-                })
-            }
-            Expression::Or(exprs) => {
-                let exprs: Vec<FnExpression<_, _>> = exprs.into_iter().map(Self::from).collect();
-                Box::new(move |vars, rng| {
-                    Val::Boolean(exprs.iter().any(|expr| {
-                        if let Val::Boolean(b) = expr.eval(vars, rng) {
-                            b
-                        } else {
-                            panic!("type mismatch");
-                        }
-                    }))
-                })
-            }
-            Expression::Implies(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars, rng| {
-                    if let (Val::Boolean(lhs), Val::Boolean(rhs)) =
-                        (lhs.eval(vars, rng), rhs.eval(vars, rng))
-                    {
-                        Val::Boolean(rhs || !lhs)
-                    } else {
-                        panic!("type mismatch");
-                    }
-                })
-            }
-            Expression::Not(expr) => {
-                let expr = FnExpression::from(*expr);
-                Box::new(move |vars, rng| {
-                    if let Val::Boolean(b) = expr.eval(vars, rng) {
-                        Val::Boolean(!b)
-                    } else {
-                        panic!("type mismatch");
-                    }
-                })
-            }
-            Expression::Opposite(expr) => {
-                let expr = FnExpression::from(*expr);
-                Box::new(move |vars, rng| match expr.eval(vars, rng) {
-                    Val::Integer(i) => Val::Integer(-i),
-                    Val::Float(f) => Val::Float(-f),
-                    _ => panic!("type mismatch"),
-                })
-            }
-            Expression::Sum(exprs) => {
-                let exprs: Vec<FnExpression<_, _>> = exprs.into_iter().map(Self::from).collect();
-                Box::new(move |vars, rng| {
-                    exprs.iter().fold(Val::Integer(0), |val, expr| match val {
-                        Val::Integer(acc) => match expr.eval(vars, rng) {
-                            Val::Integer(i) => Val::Integer(acc + i),
-                            Val::Float(f) => Val::Float(f64::from(acc) + f),
-                            _ => panic!("type mismatch"),
-                        },
-                        Val::Float(acc) => match expr.eval(vars, rng) {
-                            Val::Integer(i) => Val::Float(acc + f64::from(i)),
-                            Val::Float(f) => Val::Float(acc + f),
-                            _ => panic!("type mismatch"),
-                        },
-                        _ => panic!("type mismatch"),
-                    })
-                })
-            }
-            Expression::Mult(exprs) => {
-                let exprs: Vec<FnExpression<_, _>> = exprs.into_iter().map(Self::from).collect();
-                Box::new(move |vars, rng| {
-                    exprs.iter().fold(Val::Integer(1), |val, expr| match val {
-                        Val::Integer(acc) => match expr.eval(vars, rng) {
-                            Val::Integer(i) => Val::Integer(acc * i),
-                            Val::Float(f) => Val::Float(f64::from(acc) * f),
-                            _ => panic!("type mismatch"),
-                        },
-                        Val::Float(acc) => match expr.eval(vars, rng) {
-                            Val::Integer(i) => Val::Float(acc * f64::from(i)),
-                            Val::Float(f) => Val::Float(acc * f),
-                            _ => panic!("type mismatch"),
-                        },
-                        _ => panic!("type mismatch"),
-                    })
-                })
-            }
-            Expression::Equal(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(
-                    move |vars, rng| match (lhs.eval(vars, rng), rhs.eval(vars, rng)) {
-                        (Val::Integer(lhs), Val::Integer(rhs)) => Val::Boolean(lhs == rhs),
-                        (Val::Integer(lhs), Val::Float(rhs)) => Val::Boolean(lhs as Float == rhs),
-                        (Val::Float(lhs), Val::Integer(rhs)) => Val::Boolean(lhs == rhs as Float),
-                        (Val::Float(lhs), Val::Float(rhs)) => Val::Boolean(lhs == rhs),
-                        (Val::Boolean(lhs), Val::Boolean(rhs)) => Val::Boolean(lhs == rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                )
-            }
-            Expression::Greater(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars, rng| match lhs.eval(vars, rng) {
-                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs > rhs),
-                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) > rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    Val::Float(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs > f64::from(rhs)),
-                        Val::Float(rhs) => Val::Boolean(lhs > rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    _ => panic!("type mismatch"),
-                })
-            }
-            Expression::GreaterEq(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars, rng| match lhs.eval(vars, rng) {
-                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs >= rhs),
-                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) >= rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    Val::Float(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs >= f64::from(rhs)),
-                        Val::Float(rhs) => Val::Boolean(lhs >= rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    _ => panic!("type mismatch"),
-                })
-            }
-            Expression::Less(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars, rng| match lhs.eval(vars, rng) {
-                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs < rhs),
-                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) < rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    Val::Float(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs < f64::from(rhs)),
-                        Val::Float(rhs) => Val::Boolean(lhs < rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    _ => panic!("type mismatch"),
-                })
-            }
-            Expression::LessEq(exprs) => {
-                let (source_lhs, source_rhs) = *exprs;
-                let lhs = FnExpression::from(source_lhs);
-                let rhs = FnExpression::from(source_rhs);
-                Box::new(move |vars, rng| match lhs.eval(vars, rng) {
-                    Val::Integer(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs <= rhs),
-                        Val::Float(rhs) => Val::Boolean(f64::from(lhs) <= rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    Val::Float(lhs) => match rhs.eval(vars, rng) {
-                        Val::Integer(rhs) => Val::Boolean(lhs <= f64::from(rhs)),
-                        Val::Float(rhs) => Val::Boolean(lhs <= rhs),
-                        _ => panic!("type mismatch"),
-                    },
-                    _ => panic!("type mismatch"),
-                })
-            }
-            Expression::Mod(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars, rng| {
-                    if let (Val::Integer(lhs), Val::Integer(rhs)) =
-                        (lhs.eval(vars, rng), rhs.eval(vars, rng))
-                    {
-                        Val::Integer(lhs % rhs)
-                    } else {
-                        panic!("type mismatch");
-                    }
-                })
-            }
-            Expression::Div(exprs) => {
-                let (lhs, rhs) = *exprs;
-                let lhs = FnExpression::from(lhs);
-                let rhs = FnExpression::from(rhs);
-                Box::new(move |vars, rng| {
-                    let num = lhs.eval(vars, rng);
-                    let den = rhs.eval(vars, rng);
-                    match (num, den) {
-                        (Val::Integer(num), Val::Integer(den)) if den != 0 => {
-                            Val::Float(num as f64 / den as f64)
-                        }
-                        (Val::Integer(num), Val::Float(den)) if den != 0. => {
-                            Val::Float(num as f64 / den)
-                        }
-                        (Val::Float(num), Val::Integer(den)) if den != 0 => {
-                            Val::Float(num / den as f64)
-                        }
-                        (Val::Float(num), Val::Float(den)) if den != 0. => Val::Float(num / den),
-                        _ => panic!("type mismatch"),
-                    }
-                })
-            }
-            Expression::RandBool(p) => Box::new(move |_, rng| Val::Boolean(rng.random_bool(p))),
-            Expression::RandInt(l, u) => {
-                Box::new(move |_, rng| Val::Integer(rng.random_range(l..u)))
-            }
-            Expression::RandFloat(l, u) => {
-                Box::new(move |_, rng| Val::Float(rng.random_range(l..u)))
-            }
-            Expression::Ite(exprs) => {
-                let r#if = FnExpression::from(exprs.0);
-                let then = FnExpression::from(exprs.1);
-                let r#else = FnExpression::from(exprs.2);
-                Box::new(move |vars, rng| {
-                    let r#if = r#if.eval(vars, rng);
-                    if let Val::Boolean(r#if) = r#if {
-                        if r#if {
-                            then.eval(vars, rng)
-                        } else {
-                            r#else.eval(vars, rng)
-                        }
-                    } else {
-                        panic!("type mismatch");
-                    }
-                })
-            }
-            Expression::Floor(expression) => {
-                let f = FnExpression::from(*expression);
-                Box::new(move |vars, rng| {
-                    if let Val::Float(f) = f.eval(vars, rng) {
-                        Val::Integer(f.floor() as Integer)
-                    } else {
-                        panic!("type mismatch");
-                    }
-                })
-            }
-        })
     }
 }

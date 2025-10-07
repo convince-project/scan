@@ -9,11 +9,10 @@ use std::path::Path;
 pub use builder::ScxmlModel;
 use log::info;
 pub use print_trace::TracePrinter;
-use rand::rngs::SmallRng;
 pub use scan_core;
 use scan_core::{CsModel, PmtlOracle, Scan};
 
-pub type ScxmlScan = Scan<CsModel<SmallRng>, PmtlOracle>;
+pub type ScxmlScan = Scan<CsModel, PmtlOracle>;
 
 pub fn load(
     path: &Path,

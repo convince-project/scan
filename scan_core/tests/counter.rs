@@ -1,4 +1,3 @@
-use rand::rngs::SmallRng;
 use scan_core::{program_graph::*, *};
 
 #[test]
@@ -25,7 +24,7 @@ fn counter_pg() -> Result<(), PgError> {
             .unwrap();
     }
     let pg = PgModel::new(pg, Vec::new(), Vec::new());
-    let mut pg: PgModelRun<SmallRng> = pg.generate();
+    let mut pg: PgModelRun = pg.generate();
     while pg.transition(0).is_some() {}
 
     // while let Some((action, post)) = pg

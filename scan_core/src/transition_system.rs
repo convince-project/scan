@@ -1,5 +1,4 @@
 use crate::{Oracle, RunOutcome, Time, Val};
-use core::marker::Sync;
 use log::trace;
 use std::sync::{
     Arc,
@@ -8,7 +7,7 @@ use std::sync::{
 
 /// Trait that handles streaming of traces,
 /// e.g., to print them to file.
-pub trait Tracer<A>: Clone + Send + Sync {
+pub trait Tracer<A> {
     /// Initialize new streaming.
     ///
     /// This method needs to be called once, before calls to [`Self::trace`].

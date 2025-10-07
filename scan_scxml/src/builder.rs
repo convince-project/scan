@@ -4,7 +4,6 @@ use crate::parser::{Executable, If, OmgType, OmgTypes, Param, Parser, Scxml, Sen
 use anyhow::{Context, anyhow, bail};
 use boa_interner::{Interner, ToInternedString};
 use log::{info, trace, warn};
-use rand::rngs::SmallRng;
 use scan_core::{channel_system::*, *};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -53,7 +52,7 @@ enum EcmaObj<V: Clone> {
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
 #[derive(Default)]
 pub struct ModelBuilder {
-    cs: ChannelSystemBuilder<SmallRng>,
+    cs: ChannelSystemBuilder,
     // Associates a type's id with both its OMG type and SCAN type.
     // NOTE: This is necessary because, at the moment, it is not possible to derive one from the other.
     // QUESTION: is there a better way?
@@ -103,7 +102,7 @@ impl ModelBuilder {
         mut parser: Parser,
         properties: &[String],
         all_properties: bool,
-    ) -> anyhow::Result<(CsModel<SmallRng>, PmtlOracle, ScxmlModel)> {
+    ) -> anyhow::Result<(CsModel, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
         model_builder.prebuild_processes(&mut parser)?;
@@ -1607,7 +1606,7 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(self) -> (CsModel<SmallRng>, PmtlOracle, ScxmlModel) {
+    fn build_model(self) -> (CsModel, PmtlOracle, ScxmlModel) {
         let mut model = CsModel::new(self.cs);
         let mut ports = Vec::new();
         for (port_name, (atom, init)) in self.ports {

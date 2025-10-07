@@ -1,27 +1,24 @@
 use super::{
-    Action, ActionIdx, Clock, EPSILON, Effect, FnExpression, Location, LocationData, LocationIdx,
-    PgError, PgExpression, ProgramGraph, TimeConstraint, Var,
+    Action, ActionIdx, Clock, EPSILON, Effect, Location, LocationData, LocationIdx, PgError,
+    PgExpression, ProgramGraph, TimeConstraint, Var,
 };
 use crate::{
-    DummyRng,
+    DummyRng, Expression,
     grammar::{Type, Val},
 };
 use log::info;
-use rand::Rng;
 use smallvec::SmallVec;
 
-pub(crate) type Guard = FnExpression<Var, DummyRng>;
-
 // type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
-pub(crate) type Transition = (Location, Option<Guard>, Vec<TimeConstraint>);
+pub(crate) type Transition = (Location, Option<Expression<Var>>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
-pub struct ProgramGraphBuilder<R: Rng> {
+pub struct ProgramGraphBuilder {
     // initial_states: Vec<Location>,
     initial_states: SmallVec<[Location; 8]>,
     // Effects are indexed by actions
-    effects: Vec<Effect<R>>,
+    effects: Vec<Effect>,
     // Transitions are indexed by locations
     // Time invariants of each location
     locations: Vec<LocationData>,
@@ -31,13 +28,13 @@ pub struct ProgramGraphBuilder<R: Rng> {
     clocks: u16,
 }
 
-impl<R: Clone + Rng + 'static> Default for ProgramGraphBuilder<R> {
+impl Default for ProgramGraphBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
+impl ProgramGraphBuilder {
     /// Creates a new [`ProgramGraphBuilder`].
     /// At creation, this will only have the initial location with no variables, no actions and no transitions.
     pub fn new() -> Self {
@@ -81,7 +78,7 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
         let _ = init.r#type().map_err(PgError::Type)?;
         init.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
             .map_err(PgError::Type)?;
-        let val = FnExpression::from(init).eval(&|var| self.vars[var.0 as usize], &mut DummyRng);
+        let val = init.eval(&|var| self.vars[var.0 as usize], &mut DummyRng);
         self.vars.push(val);
         Ok(Var(idx as u16))
     }
@@ -226,7 +223,7 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
                 .ok_or(PgError::MissingAction(action))?
             {
                 Effect::Effects(effects, _) => {
-                    effects.push((var, effect.into()));
+                    effects.push((var, effect));
                     Ok(())
                 }
                 Effect::Send(_) => Err(PgError::EffectOnSend),
@@ -248,9 +245,7 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
             .try_for_each(|msg| msg.r#type().map_err(PgError::Type).map(|_| ()))?;
         // Actions are indexed progressively
         let idx = self.effects.len();
-        self.effects.push(Effect::Send(
-            msgs.into_iter().map(|msg| msg.into()).collect(),
-        ));
+        self.effects.push(Effect::Send(msgs.into()));
         Ok(Action(idx as ActionIdx))
     }
 
@@ -420,7 +415,7 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
                     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
-            let transition = (post, guard.map(|g| g.into()), constraints);
+            let transition = (post, guard, constraints);
             match transitions.binary_search_by_key(&action, |(a, _)| *a) {
                 Ok(idx) => transitions[idx].1.push(transition),
                 Err(idx) => transitions.insert(idx, (action, vec![transition])),
@@ -502,7 +497,7 @@ impl<R: Clone + Rng + 'static> ProgramGraphBuilder<R> {
     ///
     /// Since the construction of the builder is already checked ad every step,
     /// this method cannot fail.
-    pub fn build(mut self) -> ProgramGraph<R> {
+    pub fn build(mut self) -> ProgramGraph {
         // Since vectors of effects and transitions will become immutable,
         // they should be shrunk to take as little space as possible
         self.effects.iter_mut().for_each(|effect| {

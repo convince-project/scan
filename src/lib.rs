@@ -200,7 +200,7 @@ impl Cli {
                 if args.all {
                     args.properties = scxml_model.guarantees.clone();
                 }
-                run_verification::<CsModel<_>, PmtlOracle>(model, &args, progress, &scan_def)
+                run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan_def)
                     .print(json);
             }
             Commands::Validate => {
@@ -221,7 +221,7 @@ impl Cli {
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(&scxml_model);
                 eprint!("Trace computation in progress...");
-                args.trace::<CsModel<_>, PmtlOracle, _>(&scan_def, tracer);
+                args.trace::<CsModel, PmtlOracle, _>(&scan_def, tracer);
                 eprintln!(" done");
             }
         }
@@ -246,8 +246,7 @@ impl Cli {
                 if args.all {
                     args.properties = jani_model.guarantees;
                 }
-                run_verification::<PgModel<_>, MtlOracle>(model, &args, progress, &scan)
-                    .print(json);
+                run_verification::<PgModel, MtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
@@ -263,7 +262,7 @@ impl Cli {
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
                 eprint!("Trace computation in progress...");
-                args.trace::<PgModel<_>, MtlOracle, _>(&scan, tracer);
+                args.trace::<PgModel, MtlOracle, _>(&scan, tracer);
                 eprintln!(" done");
             }
         }
@@ -288,8 +287,7 @@ impl Cli {
                 // if args.all {
                 //     args.properties = jani_model.guarantees;
                 // }
-                run_verification::<CsModel<_>, PmtlOracle>(model, &args, progress, &scan)
-                    .print(json);
+                run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
                 eprint!("Processing {model}...");
