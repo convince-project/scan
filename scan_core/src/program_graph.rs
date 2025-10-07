@@ -215,7 +215,7 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// # use rand::rngs::SmallRng;
 /// # use rand::SeedableRng;
 /// // Create and populate a PG builder object
-/// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+/// let mut pg_builder = ProgramGraphBuilder::new();
 /// let initial = pg_builder.new_initial_location();
 /// pg_builder.add_autonomous_transition(initial, initial, None).expect("add transition");
 ///
@@ -317,9 +317,8 @@ impl<'def> ProgramGraphRun<'def> {
     ///
     /// ```
     /// # use scan_core::program_graph::ProgramGraphBuilder;
-    /// # use rand::rngs::SmallRng;
     /// // Create a new PG builder
-    /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+    /// let mut pg_builder = ProgramGraphBuilder::new();
     ///
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();

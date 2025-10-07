@@ -26,10 +26,8 @@
 //! ```
 //! # use scan_core::*;
 //! # use scan_core::channel_system::*;
-//! # use rand::rngs::SmallRng;
-//! # use rand::SeedableRng;
 //! // Create a new CS builder
-//! let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
+//! let mut cs_builder = ChannelSystemBuilder::new();
 //!
 //! // Add a new PG to the CS
 //! let pg_1 = cs_builder.new_program_graph();
@@ -40,11 +38,11 @@
 //!     .expect("every PG has an initial location");
 //!
 //! // Create new channel
-//! let chn = cs_builder.new_channel(Type::Integer, Some(1));
+//! let chn = cs_builder.new_channel(vec![Type::Integer], Some(1));
 //!
 //! // Create new send communication action
 //! let send = cs_builder
-//!     .new_send(pg_1, chn, CsExpression::from(1))
+//!     .new_send(pg_1, chn, vec![CsExpression::from(1)])
 //!     .expect("always possible to add new actions");
 //!
 //! // Add transition sending a message to the channel
@@ -66,7 +64,7 @@
 //!
 //! // Create new receive communication action
 //! let receive = cs_builder
-//!     .new_receive(pg_2, chn, var)
+//!     .new_receive(pg_2, chn, vec![var])
 //!     .expect("always possible to add new actions");
 //!
 //! // Add transition sending a message to the channel
@@ -293,10 +291,8 @@ pub enum EventType {
 ///
 /// ```
 /// # use scan_core::channel_system::ChannelSystemBuilder;
-/// # use rand::rngs::SmallRng;
-/// # use rand::SeedableRng;
 /// // Create and populate a CS builder object
-/// let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
+/// let mut cs_builder = ChannelSystemBuilder::new();
 /// let pg_id = cs_builder.new_program_graph();
 /// let initial = cs_builder.new_initial_location(pg_id).expect("create new location");
 /// cs_builder.add_autonomous_transition(pg_id, initial, initial, None).expect("add transition");

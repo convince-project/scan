@@ -202,20 +202,19 @@ impl ChannelSystemBuilder {
     ///
     /// ```
     /// # use scan_core::*;
-    /// # use rand::rngs::SmallRng;
     /// # use scan_core::channel_system::*;
     /// // Create a new CS builder
-    /// let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
+    /// let mut cs_builder = ChannelSystemBuilder::new();
     ///
     /// // Add a new PG to the CS
     /// let pg = cs_builder.new_program_graph();
     ///
     /// // Create new channel
-    /// let chn = cs_builder.new_channel(Type::Integer, Some(1));
+    /// let chn = cs_builder.new_channel(vec![Type::Integer], Some(1));
     ///
     /// // Create new send communication action
     /// let send = cs_builder
-    ///     .new_send(pg, chn, CsExpression::from(1))
+    ///     .new_send(pg, chn, vec![CsExpression::from(1)])
     ///     .expect("always possible to add new actions");
     ///
     /// // Add new variable to pg
