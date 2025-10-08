@@ -65,7 +65,7 @@ pub struct ModelBuilder {
     // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
     // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
     // QUESTION: Is there a better way?
-    structs: HashMap<(String, String), usize>,
+    // structs: HashMap<(String, String), usize>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
     fsm_names: HashMap<PgId, String>,
@@ -1462,15 +1462,15 @@ impl ModelBuilder {
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
                                 match prop_target {
-                                    EcmaObj::PrimitiveData(expr, type_name) => {
+                                    EcmaObj::PrimitiveData(_expr, type_name) => {
                                         match &self
                                             .types
                                             .get(&type_name)
                                             .ok_or(anyhow!("unknown type {}", type_name))?
                                             .0
                                         {
-                                            OmgType::Structure(fields) => {
-                                                todo!();
+                                            OmgType::Structure(_fields) => {
+                                                bail!("structures are not currently supported")
                                                 // let index = *self
                                                 //     .structs
                                                 //     .get(&(type_name, ident.to_owned()))

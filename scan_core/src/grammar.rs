@@ -295,6 +295,10 @@ where
         }
     }
 
+    /// Evaluates the expression with the given variable assignments and provided RNG.
+    ///
+    /// Will assume the expression (with the variable assignment) is well-typed,
+    /// and may panic if producing an unexpected type.
     pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Val {
         match self {
             Expression::Const(val) => *val,

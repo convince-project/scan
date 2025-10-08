@@ -258,7 +258,7 @@ impl ProgramGraph {
     }
 
     #[inline(always)]
-    pub fn is_communication(&self, action: Action) -> Result<bool, PgError> {
+    pub(crate) fn is_communication(&self, action: Action) -> Result<bool, PgError> {
         if action == EPSILON {
             Ok(false)
         } else {
