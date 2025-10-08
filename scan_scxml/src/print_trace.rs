@@ -80,7 +80,7 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
         let file = File::create_new(&self.path).expect("create file");
         let enc = flate2::GzBuilder::new()
             .filename(filename)
-            .write(file, flate2::Compression::fast());
+            .write(file, flate2::Compression::best());
         let mut writer = csv::WriterBuilder::new().from_writer(enc);
         writer
             .write_record(
