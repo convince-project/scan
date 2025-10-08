@@ -20,9 +20,10 @@ where `MODEL` can be:
 
 - For SCXML models, the path to either the main `xml` file, or to the directory containing all the model's files.
 - For JANI models, the path to the JANI model's file.
+- For Promela models, the path to the Promela model's file.
 
 SCAN tries to auto-detect the model format,
-but the `--format [scxml|jani]` flag can be used to specify it explicitly.
+but the `--format [scxml|jani|promela]` flag can be used to specify it explicitly.
 
 Available commands are:
 
@@ -38,7 +39,7 @@ which can be displayed with `scan help [COMMAND]`.`
 SCAN accepts the following global flags:
 
 - `--format` sets which model specification format is being used.
-Possible values: `[scxml|jani]`.
+Possible values: `[scxml|jani|promela]`.
 - `--verbose` increases the log verbosity (can be invoked multiple times as `-vv` or `-vvv` etc.).
   Normally, this is unnecessary save for debugging purposes.
 - `--quiet` disables logging completely.
@@ -96,14 +97,20 @@ so that this number cannot be known a-priori but has to be continually recalcula
 
 The `--duration` flag's value sets the maximum duration (in model time) that the execution can take before being stopped.
 As this may vary depending on the input model and SCAN has no means to determine it,
-SCAN sets a reasonably large default value,
-but for best results the developer should set a more appropriate value.
+SCAN sets a reasonably large default value (10,000 time steps),
+but for best results the developer should set a value fitting the model.
+
+__WARNING:__ if verification seems to be hanging without making any progress,
+it might be due to a wrong (too small) duration value.
+Indeed, if the model is still running and the properties still undetermined when it reaches the time limit,
+the execution is discarded and does not count towards the result.
+If this happens systematically, all executions will be discarded.
+In such case, increase the duration to a value appropriate to your model.
 
 By default, SCAN only prints a short message informing the user that a verification task is underway,
 then it hangs silently until the task is finished (if ever).
 This is a fine behavior for use by other tools or in scripts,
 but less than ideal for human users.
-
 For long verification tasks, the user can enable a more informative interface updated in real time and featuring progress bars with the flag `--progress [plain|fancy]`,
 where `plain` is just ascii (for universal compatibility) and `fancy` uses colors and Unicode characters.
 The interface will show the progress towards task completion and make a best-effort attempt to estimate how long it is still missing.
@@ -126,7 +133,7 @@ This command executes the model and saves the execution traces to disk as gz-com
 The syntax for `trace` is
 
 ```bash
-$ scan [GLOBAL_OPTIONS] <MODEL> trace [OPTIONS] <TRACES>
+$ scan [GLOBAL_OPTIONS] <MODEL> trace [OPTIONS] [PROPERTIES]
 ```
 
 where `TRACES` is the number of traces that are requested.
@@ -136,7 +143,12 @@ with the same meaning as for the `verify` command.
 
 The traces produced during verification are saved in a `./traces_NN/` directory,
 with `NN` progressive indexing,
-and further classified into `success/`, `failure/` and `undetermined/` sub-directories based on the outcome of the execution.
+and further classified into `success/`, `failure/` and `undetermined/` sub-directories based on the listed properties and the outcome of the execution.
+It is possible to pass no properties at all,
+in which case completed executions will always be considered successful.
+Regardless of the specified properties, SCAN will try to execute the model all the way to completion
+(as opposed to verification, in which executions are interrupted as soon as the outcome of the properties is determined).
 Traces are saved into `gz`-compressed `csv` format.
-Since traces can take up a large amount of disk space,
+
+__WARNING:__ Since traces can take up a large amount of disk space,
 care is recommended when running this command.
