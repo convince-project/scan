@@ -5,8 +5,6 @@ use numset::NumSet;
 use std::collections::HashSet;
 use std::hash::Hash;
 
-type DenseTime = (Time, Time);
-
 /// A Past-time Metric Temporal Logic (PMTL) formula.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pmtl<V>
@@ -302,13 +300,12 @@ where
 /// Runnable instance of a [`PmtlOracle`] that borrows data from its generator.
 #[derive(Debug, Clone)]
 pub struct PmtlOracleRun<'a> {
-    time: DenseTime,
+    time: Time,
     assumes: &'a [usize],
     guarantees: &'a [usize],
     subformulae: &'a [UPmtl],
     valuations: Vec<NumSet>,
-    outputs: Vec<NumSet>,
-    buf_valuations: Vec<NumSet>,
+    outputs: Vec<bool>,
 }
 
 impl OracleGenerator for PmtlOracle {
@@ -320,13 +317,12 @@ impl OracleGenerator for PmtlOracle {
     fn generate<'a>(&'a self) -> Self::O<'a> {
         PmtlOracleRun {
             // WARN: all Hell brakes loose with time: (0, 0)
-            time: (0, 1),
+            time: 0,
             assumes: &self.assumes,
             guarantees: &self.guarantees,
             subformulae: &self.subformulae,
-            valuations: vec![NumSet::new(); self.subformulae.len()],
-            outputs: vec![NumSet::new(); self.subformulae.len()],
-            buf_valuations: vec![NumSet::new(); self.subformulae.len()],
+            valuations: vec![NumSet::empty(); self.subformulae.len()],
+            outputs: vec![true; self.subformulae.len()],
         }
     }
 }
@@ -334,7 +330,7 @@ impl OracleGenerator for PmtlOracle {
 impl<'a> PmtlOracleRun<'a> {
     #[inline(always)]
     fn formula_output(&self, formula: usize) -> bool {
-        self.outputs[formula].contains(self.time)
+        self.outputs[formula]
     }
 
     // Represents the knowledge that the given formula is always true, or always false, from the current moment.
@@ -375,7 +371,7 @@ impl<'a> PmtlOracleRun<'a> {
                     self.valuations
                         .get(formula)
                         .expect("valuation")
-                        .contains_since(self.time)
+                        .contains_interval(self.time, Time::MAX)
                         .then_some(false)
                 }),
             // Valuation of Previously represents the set of time moments in which we know the formula to be false.
@@ -388,7 +384,7 @@ impl<'a> PmtlOracleRun<'a> {
                     self.valuations
                         .get(formula)
                         .expect("valuation")
-                        .contains_since(self.time)
+                        .contains_interval(self.time, Time::MAX)
                         .then_some(true)
                 }),
             // Valuation of Since represents the set of time moments in which we know the formula to be true if its lhs argument is true from then on.
@@ -402,7 +398,7 @@ impl<'a> PmtlOracleRun<'a> {
                     .valuations
                     .get(formula)
                     .expect("valuation")
-                    .contains_since(self.time)
+                    .contains_interval(self.time, Time::MAX)
                 {
                     self.formula_valuation(*lhs)
                         .and_then(|v| (*lb == 0 || v).then_some(v))
@@ -433,213 +429,78 @@ impl<'a> Oracle for PmtlOracleRun<'a> {
 
     // From Ulus 2024: Online monitoring of metric temporal logic using sequential networks. Link: <http://arxiv.org/abs/1901.00175v2>
     fn update(&mut self, state: &[bool], time: Time) {
-        assert!(self.time.0 <= time);
-        let new_time = (time, self.time.1 + 1);
-        self.buf_valuations.clear();
+        assert!(self.time <= time);
         self.outputs.clear();
         for (idx, formula) in self.subformulae.iter().enumerate() {
             match formula {
                 UPmtl::True => {
-                    self.buf_valuations.push(NumSet::full());
-                    self.outputs.push(NumSet::from_range(self.time, new_time));
+                    self.outputs.push(true);
                 }
                 UPmtl::False => {
-                    self.buf_valuations.push(NumSet::new());
-                    self.outputs.push(NumSet::new());
+                    self.outputs.push(false);
                 }
                 UPmtl::Atom(atom) => {
                     if state[*atom] {
-                        let numset = NumSet::from_range(self.time, new_time);
-                        self.buf_valuations.push(numset.clone());
-                        self.outputs.push(numset);
+                        self.outputs.push(true);
                     } else {
-                        self.buf_valuations.push(NumSet::new());
-                        self.outputs.push(NumSet::new());
+                        self.outputs.push(false);
                     }
                 }
                 UPmtl::And(subs) => {
-                    let nset = NumSet::intersection(
-                        subs.iter().filter_map(|f| self.outputs.get(f.1)).cloned(),
-                    )
-                    .simplify();
-                    self.buf_valuations.push(nset.clone());
-                    self.outputs.push(nset);
+                    self.outputs
+                        .push(subs.iter().all(|(_, i)| self.outputs[*i]));
                 }
                 UPmtl::Or(subs) => {
-                    let nset = subs
-                        .iter()
-                        .filter_map(|sub| self.outputs.get(sub.1))
-                        .fold(NumSet::new(), |mut union, numset| {
-                            union.union(numset);
-                            union
-                        })
-                        .simplify();
-                    self.buf_valuations.push(nset.clone());
-                    self.outputs.push(nset);
+                    self.outputs
+                        .push(subs.iter().any(|(_, i)| self.outputs[*i]));
                 }
                 UPmtl::Not(subformula) => {
-                    let mut nset = self.outputs.get(subformula.1).expect("nset").clone();
-                    nset.complement();
-                    nset.cut(self.time, new_time);
-                    nset.simplify();
-                    self.buf_valuations.push(nset.clone());
-                    self.outputs.push(nset);
+                    self.outputs.push(!self.outputs[subformula.1]);
                 }
                 UPmtl::Implies(sub_0, sub_1) => {
-                    let out_lhs = self.outputs.get(sub_0.1).expect("output lhs");
-                    let out_rhs = self.outputs.get(sub_1.1).expect("output rhs");
-                    let mut nset = out_lhs.clone();
-                    nset.complement();
-                    nset.union(out_rhs);
-                    nset.cut(self.time, new_time);
-                    nset.simplify();
-                    self.buf_valuations.push(nset.clone());
-                    self.outputs.push(nset);
+                    let out_lhs = self.outputs[sub_0.1];
+                    let out_rhs = self.outputs[sub_1.1];
+                    self.outputs.push(out_rhs || !out_lhs);
                 }
                 UPmtl::Historically(sub, lower_bound, upper_bound) => {
-                    let mut output_sub = self.outputs.get(sub.1).expect("nset").clone();
-                    output_sub.insert_bound(new_time);
-                    let mut valuation = self.valuations.get(idx).expect("formula").clone();
-                    let mut partial_lower_bound = self.time;
-                    let mut nset_output = NumSet::new();
-                    for (partial_upper_bound, out_sub) in
-                        output_sub.bounds().iter().filter(|(ub, _)| self.time < *ub)
-                    {
-                        assert!(partial_lower_bound < *partial_upper_bound);
-                        assert!(self.time < *partial_upper_bound);
-                        if !*out_sub {
-                            let lower_bound = if *lower_bound > 0 {
-                                lower_bound
-                                    .checked_add(partial_lower_bound.0)
-                                    .map(|lb| (lb, 0))
-                                    .unwrap_or((Time::MAX, Time::MAX))
-                            } else {
-                                partial_lower_bound
-                            };
-                            let upper_bound = upper_bound
-                                .checked_add(partial_upper_bound.0)
-                                .map(|ub| (ub, Time::MAX))
-                                .unwrap_or((Time::MAX, Time::MAX));
-                            valuation.add_interval(lower_bound, upper_bound);
-                        }
-                        let mut to_add = valuation.clone();
-                        to_add.cut(partial_lower_bound, *partial_upper_bound);
-                        nset_output.union(&to_add);
-                        partial_lower_bound = *partial_upper_bound;
+                    if !self.outputs[sub.1] {
+                        self.valuations[idx] = self.valuations[idx].add_interval(
+                            lower_bound.saturating_add(time),
+                            upper_bound.saturating_add(time),
+                        );
                     }
-                    nset_output.complement();
-                    nset_output.cut(self.time, new_time);
-                    valuation.cut(self.time, (Time::MAX, Time::MAX));
-                    self.buf_valuations.push(valuation.simplify());
-                    self.outputs.push(nset_output.simplify());
+                    self.outputs.push(!self.valuations[idx].contains(time));
                 }
                 UPmtl::Previously(sub, lower_bound, upper_bound) => {
-                    let mut output_sub = self.outputs.get(sub.1).expect("nset").clone();
-                    output_sub.insert_bound(new_time);
-                    let mut valuation = self.valuations.get(idx).expect("formula").clone();
-                    let mut partial_lower_bound = self.time;
-                    let mut nset_output = NumSet::new();
-                    for (partial_upper_bound, out_sub) in
-                        output_sub.bounds().iter().filter(|(ub, _)| self.time < *ub)
-                    {
-                        assert!(partial_lower_bound < *partial_upper_bound);
-                        assert!(self.time < *partial_upper_bound);
-                        assert!(*partial_upper_bound <= new_time);
-                        if *out_sub {
-                            let interval_lower_bound = if *lower_bound > 0 {
-                                lower_bound
-                                    .checked_add(partial_lower_bound.0)
-                                    .map(|lb| (lb, 0))
-                                    .unwrap()
-                            } else {
-                                partial_lower_bound
-                            };
-                            let interval_upper_bound = upper_bound
-                                .checked_add(partial_upper_bound.0)
-                                .map(|ub| (ub, Time::MAX))
-                                .unwrap_or((Time::MAX, Time::MAX));
-                            valuation.add_interval(interval_lower_bound, interval_upper_bound);
-                        }
-                        let mut to_add = valuation.clone();
-                        to_add.cut(partial_lower_bound, *partial_upper_bound);
-                        nset_output.union(&to_add);
-                        partial_lower_bound = *partial_upper_bound;
+                    if self.outputs[sub.1] {
+                        self.valuations[idx] = self.valuations[idx].add_interval(
+                            lower_bound.saturating_add(time),
+                            upper_bound.saturating_add(time),
+                        );
                     }
-                    valuation.cut(self.time, (Time::MAX, Time::MAX));
-                    self.buf_valuations.push(valuation.simplify());
-                    self.outputs.push(nset_output.simplify());
+                    self.outputs.push(self.valuations[idx].contains(time));
                 }
                 UPmtl::Since(sub_0, sub_1, lower_bound, upper_bound) => {
-                    let mut nset_lhs = self.outputs.get(sub_0.1).expect("nset").clone();
-                    let nset_rhs_orig = self.outputs.get(sub_1.1).expect("nset");
-                    let mut nset_rhs = nset_rhs_orig.clone();
-                    nset_rhs.insert_bound(new_time);
-                    nset_lhs.insert_bound(new_time);
-                    nset_rhs.sync(&nset_lhs);
-                    nset_lhs.sync(nset_rhs_orig);
-                    let mut valuation = self.valuations.get(idx).expect("formula").clone();
-                    let mut partial_lower_bound = self.time;
-                    let mut nset_output = NumSet::new();
-                    for (idx, (partial_upper_bound, out_lhs)) in nset_lhs
-                        .bounds()
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, (ub, _))| self.time < *ub)
-                    {
-                        // since nset_0 and nset_1 are synched:
-                        assert_eq!(*partial_upper_bound, nset_rhs.bounds()[idx].0);
-                        assert!(partial_lower_bound < *partial_upper_bound);
-                        assert!(self.time < *partial_upper_bound);
-                        if *out_lhs {
-                            if nset_rhs.bounds()[idx].1 {
-                                let lower_bound = if *lower_bound > 0 {
-                                    lower_bound
-                                        .checked_add(partial_lower_bound.0)
-                                        .map(|lb| (lb, 0))
-                                        .unwrap_or((Time::MAX, Time::MAX))
-                                } else {
-                                    partial_lower_bound
-                                };
-                                let upper_bound = upper_bound
-                                    .checked_add(partial_upper_bound.0)
-                                    .map(|ub| (ub, Time::MAX))
-                                    .unwrap_or((Time::MAX, Time::MAX));
-                                assert!(lower_bound < upper_bound);
-                                valuation.add_interval(lower_bound, upper_bound);
-                            }
-                        } else {
-                            valuation = NumSet::new();
-                            if nset_rhs.bounds()[idx].1 {
-                                // WARN: Ulus says (t' + a, t' = b] here (because lhs is false up to time t'?)
-                                let lower_bound = if *lower_bound > 0 {
-                                    lower_bound
-                                        .checked_add(partial_upper_bound.0)
-                                        .map(|lb| (lb, 0))
-                                        .unwrap_or((Time::MAX, Time::MAX))
-                                } else {
-                                    partial_lower_bound
-                                };
-                                let upper_bound = upper_bound
-                                    .checked_add(partial_upper_bound.0)
-                                    .map(|ub| (ub, Time::MAX))
-                                    .unwrap_or((Time::MAX, Time::MAX));
-                                assert!(lower_bound < upper_bound);
-                                valuation.add_interval(lower_bound, upper_bound);
-                            }
+                    if self.outputs[sub_0.1] {
+                        if self.outputs[sub_1.1] {
+                            self.valuations[idx] = self.valuations[idx].add_interval(
+                                lower_bound.saturating_add(time),
+                                upper_bound.saturating_add(time),
+                            );
                         }
-                        let mut to_add = valuation.clone();
-                        to_add.cut(partial_lower_bound, *partial_upper_bound);
-                        nset_output.union(&to_add);
-                        partial_lower_bound = *partial_upper_bound;
+                    } else if self.outputs[sub_1.1] {
+                        self.valuations[idx] = NumSet::from_range(
+                            lower_bound.saturating_add(time),
+                            upper_bound.saturating_add(time),
+                        );
+                    } else {
+                        self.valuations[idx] = NumSet::empty();
                     }
-                    valuation.cut(self.time, (Time::MAX, Time::MAX));
-                    self.buf_valuations.push(valuation.simplify());
-                    self.outputs.push(nset_output.simplify());
+                    self.outputs.push(self.valuations[idx].contains(time));
                 }
             }
         }
-        self.time = new_time;
-        std::mem::swap(&mut self.valuations, &mut self.buf_valuations);
+        self.time = time;
     }
 }
 
@@ -810,7 +671,7 @@ mod tests {
         state.update(&[false], 0);
         assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[true], 1);
-        assert!(state.final_output_guarantees().any(|b| b));
+        assert!(state.final_output_guarantees().any(|b| !b));
         state.update(&[false], 2);
         assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[false], 3);
@@ -818,6 +679,6 @@ mod tests {
         state.update(&[false], 3);
         assert!(state.final_output_guarantees().any(|b| b));
         state.update(&[true], 4);
-        assert!(state.final_output_guarantees().any(|b| b));
+        assert!(state.final_output_guarantees().any(|b| !b));
     }
 }

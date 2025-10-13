@@ -194,7 +194,7 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
     /// using the provided [`Tracer`].
     pub fn traces<'a, T>(&'a self, runs: usize, tracer: T, duration: Time)
     where
-        T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Clone + Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
@@ -241,7 +241,9 @@ where
     /// spawning multiple threads.
     pub fn par_traces<'a, T>(&'a self, runs: usize, tracer: T, duration: Time)
     where
-        T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Clone
+            + Sync
+            + Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");

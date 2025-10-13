@@ -1,5 +1,5 @@
-# SCAN Promela
+# SCAN SCXML
 
-Promela parser for the SCAN model checker.
+SCXML parser for the SCAN model checker.
 
 See [SCAN homepage](https://convince-project.github.io/scan/) for more information.

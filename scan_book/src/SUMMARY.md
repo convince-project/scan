@@ -16,5 +16,5 @@
 # SCXML-based Model Specification Format
 
 - [Model Main File]() TODO
-- [Properties]() TODO
+- [Properties](./scxml/properties.md)
 - [SCXML Processes]() TODO

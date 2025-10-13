@@ -6,7 +6,6 @@ use crate::Expression;
 use crate::grammar::Type;
 use crate::program_graph::ProgramGraph;
 use log::info;
-use rand::Rng;
 use std::collections::HashMap;
 
 /// An expression using CS's [`Var`] as variables.
@@ -22,15 +21,6 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
             Expression::Const(val) => Ok(Expression::Const(val)),
             Expression::Var(cs_var, t) if cs_var.0 == pg_id => Ok(Expression::Var(cs_var.1, t)),
             Expression::Var(cs_var, _t) => Err(CsError::VarNotInPg(cs_var, pg_id)),
-            Expression::Tuple(comps) => Ok(Expression::Tuple(
-                comps
-                    .into_iter()
-                    .map(|comp| (pg_id, comp).try_into())
-                    .collect::<Result<Vec<PgExpression>, CsError>>()?,
-            )),
-            Expression::Component(index, expr) => (pg_id, *expr)
-                .try_into()
-                .map(|expr| Expression::Component(index, Box::new(expr))),
             Expression::And(comps) => Ok(Expression::And(
                 comps
                     .into_iter()
@@ -84,14 +74,6 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
                 (pg_id, comps.0).try_into()?,
                 (pg_id, comps.1).try_into()?,
             )))),
-            Expression::Append(comps) => Ok(Expression::Append(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::Truncate(comp) => {
-                Ok(Expression::Truncate(Box::new((pg_id, *comp).try_into()?)))
-            }
-            Expression::Len(comp) => Ok(Expression::Len(Box::new((pg_id, *comp).try_into()?))),
             Expression::Mod(comps) => Ok(Expression::Mod(Box::new((
                 (pg_id, comps.0).try_into()?,
                 (pg_id, comps.1).try_into()?,
@@ -116,19 +98,19 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
 }
 
 /// The object used to define and build a CS.
-pub struct ChannelSystemBuilder<R: Rng> {
-    program_graphs: Vec<ProgramGraphBuilder<R>>,
-    channels: Vec<(Type, Option<usize>)>,
+pub struct ChannelSystemBuilder {
+    program_graphs: Vec<ProgramGraphBuilder>,
+    channels: Vec<(Vec<Type>, Option<usize>)>,
     communications: HashMap<Action, (Channel, Message)>,
 }
 
-impl<R: Clone + Rng + 'static> Default for ChannelSystemBuilder<R> {
+impl Default for ChannelSystemBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
+impl ChannelSystemBuilder {
     /// Create a new [`ProgramGraphBuilder`] with the given RNG (see also `ChannelSystemBuilder::new`).
     /// At creation, this will be completely empty.
     pub fn new() -> Self {
@@ -220,20 +202,19 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
     ///
     /// ```
     /// # use scan_core::*;
-    /// # use rand::rngs::SmallRng;
     /// # use scan_core::channel_system::*;
     /// // Create a new CS builder
-    /// let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
+    /// let mut cs_builder = ChannelSystemBuilder::new();
     ///
     /// // Add a new PG to the CS
     /// let pg = cs_builder.new_program_graph();
     ///
     /// // Create new channel
-    /// let chn = cs_builder.new_channel(Type::Integer, Some(1));
+    /// let chn = cs_builder.new_channel(vec![Type::Integer], Some(1));
     ///
     /// // Create new send communication action
     /// let send = cs_builder
-    ///     .new_send(pg, chn, CsExpression::from(1))
+    ///     .new_send(pg, chn, vec![CsExpression::from(1)])
     ///     .expect("always possible to add new actions");
     ///
     /// // Add new variable to pg
@@ -531,9 +512,9 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
     ///
     /// - [`None`] capacity means that the channel's capacity is unlimited.
     /// - [`Some(0)`] capacity means the channel uses the handshake protocol (NOT YET IMPLEMENTED!)
-    pub fn new_channel(&mut self, var_type: Type, capacity: Option<usize>) -> Channel {
+    pub fn new_channel(&mut self, var_types: Vec<Type>, capacity: Option<usize>) -> Channel {
         let channel = Channel(self.channels.len() as u16);
-        self.channels.push((var_type, capacity));
+        self.channels.push((var_types, capacity));
         channel
     }
 
@@ -544,7 +525,7 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
         &mut self,
         pg_id: PgId,
         channel: Channel,
-        msg: CsExpression,
+        msgs: Vec<CsExpression>,
     ) -> Result<Action, CsError> {
         let channel_type = self
             .channels
@@ -552,8 +533,14 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
             .ok_or(CsError::MissingChannel(channel))?
             .0
             .to_owned();
-        let msg = PgExpression::try_from((pg_id, msg))?;
-        let message_type = msg.r#type().map_err(CsError::Type)?;
+        let message_type = msgs
+            .iter()
+            .map(|msg| msg.r#type().map_err(CsError::Type))
+            .collect::<Result<Vec<_>, _>>()?;
+        let msg = msgs
+            .into_iter()
+            .map(|msg| PgExpression::try_from((pg_id, msg)))
+            .collect::<Result<Vec<_>, _>>()?;
         if channel_type != message_type {
             Err(CsError::ProgramGraph(pg_id, PgError::TypeMismatch))
         } else {
@@ -573,10 +560,10 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
         &mut self,
         pg_id: PgId,
         channel: Channel,
-        var: Var,
+        vars: Vec<Var>,
     ) -> Result<Action, CsError> {
-        if pg_id != var.0 {
-            Err(CsError::VarNotInPg(var, pg_id))
+        if let Some(var) = vars.iter().find(|var| pg_id != var.0) {
+            Err(CsError::VarNotInPg(*var, pg_id))
         } else {
             let channel_type = self
                 .channels
@@ -584,18 +571,21 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
                 .ok_or(CsError::MissingChannel(channel))?
                 .0
                 .to_owned();
-            let message_type = self
+            let pg = self
                 .program_graphs
                 .get(pg_id.0 as usize)
-                .ok_or(CsError::MissingPg(pg_id))?
-                .var_type(var.1)
+                .ok_or(CsError::MissingPg(pg_id))?;
+            let message_type = vars
+                .iter()
+                .map(|var| pg.var_type(var.1))
+                .collect::<Result<Vec<_>, _>>()
                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?
                 .to_owned();
             if channel_type != message_type {
                 Err(CsError::ProgramGraph(pg_id, PgError::TypeMismatch))
             } else {
                 let action = self.program_graphs[pg_id.0 as usize]
-                    .new_receive(var.1)
+                    .new_receive(vars.iter().map(|var| var.1).collect())
                     .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                 let action = Action(pg_id, action);
                 self.communications
@@ -625,7 +615,9 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
                 .program_graphs
                 .get_mut(pg_id.0 as usize)
                 .ok_or(CsError::MissingPg(pg_id))?
-                .new_action();
+                // create a vacuous send action so the PG knows it's a communication
+                .new_send(Vec::new())
+                .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, (channel, Message::ProbeEmptyQueue));
@@ -656,7 +648,9 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
                 .program_graphs
                 .get_mut(pg_id.0 as usize)
                 .ok_or(CsError::MissingPg(pg_id))?
-                .new_action();
+                // create a vacuous send action so the PG knows it's a communication
+                .new_send(Vec::new())
+                .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, (channel, Message::ProbeFullQueue));
@@ -665,13 +659,13 @@ impl<R: Clone + Rng + 'static> ChannelSystemBuilder<R> {
     }
 
     /// Produces a [`ChannelSystem`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
-    pub fn build(mut self) -> ChannelSystem<R> {
+    pub fn build(mut self) -> ChannelSystem {
         info!(
             "create Channel System with:\n{} Program Graphs\n{} channels",
             self.program_graphs.len(),
             self.channels.len(),
         );
-        let mut program_graphs: Vec<ProgramGraph<R>> = self
+        let mut program_graphs: Vec<ProgramGraph> = self
             .program_graphs
             .into_iter()
             .map(|builder| builder.build())

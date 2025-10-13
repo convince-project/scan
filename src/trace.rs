@@ -53,7 +53,9 @@ impl TraceArgs {
     where
         D: TransitionSystemGenerator + Sync + 'a,
         Od: OracleGenerator + Sync + 'a,
-        Tr: Tracer<<<D as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        Tr: Clone
+            + Sync
+            + Tracer<<<D as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
         if self.single_thread {
             scan.traces::<Tr>(self.traces, tracer, self.duration);

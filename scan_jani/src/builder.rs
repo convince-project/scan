@@ -5,7 +5,6 @@ use crate::parser::{
 };
 use anyhow::{Context, anyhow, bail};
 use either::Either;
-use rand::rngs::SmallRng;
 use scan_core::{
     Mtl, MtlOracle, PgModel, Type, TypeError, Val,
     program_graph::{self, Action, PgExpression, ProgramGraphBuilder, Var},
@@ -25,7 +24,7 @@ pub struct JaniModelData {
 pub(crate) fn build(
     jani_model: Model,
     properties: &[String],
-) -> anyhow::Result<(PgModel<SmallRng>, MtlOracle, JaniModelData)> {
+) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
     builder.build(jani_model, properties)
 }
@@ -47,7 +46,7 @@ impl JaniBuilder {
         mut self,
         mut jani_model: Model,
         properties: &[String],
-    ) -> anyhow::Result<(PgModel<SmallRng>, MtlOracle, JaniModelData)> {
+    ) -> anyhow::Result<(PgModel, MtlOracle, JaniModelData)> {
         // WARN Necessary "normalization" process
         self.init(&mut jani_model)?;
         self.normalize(&mut jani_model)
@@ -371,7 +370,7 @@ impl JaniBuilder {
 
     fn add_global_var(
         &mut self,
-        pgb: &mut ProgramGraphBuilder<SmallRng>,
+        pgb: &mut ProgramGraphBuilder,
         var: &VariableDeclaration,
     ) -> anyhow::Result<()> {
         // TODO WARN FIXME: in JANI initial values are random?
@@ -415,7 +414,7 @@ impl JaniBuilder {
 
     fn add_local_var(
         &self,
-        pgb: &mut ProgramGraphBuilder<SmallRng>,
+        pgb: &mut ProgramGraphBuilder,
         var: &VariableDeclaration,
         local_vars: &mut HashMap<String, (Var, Val, Type)>,
     ) -> anyhow::Result<()> {
@@ -467,7 +466,7 @@ impl JaniBuilder {
     fn build_automaton(
         &mut self,
         jani_model: &Model,
-        pgb: &mut ProgramGraphBuilder<SmallRng>,
+        pgb: &mut ProgramGraphBuilder,
         automaton: &Automaton,
         e_idx: usize,
     ) -> anyhow::Result<()> {
@@ -541,7 +540,7 @@ impl JaniBuilder {
     fn build_location(
         &mut self,
         jani_model: &Model,
-        pgb: &mut ProgramGraphBuilder<SmallRng>,
+        pgb: &mut ProgramGraphBuilder,
         location: &Location,
         e_idx: usize,
         locations: &mut HashMap<String, scan_core::program_graph::Location>,
@@ -571,7 +570,7 @@ impl JaniBuilder {
         &mut self,
         jani_model: &Model,
         automaton: &Automaton,
-        pgb: &mut ProgramGraphBuilder<SmallRng>,
+        pgb: &mut ProgramGraphBuilder,
         edge: &Edge,
         e_idx: usize,
         local_vars: &HashMap<String, (Var, Val, Type)>,
@@ -634,7 +633,7 @@ impl JaniBuilder {
                             .get(r#ref)
                             .or_else(|| self.global_vars.get(r#ref))
                             .ok_or(anyhow!("variable {} not found", r#ref))?;
-                        let expr = scan_core::Expression::Const(val.clone());
+                        let expr = scan_core::Expression::Const(*val);
                         pgb.add_effect(*action, *var, expr).context(
                             "failed setting transient variable {r#ref} to initial value",
                         )?;
@@ -705,7 +704,7 @@ impl JaniBuilder {
             Expression::Identifier(id) => local_vars
                 .get(id)
                 .or_else(|| self.global_vars.get(id))
-                .map(|(var, _, t)| PgExpression::Var(*var, t.clone()))
+                .map(|(var, _, t)| PgExpression::Var(*var, *t))
                 .or_else(|| {
                     self.global_constants
                         .get(id)
@@ -844,7 +843,7 @@ impl JaniBuilder {
             PropertyExpression::Identifier(id) => self
                 .global_vars
                 .get(id)
-                .map(|(var, _, t)| PgExpression::Var(*var, t.clone()))
+                .map(|(var, _, t)| PgExpression::Var(*var, *t))
                 .or_else(|| {
                     self.global_constants
                         .get(id)

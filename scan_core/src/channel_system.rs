@@ -26,10 +26,8 @@
 //! ```
 //! # use scan_core::*;
 //! # use scan_core::channel_system::*;
-//! # use rand::rngs::SmallRng;
-//! # use rand::SeedableRng;
 //! // Create a new CS builder
-//! let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
+//! let mut cs_builder = ChannelSystemBuilder::new();
 //!
 //! // Add a new PG to the CS
 //! let pg_1 = cs_builder.new_program_graph();
@@ -40,11 +38,11 @@
 //!     .expect("every PG has an initial location");
 //!
 //! // Create new channel
-//! let chn = cs_builder.new_channel(Type::Integer, Some(1));
+//! let chn = cs_builder.new_channel(vec![Type::Integer], Some(1));
 //!
 //! // Create new send communication action
 //! let send = cs_builder
-//!     .new_send(pg_1, chn, CsExpression::from(1))
+//!     .new_send(pg_1, chn, vec![CsExpression::from(1)])
 //!     .expect("always possible to add new actions");
 //!
 //! // Add transition sending a message to the channel
@@ -66,7 +64,7 @@
 //!
 //! // Create new receive communication action
 //! let receive = cs_builder
-//!     .new_receive(pg_2, chn, var)
+//!     .new_receive(pg_2, chn, vec![var])
 //!     .expect("always possible to add new actions");
 //!
 //! // Add transition sending a message to the channel
@@ -269,9 +267,9 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventType {
     /// Sending a value to a channel.
-    Send(Val),
+    Send(SmallVec<[Val; 2]>),
     /// Retrieving a value out of a channel.
-    Receive(Val),
+    Receive(SmallVec<[Val; 2]>),
     /// Checking whether a channel is empty.
     ProbeEmptyQueue,
     /// Checking whether a channel is full.
@@ -293,10 +291,8 @@ pub enum EventType {
 ///
 /// ```
 /// # use scan_core::channel_system::ChannelSystemBuilder;
-/// # use rand::rngs::SmallRng;
-/// # use rand::SeedableRng;
 /// // Create and populate a CS builder object
-/// let mut cs_builder = ChannelSystemBuilder::<SmallRng>::new();
+/// let mut cs_builder = ChannelSystemBuilder::new();
 /// let pg_id = cs_builder.new_program_graph();
 /// let initial = cs_builder.new_initial_location(pg_id).expect("create new location");
 /// cs_builder.add_autonomous_transition(pg_id, initial, initial, None).expect("add transition");
@@ -315,32 +311,32 @@ pub enum EventType {
 /// cs.transition(pg_id, e, &[initial]).expect("transition is active");
 /// ```
 #[derive(Debug, Clone)]
-pub struct ChannelSystem<R: Rng> {
-    channels: Vec<(Type, Option<usize>)>,
+pub struct ChannelSystem {
+    channels: Vec<(Vec<Type>, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
     communications_pg_idxs: Vec<u16>,
-    program_graphs: Vec<ProgramGraph<R>>,
+    program_graphs: Vec<ProgramGraph>,
 }
 
-impl<R: Rng + SeedableRng> ChannelSystem<R> {
+impl ChannelSystem {
     /// Creates a new [`ChannelSystemRun`] which allows to execute the CS as defined.
     ///
     /// The new instance borrows the caller to refer to the CS definition without copying its data,
     /// so that spawning instances is (relatively) inexpensive.
     ///
     /// See also [`ProgramGraph::new_instance`].
-    pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def, R> {
+    pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
         ChannelSystemRun {
-            rng: R::from_os_rng(),
+            rng: SmallRng::from_os_rng(),
             time: 0,
             program_graphs: Vec::from_iter(
                 self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
             ),
-            message_queue: Vec::from_iter(
-                self.channels
-                    .iter()
-                    .map(|(_, cap)| cap.map_or_else(VecDeque::new, VecDeque::with_capacity)),
-            ),
+            message_queue: Vec::from_iter(self.channels.iter().map(|(types, cap)| {
+                cap.map_or_else(VecDeque::new, |cap| {
+                    VecDeque::with_capacity(types.len() * cap)
+                })
+            })),
             def: self,
         }
     }
@@ -349,20 +345,24 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
     fn communication(&self, action: Action) -> Option<(Channel, Message)> {
         let pg_id = action.0;
         let pg_action = action.1;
-        let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
-        let lower = self.communications_pg_idxs[pg_id.0 as usize];
-        (self.communications[lower as usize..higher as usize])
-            .binary_search_by_key(&pg_action, |(a, _, _)| *a)
-            .map(|i| {
-                let (_, c, m) = self.communications[lower as usize + i];
+        self.program_graphs[pg_id.0 as usize]
+            .is_communication(pg_action)
+            .expect("this function should only be called with validated args")
+            .then(|| {
+                let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
+                let lower = self.communications_pg_idxs[pg_id.0 as usize];
+                let idx = (self.communications[lower as usize..higher as usize])
+                    .binary_search_by_key(&pg_action, |(a, _, _)| *a)
+                    .expect("communication");
+                let (_, c, m) = self.communications[lower as usize + idx];
                 (c, m)
             })
-            .ok()
     }
 
     /// Returns the list of defined channels, given as the pair of their type and capacity
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
-    pub fn channels(&self) -> &Vec<(Type, Option<usize>)> {
+    #[inline(always)]
+    pub fn channels(&self) -> &Vec<(Vec<Type>, Option<usize>)> {
         &self.channels
     }
 }
@@ -374,15 +374,15 @@ impl<R: Rng + SeedableRng> ChannelSystem<R> {
 /// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
 /// because only the internal state needs to be duplicated.
 #[derive(Debug, Clone)]
-pub struct ChannelSystemRun<'def, R: Rng> {
-    rng: R,
+pub struct ChannelSystemRun<'def> {
+    rng: SmallRng,
     time: Time,
     message_queue: Vec<VecDeque<Val>>,
-    program_graphs: Vec<ProgramGraphRun<'def, R>>,
-    def: &'def ChannelSystem<R>,
+    program_graphs: Vec<ProgramGraphRun<'def>>,
+    def: &'def ChannelSystem,
 }
 
-impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
+impl<'def> ChannelSystemRun<'def> {
     /// Returns the current time of the CS.
     #[inline(always)]
     pub fn time(&self) -> Time {
@@ -428,42 +428,52 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
         while self.time <= duration {
             // Resets PG queue
             pg_list = pg_vec.clone();
-            pg_list.swap(self.rng.random_range(0..pgs), pgs - 1);
-            while let Some(pg_id) = pg_list.pop() {
+            while !pg_list.is_empty() {
+                let pg_id = pg_list.swap_remove(self.rng.random_range(0..pg_list.len()));
                 // Execute randomly chosen transitions on the picked PG until an event is generated,
                 // or no more transition is possible
                 while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
                     .possible_transitions()
-                    .filter_map(|(action, post_state)| {
-                        if self.def.communication(Action(pg_id, action)).is_none_or(
+                    // .filter(|(_, post_states)| post_states.clone().all(|mut i| i.next().is_some()))
+                    .filter(|&(action, _)| {
+                        self.def.communication(Action(pg_id, action)).is_none_or(
                             |(channel, message)| {
                                 let (_, capacity) = self.def.channels[channel.0 as usize];
                                 let queue = &self.message_queue[channel.0 as usize];
                                 // Channel capacity must never be exceeded!
-                                assert!(capacity.is_none_or(|cap| queue.len() <= cap));
+                                debug_assert!(capacity.is_none_or(|cap| queue.len() <= cap));
                                 // NOTE FIXME currently handshake is unsupported
-                                !matches!(capacity, Some(0))
-                                    && match message {
-                                        Message::Send => {
-                                            capacity.is_none_or(|cap| queue.len() < cap)
-                                        }
-                                        Message::Receive => !queue.is_empty(),
-                                        Message::ProbeFullQueue => {
-                                            capacity.is_some_and(|cap| queue.len() == cap)
-                                        }
-                                        Message::ProbeEmptyQueue => queue.is_empty(),
+                                // !matches!(capacity, Some(0))
+                                match message {
+                                    Message::Send => capacity.is_none_or(|cap| queue.len() < cap),
+                                    Message::Receive => !queue.is_empty(),
+                                    Message::ProbeFullQueue => {
+                                        capacity.is_some_and(|cap| queue.len() == cap)
                                     }
+                                    Message::ProbeEmptyQueue => queue.is_empty(),
+                                }
                             },
-                        ) {
-                            post_state
-                                .map(|locs| locs.choose(&mut self.rng).map(|l| Location(pg_id, l)))
-                                .collect::<Option<SmallVec<[Location; 4]>>>()
-                                .map(|s| (action, s))
-                        } else {
-                            None
-                        }
+                        )
+                    })
+                    .filter_map(|(action, post_states)| {
+                        post_states
+                            .map(|locs| {
+                                locs.choose(&mut self.rng).map(|loc| Location(pg_id, loc)) //.expect("non-empty"))
+                            })
+                            .collect::<Option<SmallVec<[Location; 4]>>>()
+                            .map(|locs| (action, locs))
                     })
                     .choose(&mut rand)
+                // .map(|(action, post_states)| {
+                //     (
+                //         action,
+                //         post_states
+                //             .map(|locs| {
+                //                 Location(pg_id, locs.choose(&mut self.rng).unwrap()) //.expect("non-empty"))
+                //             })
+                //             .collect::<SmallVec<[Location; 4]>>(),
+                //     )
+                // })
                 {
                     let event = self
                         .transition(pg_id, Action(pg_id, action), post_states.as_slice())
@@ -471,11 +481,6 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     if event.is_some() {
                         return event;
                     }
-                }
-                // Pick a random PG id from the list and move it to the end
-                let len = pg_list.len();
-                if len > 1 {
-                    pg_list.swap(self.rng.random_range(0..len), len - 1);
                 }
             }
             self.wait(1).ok()?;
@@ -548,7 +553,7 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     return Err(CsError::OutOfCapacity(channel));
                 }
                 Message::Send => {
-                    let val = self.program_graphs[pg_id.0 as usize]
+                    let vals = self.program_graphs[pg_id.0 as usize]
                         .send(
                             action.1,
                             post.iter()
@@ -558,16 +563,17 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                             &mut self.rng,
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
-                    self.message_queue[channel.0 as usize].push_back(val.clone());
-                    EventType::Send(val)
+                    self.message_queue[channel.0 as usize].extend(vals.iter().copied());
+                    EventType::Send(vals)
                 }
                 Message::Receive if self.message_queue[channel.0 as usize].is_empty() => {
                     return Err(CsError::Empty(channel));
                 }
                 Message::Receive => {
-                    let val = self.message_queue[channel.0 as usize]
-                        .pop_front()
-                        .expect("communication has been verified before");
+                    let (types, _) = &self.def.channels[channel.0 as usize];
+                    let vals = self.message_queue[channel.0 as usize]
+                        .drain(..types.len())
+                        .collect::<SmallVec<[Val; 2]>>();
                     self.program_graphs[pg_id.0 as usize]
                         .receive(
                             action.1,
@@ -575,10 +581,10 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                                 .map(|loc| loc.1)
                                 .collect::<SmallVec<[PgLocation; 8]>>()
                                 .as_slice(),
-                            val.clone(),
+                            vals.as_slice(),
                         )
                         .expect("communication has been verified before");
-                    EventType::Receive(val)
+                    EventType::Receive(vals)
                 }
                 Message::ProbeEmptyQueue | Message::ProbeFullQueue
                     if matches!(capacity, Some(0)) =>
@@ -589,8 +595,8 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     return Err(CsError::NotEmpty(channel));
                 }
                 Message::ProbeEmptyQueue => {
-                    self.program_graphs[pg_id.0 as usize]
-                        .transition(
+                    let _ = self.program_graphs[pg_id.0 as usize]
+                        .send(
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
@@ -611,8 +617,8 @@ impl<'def, R: Rng + SeedableRng> ChannelSystemRun<'def, R> {
                     return Err(CsError::ProbingInfiniteQueue(channel));
                 }
                 Message::ProbeFullQueue => {
-                    self.program_graphs[pg_id.0 as usize]
-                        .transition(
+                    let _ = self.program_graphs[pg_id.0 as usize]
+                        .send(
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
@@ -670,18 +676,18 @@ mod tests {
 
     #[test]
     fn builder() {
-        let _cs: ChannelSystemBuilder<SmallRng> = ChannelSystemBuilder::new();
+        let _cs: ChannelSystemBuilder = ChannelSystemBuilder::new();
     }
 
     #[test]
     fn new_pg() {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let _ = cs.new_program_graph();
     }
 
     #[test]
     fn new_action() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let _action = cs.new_action(pg)?;
         Ok(())
@@ -689,7 +695,7 @@ mod tests {
 
     #[test]
     fn new_var() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let _var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
         let _var2 = cs.new_var(pg, Expression::Const(Val::Integer(0)))?;
@@ -698,7 +704,7 @@ mod tests {
 
     #[test]
     fn add_effect() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let action = cs.new_action(pg)?;
         let var1 = cs.new_var(pg, Expression::Const(Val::Boolean(false)))?;
@@ -716,7 +722,7 @@ mod tests {
 
     #[test]
     fn new_location() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let initial = cs.new_initial_location(pg)?;
         let location = cs.new_location(pg)?;
@@ -726,7 +732,7 @@ mod tests {
 
     #[test]
     fn add_transition() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
+        let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let initial = cs.new_initial_location(pg)?;
         let action = cs.new_action(pg)?;
@@ -743,15 +749,15 @@ mod tests {
 
     #[test]
     fn add_communication() -> Result<(), CsError> {
-        let mut cs = ChannelSystemBuilder::<SmallRng>::new();
-        let ch = cs.new_channel(Type::Boolean, Some(1));
+        let mut cs = ChannelSystemBuilder::new();
+        let ch = cs.new_channel(vec![Type::Boolean], Some(1));
 
         let pg1 = cs.new_program_graph();
         let initial1 = cs.new_initial_location(pg1)?;
         let post1 = cs.new_location(pg1)?;
         let effect = CsExpression::Const(Val::Boolean(true));
-        let send = cs.new_send(pg1, ch, effect.clone())?;
-        let _ = cs.new_send(pg1, ch, effect)?;
+        let send = cs.new_send(pg1, ch, vec![effect.clone()])?;
+        let _ = cs.new_send(pg1, ch, vec![effect])?;
         cs.add_transition(pg1, initial1, send, post1, None)?;
 
         let var1 = cs.new_var(pg1, Expression::Const(Val::Integer(0)))?;
@@ -763,9 +769,9 @@ mod tests {
         let initial2 = cs.new_initial_location(pg2)?;
         let post2 = cs.new_location(pg2)?;
         let var2 = cs.new_var(pg2, Expression::Const(Val::Boolean(false)))?;
-        let receive = cs.new_receive(pg2, ch, var2)?;
-        let _ = cs.new_receive(pg2, ch, var2)?;
-        let _ = cs.new_receive(pg2, ch, var2)?;
+        let receive = cs.new_receive(pg2, ch, vec![var2])?;
+        let _ = cs.new_receive(pg2, ch, vec![var2])?;
+        let _ = cs.new_receive(pg2, ch, vec![var2])?;
         cs.add_transition(pg2, initial2, receive, post2, None)?;
 
         let cs_def = cs.build();

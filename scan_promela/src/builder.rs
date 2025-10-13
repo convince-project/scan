@@ -1,5 +1,4 @@
 use crate::spinv4_y::*;
-use rand::rngs::SmallRng;
 use scan_core::channel_system::CsError;
 use scan_core::channel_system::{Channel, ChannelSystemBuilder, Location, PgId, Var};
 use scan_core::{Expression, Type, Val};
@@ -49,7 +48,7 @@ impl From<CsError> for BuilderError {
 /// It holds all local definitions and a mutable reference to the main builder.
 struct PgCtx<'a> {
     /// Mutable reference to the global `ChannelSystemBuilder`.
-    cs: &'a mut ChannelSystemBuilder<SmallRng>,
+    cs: &'a mut ChannelSystemBuilder,
     /// Identifier of the program‑graph currently under construction.
     pg: PgId,
     /// Symbol table for local variables: maps a Promela identifier to a SCAN `Var` handle.                              
@@ -154,9 +153,7 @@ impl Builder {
     /// Main entry point of the builder.
     ///
     /// Consumes the parsed Promela AST and returns a fully built `ChannelSystem`.
-    pub fn create_channel_system(
-        ast: Vec<Module>,
-    ) -> Result<ChannelSystemBuilder<SmallRng>, BuilderError> {
+    pub fn create_channel_system(ast: Vec<Module>) -> Result<ChannelSystemBuilder, BuilderError> {
         let mut cs_builder = ChannelSystemBuilder::new();
         let mut gctx = GlobalCtx::default();
         Self::visit_ast(ast, &mut cs_builder, &mut gctx)?;
@@ -166,7 +163,7 @@ impl Builder {
     /// Top-level visitor that dispatches to the appropriate handler for each `Module` type.
     fn visit_ast(
         ast: Vec<Module>,
-        cs_builder: &mut ChannelSystemBuilder<SmallRng>,
+        cs_builder: &mut ChannelSystemBuilder,
         gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         for module in ast {
@@ -188,7 +185,7 @@ impl Builder {
     /// Policy: only `chan` declarations are allowed at top level; any global var is rejected.
     fn visit_decl_list(
         dl: &DeclList,
-        cs: &mut ChannelSystemBuilder<SmallRng>,
+        cs: &mut ChannelSystemBuilder,
         gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         // ---- pre-scan: ensure ALL decls are channels ----
@@ -241,7 +238,7 @@ impl Builder {
     /// by visiting each `Step` in the process body.
     fn visit_proctype(
         proctype: &Proctype,
-        cs_builder: &mut ChannelSystemBuilder<SmallRng>,
+        cs_builder: &mut ChannelSystemBuilder,
         gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         let pg = cs_builder.new_program_graph();
@@ -325,7 +322,7 @@ impl Builder {
                         Some(OptInit::ChInit(ch_init)) => {
                             Self::channel_initialization(ch_init, ctx)?
                         }
-                        None => ctx.cs.new_channel(Type::Integer, None),
+                        None => ctx.cs.new_channel(vec![Type::Integer], None),
                         _ => {
                             return Err(BuilderError::UnsupportedDeclaration(
                                 "illegal init on chan".into(),
@@ -794,7 +791,7 @@ impl Builder {
         let elem_type = typename_to_type(&ch_init.typename_list[0])?;
 
         // 4. create the channel
-        Ok(ctx.cs.new_channel(elem_type, cap))
+        Ok(ctx.cs.new_channel(vec![elem_type], cap))
     }
 
     /// Generates the graph nodes for a channel send operation (`ch ! msg`).
@@ -806,7 +803,7 @@ impl Builder {
     ) -> Result<Location, BuilderError> {
         let ch = lookup_chan(&msg.varref, ctx, gctx)?;
 
-        let mut payload: Vec<Expression<_>> = match &msg.args {
+        let payload: Vec<Expression<_>> = match &msg.args {
             SendArgs::Simple(v) => v,
             SendArgs::WithExpr(_, v) => v,
         }
@@ -818,15 +815,16 @@ impl Builder {
         //  SCAN accepts a single Expression: we pack them into a Tuple,
         //  or leave the single field as it is.)
         // TODO
-        let value_expr = if payload.len() == 1 {
-            payload.pop().unwrap()
-        } else {
-            Expression::Tuple(payload)
-        };
+        // let value_expr = if payload.len() == 1 {
+        //     payload.pop().unwrap()
+        // } else {
+        //     todo!();
+        //     Expression::Tuple(payload)
+        // };
 
         let send_act = ctx
             .cs
-            .new_send(ctx.pg, ch, value_expr)
+            .new_send(ctx.pg, ch, payload)
             .map_err(|_| BuilderError::TypeError("send".into()))?;
 
         let out = fresh_loc(ctx)?;
@@ -847,14 +845,15 @@ impl Builder {
         let ch = lookup_chan(&recv.varref, ctx, gctx)?;
 
         let dest_vr = match &recv.recv_args {
-            RecvArgs::Simple(v) if v.len() == 1 => match &v[0] {
-                RecvArg::Varref(vr) => vr,
-                _ => {
-                    return Err(BuilderError::UnsupportedStatement(
+            RecvArgs::Simple(v) => v
+                .iter()
+                .map(|v| match v {
+                    RecvArg::Varref(vr) => Ok(vr),
+                    _ => Err(BuilderError::UnsupportedStatement(
                         "complex recv pattern".into(),
-                    ));
-                }
-            },
+                    )),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             _ => {
                 return Err(BuilderError::UnsupportedStatement(
                     "multi-field receive not yet supported".into(),
@@ -862,7 +861,10 @@ impl Builder {
             }
         };
 
-        let dest_var = lookup_var(dest_vr, ctx, gctx)?;
+        let dest_var = dest_vr
+            .iter()
+            .map(|dest_vr| lookup_var(dest_vr, ctx, gctx))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let recv_act = ctx
             .cs
@@ -927,7 +929,7 @@ impl Builder {
 
     fn visit_init(
         init: &Init,
-        cs_builder: &mut ChannelSystemBuilder<SmallRng>,
+        cs_builder: &mut ChannelSystemBuilder,
         _gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         let pg = cs_builder.new_program_graph();
@@ -953,7 +955,7 @@ impl Builder {
 
     fn visit_never(
         _never: &Never,
-        _cs: &mut ChannelSystemBuilder<SmallRng>,
+        _cs: &mut ChannelSystemBuilder,
         _gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         Ok(())
@@ -961,7 +963,7 @@ impl Builder {
 
     fn visit_trace(
         _trace: &Trace,
-        _cs: &mut ChannelSystemBuilder<SmallRng>,
+        _cs: &mut ChannelSystemBuilder,
         _gctx: &mut GlobalCtx,
     ) -> Result<(), BuilderError> {
         Ok(())

@@ -4,10 +4,9 @@ use crate::parser::{Executable, If, OmgType, OmgTypes, Param, Parser, Scxml, Sen
 use anyhow::{Context, anyhow, bail};
 use boa_interner::{Interner, ToInternedString};
 use log::{info, trace, warn};
-use rand::rngs::SmallRng;
 use scan_core::{channel_system::*, *};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Not,
 };
 
@@ -19,7 +18,7 @@ use std::{
 pub struct ScxmlModel {
     pub fsm_names: HashMap<PgId, String>,
     pub fsm_indexes: HashMap<usize, String>,
-    pub parameters: HashMap<Channel, (PgId, PgId, usize, String)>,
+    pub parameters: HashMap<Channel, (PgId, PgId, usize)>,
     pub int_queues: HashSet<Channel>,
     pub ext_queues: HashMap<Channel, PgId>,
     pub events: Vec<String>,
@@ -36,8 +35,8 @@ struct FsmBuilder {
 
 #[derive(Debug, Clone)]
 struct EventBuilder {
-    // Associates parameter's name with the id of its type.
-    params: HashMap<String, String>,
+    // Associates parameter's name with its type's name.
+    params: BTreeMap<String, String>,
     senders: HashSet<PgId>,
     receivers: HashSet<PgId>,
     index: usize,
@@ -53,7 +52,7 @@ enum EcmaObj<V: Clone> {
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
 #[derive(Default)]
 pub struct ModelBuilder {
-    cs: ChannelSystemBuilder<SmallRng>,
+    cs: ChannelSystemBuilder,
     // Associates a type's id with both its OMG type and SCAN type.
     // NOTE: This is necessary because, at the moment, it is not possible to derive one from the other.
     // QUESTION: is there a better way?
@@ -66,7 +65,7 @@ pub struct ModelBuilder {
     // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
     // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
     // QUESTION: Is there a better way?
-    structs: HashMap<(String, String), usize>,
+    // structs: HashMap<(String, String), usize>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
     fsm_names: HashMap<PgId, String>,
@@ -82,7 +81,8 @@ pub struct ModelBuilder {
     // - sentEvent (index)
     // - paramName
     // that is needed
-    parameters: HashMap<(PgId, PgId, usize, String), Channel>,
+    parameters: HashMap<(PgId, PgId, usize, String), (Channel, usize)>,
+    parameter_channels: HashMap<(PgId, PgId, usize), Channel>,
     // Properties
     guarantees: Vec<(String, Pmtl<usize>)>,
     assumes: Vec<(String, Pmtl<usize>)>,
@@ -102,7 +102,7 @@ impl ModelBuilder {
         mut parser: Parser,
         properties: &[String],
         all_properties: bool,
-    ) -> anyhow::Result<(CsModel<SmallRng>, PmtlOracle, ScxmlModel)> {
+    ) -> anyhow::Result<(CsModel, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder.build_types(&parser.types)?;
         model_builder.prebuild_processes(&mut parser)?;
@@ -130,23 +130,23 @@ impl ModelBuilder {
                 OmgType::Int32 => Type::Integer,
                 OmgType::F64 => Type::Float,
                 OmgType::Uri => Type::Integer,
-                OmgType::Structure(fields) => {
-                    let mut fields_type: Vec<Type> = Vec::new();
-                    for (index, (field_id, field_type)) in fields.iter().enumerate() {
-                        self.structs
-                            .insert((name.to_owned(), field_id.to_owned()), index);
-                        // NOTE: fields must have an already known type, to avoid recursion.
-                        let (_, field_type) = self.types.get(field_type).ok_or(anyhow!(
-                            "unknown type {} of field {} in struct {}",
-                            field_type,
-                            field_id,
-                            name
-                        ))?;
-                        // NOTE: fields have to be inserted in this order or they will not correspond to their index.
-                        fields_type.push(field_type.clone());
-                    }
-                    Type::Product(fields_type)
-                }
+                // OmgType::Structure(fields) => {
+                //     let mut fields_type: Vec<Type> = Vec::new();
+                //     for (index, (field_id, field_type)) in fields.iter().enumerate() {
+                //         self.structs
+                //             .insert((name.to_owned(), field_id.to_owned()), index);
+                //         // NOTE: fields must have an already known type, to avoid recursion.
+                //         let (_, field_type) = self.types.get(field_type).ok_or(anyhow!(
+                //             "unknown type {} of field {} in struct {}",
+                //             field_type,
+                //             field_id,
+                //             name
+                //         ))?;
+                //         // NOTE: fields have to be inserted in this order or they will not correspond to their index.
+                //         fields_type.push(field_type.clone());
+                //     }
+                //     Type::Product(fields_type)
+                // }
                 OmgType::Enumeration(labels) => {
                     // NOTE: enum labels are assigned a **globally unique** index,
                     // and the same label can appear in different enums.
@@ -160,6 +160,7 @@ impl ModelBuilder {
                     Type::Integer
                 }
                 OmgType::String => Type::Integer,
+                _ => todo!(),
             };
             self.types
                 .insert(name.to_owned(), (omg_type.to_owned(), scan_type));
@@ -171,7 +172,7 @@ impl ModelBuilder {
         self.event_indexes.get(id).cloned().unwrap_or_else(|| {
             let index = self.events.len();
             self.events.push(EventBuilder {
-                params: HashMap::new(),
+                params: BTreeMap::new(),
                 index,
                 senders: HashSet::new(),
                 receivers: HashSet::new(),
@@ -186,7 +187,7 @@ impl ModelBuilder {
             let pg_id = self.cs.new_program_graph();
             let ext_queue = self
                 .cs
-                .new_channel(Type::Product(vec![Type::Integer, Type::Integer]), None);
+                .new_channel(vec![Type::Integer, Type::Integer], None);
             let fsm = FsmBuilder { pg_id, ext_queue };
             self.fsm_builders.insert(id.to_string(), fsm);
             self.fsm_names.insert(pg_id, id.to_string());
@@ -274,7 +275,7 @@ impl ModelBuilder {
                     let builder = self.events.get_mut(event_index).expect("index must exist");
                     let prev_type = builder
                         .params
-                        .insert(param.name.to_owned(), param_type.to_owned());
+                        .insert(param.name.to_owned(), param_type.clone());
                     // Type parameters should not change type
                     if let Some(prev_type) = prev_type
                         && prev_type != param_type
@@ -355,13 +356,11 @@ impl ModelBuilder {
                     .types
                     .get(&type_name)
                     .ok_or(anyhow!("unknown type {type_name}"))?
-                    .1
-                    .clone();
+                    .1;
                 let rhs = self
                     .infer_type(bin.lhs(), types, interner)
                     .and_then(|t| self.types.get(&t).ok_or(anyhow!("unknown type {t}")))?
-                    .1
-                    .clone();
+                    .1;
                 match bin.op() {
                     boa_ast::expression::operator::binary::BinaryOp::Arithmetic(op) => {
                         if lhs == rhs {
@@ -397,13 +396,6 @@ impl ModelBuilder {
             .unwrap_or_else(|| panic!("builder for {} must already exist", scxml.name));
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
-        // Initial location of Program Graph.
-        let initial_loc = self
-            .cs
-            // .initial_location(pg_id)
-            .new_initial_location(pg_id)
-            .expect("program graph must exist");
-        let mut initialize = None;
         // Initialize variables from datamodel
         // NOTE vars cannot be initialized using previously defined vars because datamodel is an HashMap
         let mut vars = HashMap::new();
@@ -414,57 +406,37 @@ impl ModelBuilder {
                 .ok_or(anyhow!("unknown type"))?
                 .1
                 .to_owned();
-            let var = self
-                .cs
-                .new_var(pg_id, CsExpression::Const(scan_type.default_value()))
-                .expect("program graph exists!");
+            let expr = data
+                .expression
+                .as_ref()
+                .map(|expr| {
+                    self.expression(
+                        expr,
+                        interner,
+                        &vars,
+                        None,
+                        &HashMap::new(),
+                        Some(scan_type),
+                    )
+                })
+                .transpose()?
+                .unwrap_or_else(|| CsExpression::Const(scan_type.default_value()));
+            let var = self.cs.new_var(pg_id, expr).expect("program graph exists!");
             vars.insert(data.id.to_owned(), (var, data.omg_type.to_owned()));
-            // Initialize variable with `expr`, if any, by adding it as effect of `initialize` action.
-            if let Some(ref expr) = data.expression {
-                let expr = self.expression(
-                    expr,
-                    interner,
-                    &vars,
-                    None,
-                    &HashMap::new(),
-                    Some(scan_type),
-                )?;
-                // Initialization has at least an effect, so we need to perform it.
-                // Create action if there was none.
-                let initialize = *initialize.get_or_insert_with(|| {
-                    self.cs.new_action(pg_id).expect("program graph must exist")
-                });
-                // This might fail if `expr` does not typecheck.
-                self.cs.add_effect(pg_id, initialize, var, expr)?;
-            }
         }
         // Make vars immutable
         let vars = vars;
+        // Initial location of Program Graph.
+        let initial_loc = self
+            .cs
+            .new_initial_location(pg_id)
+            .expect("program graph must exist");
         // Transition initializing datamodel variables.
         // After initializing datamodel, transition to location representing point-of-entry of initial state of State Chart.
-        let initial_state;
-        if let Some(initialize) = initialize {
-            initial_state = self.cs.new_location(pg_id).expect("program graph exists!");
-            self.cs
-                .add_transition(pg_id, initial_loc, initialize, initial_state, None)
-                .expect("hand-coded args");
-        } else {
-            initial_state = initial_loc;
-        };
         // Map FSM's state ids to corresponding CS's locations.
         let mut states = HashMap::new();
         // Conventionally, the entry-point for a state is a location associated to the id of the state.
-        states.insert(scxml.initial.to_owned(), initial_state);
-        // Var representing the current event and origin pair
-        let current_event_and_origin_var = self
-            .cs
-            .new_var(
-                pg_id,
-                CsExpression::Const(
-                    Type::Product(vec![Type::Integer, Type::Integer]).default_value(),
-                ),
-            )
-            .expect("program graph exists!");
+        states.insert(scxml.initial.to_owned(), initial_loc);
         // Var representing the current event
         let current_event_var = self
             .cs
@@ -476,12 +448,12 @@ impl ModelBuilder {
             .new_var(pg_id, CsExpression::from(0))
             .expect("program graph exists!");
         // Implement internal queue
-        let int_queue = self.cs.new_channel(Type::Integer, None);
+        let int_queue = self.cs.new_channel(vec![Type::Integer], None);
         // This we only need for backtracking.
         let _ = self.int_queues.insert(int_queue);
         let dequeue_int = self
             .cs
-            .new_receive(pg_id, int_queue, current_event_var)
+            .new_receive(pg_id, int_queue, vec![current_event_var])
             .expect("hand-coded args");
         // For events from the internal queue, origin is self
         let set_int_origin = self.cs.new_action(pg_id).expect("program graph exists!");
@@ -496,42 +468,12 @@ impl ModelBuilder {
         // Implement external queue
         let dequeue_ext = self
             .cs
-            .new_receive(pg_id, ext_queue, current_event_and_origin_var)
-            .expect("hand-coded args");
-        // Process external event to assign event and origin values to respective vars
-        let process_ext_event = self.cs.new_action(pg_id)?;
-        self.cs
-            .add_effect(
-                pg_id,
-                process_ext_event,
-                current_event_var,
-                CsExpression::Component(
-                    0,
-                    Box::new(CsExpression::Var(
-                        current_event_and_origin_var,
-                        Type::Product(vec![Type::Integer, Type::Integer]),
-                    )),
-                ),
-            )
-            .expect("hand-coded args");
-        self.cs
-            .add_effect(
-                pg_id,
-                process_ext_event,
-                origin_var,
-                CsExpression::Component(
-                    1,
-                    Box::new(CsExpression::Var(
-                        current_event_and_origin_var,
-                        Type::Product(vec![Type::Integer, Type::Integer]),
-                    )),
-                ),
-            )
+            .new_receive(pg_id, ext_queue, vec![current_event_var, origin_var])
             .expect("hand-coded args");
 
         // Create variables and channels for the storage of the parameters sent by external events.
-        let mut param_vars: HashMap<(usize, String), (Var, String)> = HashMap::new();
-        let mut param_actions: HashMap<(PgId, usize, String), Action> = HashMap::new();
+        let mut param_vars: HashMap<(usize, String), (Var, String)> = HashMap::new(); // maps (event_idx, param_name) -> (param_var, type_name)
+        let mut param_actions: HashMap<(PgId, usize), Action> = HashMap::new(); // maps (sender_pg_id, event) -> param_action
         for event_builder in self
             .events
             .iter()
@@ -539,36 +481,46 @@ impl ModelBuilder {
             .filter(|eb| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
         {
             let event_index = event_builder.index;
+            let mut param_vars_vec = Vec::new();
+            let mut param_types_vec = Vec::new();
+            // sorted in alphabetical order because of BTreeMap
             for (param_name, param_type_name) in event_builder.params.iter() {
                 let param_type = self
                     .types
                     .get(param_type_name)
-                    .ok_or(anyhow!("type {} not found", param_name))?
-                    .1
-                    .to_owned();
+                    .ok_or_else(|| anyhow!("type not found"))?
+                    .1;
                 // Variable where to store parameter.
                 let param_var = self
                     .cs
                     .new_var(pg_id, CsExpression::Const(param_type.default_value()))
                     .expect("hand-made input");
+                param_vars_vec.push(param_var);
+                param_types_vec.push(param_type);
                 let old = param_vars.insert(
                     (event_index, param_name.to_owned()),
-                    (param_var, param_type_name.to_owned()),
+                    (param_var, param_type_name.clone()),
                 );
                 assert!(old.is_none());
+            }
+            if !param_vars_vec.is_empty() {
                 for &sender_id in event_builder.senders.iter() {
-                    let chn = self
-                        .parameters
-                        .entry((sender_id, pg_id, event_index, param_name.to_owned()))
-                        // entry may be present if the sender FSM has been built already,
-                        // and it might be missing otherwise.
-                        .or_insert_with(|| self.cs.new_channel(param_type.to_owned(), None));
+                    let params_channel = *self
+                        .parameter_channels
+                        .entry((sender_id, pg_id, event_index))
+                        .or_insert(self.cs.new_channel(param_types_vec.clone(), None));
+                    for (param_idx, (param_name, _)) in event_builder.params.iter().enumerate() {
+                        self.parameters.insert(
+                            (sender_id, pg_id, event_index, param_name.clone()),
+                            (params_channel, param_idx),
+                        );
+                    }
+
                     let read = self
                         .cs
-                        .new_receive(pg_id, *chn, param_var)
+                        .new_receive(pg_id, params_channel, param_vars_vec.clone())
                         .expect("must work");
-                    let old =
-                        param_actions.insert((sender_id, event_index, param_name.to_owned()), read);
+                    let old = param_actions.insert((sender_id, event_index), read);
                     assert!(old.is_none());
                 }
             }
@@ -585,8 +537,8 @@ impl ModelBuilder {
             let start_loc = *states
                 .entry(state_id.to_owned())
                 .or_insert_with(|| self.cs.new_location(pg_id).expect("program graph exists!"));
-            // Execute the state's `onentry` executable content
             let mut onentry_loc = start_loc;
+            // Execute the state's `onentry` executable content
             for executable in state.on_entry.iter() {
                 // Each executable content attaches suitable transitions to the point-of-entry location
                 // and returns the target of such transitions as updated point-of-entry location.
@@ -641,32 +593,16 @@ impl ModelBuilder {
             // Location where parameters of events are read into suitable variables.
             let ext_event_processing_param =
                 self.cs.new_location(pg_id).expect("program graph exists!");
-            // Process external events by reading the (event, origin) pair and writing the components to the designated variables.
-            // ext_event_processing_loc will not be needed outside of this scope.
-            {
-                // Location where the index/origin of external events are dequeued
-                let ext_event_processing_loc =
-                    self.cs.new_location(pg_id).expect("program graph exists!");
-                // Dequeue a new external event and search for first active named transition.
-                self.cs
-                    .add_transition(
-                        pg_id,
-                        ext_queue_loc,
-                        dequeue_ext,
-                        ext_event_processing_loc,
-                        None,
-                    )
-                    .expect("hand-coded args");
-                self.cs
-                    .add_transition(
-                        pg_id,
-                        ext_event_processing_loc,
-                        process_ext_event,
-                        ext_event_processing_param,
-                        None,
-                    )
-                    .expect("hand-coded args");
-            }
+            // Dequeue a new external event and search for first active named transition.
+            self.cs
+                .add_transition(
+                    pg_id,
+                    ext_queue_loc,
+                    dequeue_ext,
+                    ext_event_processing_param,
+                    None,
+                )
+                .expect("hand-coded args");
             // Keep track of all known events.
             let mut known_events = Vec::new();
             // Retrieve external event's parameters
@@ -693,35 +629,26 @@ impl ModelBuilder {
                     ]);
                     // Add event (and sender) to list of known events.
                     known_events.push(is_event_sender.to_owned());
-                    // We need to use this as guard only once, so we wrap it in an Option.
-                    let mut is_event_sender = Some(is_event_sender);
-                    let mut current_loc = ext_event_processing_param;
-                    for (param_name, _) in event_builder.params.iter() {
-                        let read_param = *param_actions
-                            .get(&(sender_id, event_index, param_name.to_owned()))
-                            .expect("has to be there");
-                        let next_loc = self.cs.new_location(pg_id).expect("program graph exists!");
+                    if let Some(&read_params) = param_actions.get(&(sender_id, event_index)) {
                         self.cs
                             .add_transition(
                                 pg_id,
-                                current_loc,
-                                read_param,
-                                next_loc,
-                                // Need to check only once, so `take` Option
-                                is_event_sender.take(),
+                                ext_event_processing_param,
+                                read_params,
+                                eventful_trans,
+                                Some(is_event_sender),
                             )
                             .expect("hand-coded args");
-                        current_loc = next_loc;
+                    } else {
+                        self.cs
+                            .add_autonomous_transition(
+                                pg_id,
+                                ext_event_processing_param,
+                                eventful_trans,
+                                Some(is_event_sender),
+                            )
+                            .expect("hand-coded args");
                     }
-                    // Check if event and sender are the correct ones in case of event with no parameter.
-                    self.cs
-                        .add_autonomous_transition(
-                            pg_id,
-                            current_loc,
-                            eventful_trans,
-                            is_event_sender,
-                        )
-                        .expect("has to work");
                 }
             }
             // Proceed if event is unknown (without retrieving parameters).
@@ -781,7 +708,9 @@ impl ModelBuilder {
                     exec_params = param_vars
                         .iter()
                         .filter(|((ev_ix, _), _)| *ev_ix == event_index)
-                        .map(|((_, name), (var, tp))| (name.to_owned(), (*var, tp.to_owned())))
+                        .map(|((_, param_name), (var, tp))| {
+                            (param_name.to_owned(), (*var, tp.to_owned()))
+                        })
                         .collect::<HashMap<String, (Var, String)>>();
                 } else {
                     exec_origin = None;
@@ -814,7 +743,7 @@ impl ModelBuilder {
                 // Guard for transition.
                 // Has to be defined depending on the type of transition, etc...
                 let guard;
-                // Proceed on whether the transition is eventless or activated by event.
+                // Proceed depending on whether the transition is eventless or activated by event.
                 if let Some(event_name) = transition.event.as_ref() {
                     let event_index = *self
                         .event_indexes
@@ -916,9 +845,11 @@ impl ModelBuilder {
             Executable::Raise { event } => {
                 // Create event, if it does not exist already.
                 let event_idx = self.event_index(event);
-                let raise =
-                    self.cs
-                        .new_send(pg_id, int_queue, CsExpression::from(event_idx as Integer))?;
+                let raise = self.cs.new_send(
+                    pg_id,
+                    int_queue,
+                    vec![CsExpression::from(event_idx as Integer)],
+                )?;
                 let next_loc = self.cs.new_location(pg_id)?;
                 // queue the internal event
                 self.cs.add_transition(pg_id, loc, raise, next_loc, None)?;
@@ -930,6 +861,10 @@ impl ModelBuilder {
                 delay,
                 params: send_params,
             }) => {
+                // params have to be ordered by name!
+                let mut send_params = send_params.clone();
+                send_params.sort_unstable_by_key(|p| p.name.clone());
+
                 let event_idx = *self
                     .event_indexes
                     .get(event)
@@ -997,10 +932,10 @@ impl ModelBuilder {
                             .new_send(
                                 pg_id,
                                 target_ext_queue,
-                                CsExpression::Tuple(vec![
+                                vec![
                                     CsExpression::from(event_idx as Integer),
                                     CsExpression::from(u16::from(pg_id) as Integer),
-                                ]),
+                                ],
                             )
                             .expect("params are hard-coded");
 
@@ -1022,10 +957,17 @@ impl ModelBuilder {
                             .expect("params are right");
 
                         // Pass parameters. This could fail due to param content.
-                        for param in send_params {
+                        if !send_params.is_empty() {
                             // Updates next location.
-                            next_loc = self.send_param(
-                                pg_id, target_id, param, event_idx, next_loc, vars, origin, params,
+                            next_loc = self.send_params(
+                                pg_id,
+                                target_id,
+                                &send_params,
+                                event_idx,
+                                next_loc,
+                                vars,
+                                origin,
+                                params,
                                 interner,
                             )?;
                         }
@@ -1069,7 +1011,7 @@ impl ModelBuilder {
             Executable::Assign { location, expr } => {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
                 let (var, scan_type) = vars.get(location).ok_or(anyhow!("undefined variable"))?;
-                let scan_type = self.types.get(scan_type).expect("type").1.clone();
+                let scan_type = self.types.get(scan_type).expect("type").1;
                 let expr = self.expression(
                     expr,
                     interner,
@@ -1138,41 +1080,48 @@ impl ModelBuilder {
     }
 
     // WARN: vars and params have the same type so they could be easily swapped by mistake when calling the function.
-    fn send_param(
+    fn send_params(
         &mut self,
         pg_id: PgId,
         target_id: PgId,
-        param: &Param,
+        params: &Vec<Param>,
         event_idx: usize,
         param_loc: Location,
         vars: &HashMap<String, (Var, String)>,
         origin: Option<Var>,
-        params: &HashMap<String, (Var, String)>,
+        all_params: &HashMap<String, (Var, String)>,
         interner: &Interner,
     ) -> Result<Location, anyhow::Error> {
-        // Get param type.
-        let scan_type = self
-            .types
-            .get(param.omg_type.as_ref().expect("type name annotation"))
-            .cloned()
-            .ok_or(anyhow!("undefined type"))?
-            .1;
-        // Build expression from ECMAScript expression.
-        let expr = self.expression(
-            &param.expr,
-            interner,
-            vars,
-            origin.as_ref(),
-            params,
-            Some(scan_type.clone()),
-        )?;
+        assert!(!params.is_empty());
+        let mut exprs = Vec::new();
+        let mut scan_types = Vec::new();
+        for param in params {
+            // Get param type.
+            let scan_type = self
+                .types
+                .get(param.omg_type.as_ref().expect("type name annotation"))
+                .cloned()
+                .ok_or(anyhow!("undefined type"))?
+                .1;
+            // Build expression from ECMAScript expression.
+            let expr = self.expression(
+                &param.expr,
+                interner,
+                vars,
+                origin.as_ref(),
+                all_params,
+                Some(scan_type),
+            )?;
+            exprs.push(expr);
+            scan_types.push(scan_type);
+        }
         // Retreive or create channel for parameter passing.
         let param_chn = *self
-            .parameters
-            .entry((pg_id, target_id, event_idx, param.name.to_owned()))
-            .or_insert(self.cs.new_channel(scan_type, None));
+            .parameter_channels
+            .entry((pg_id, target_id, event_idx))
+            .or_insert(self.cs.new_channel(scan_types, None));
         // Can return error if expr is badly typed
-        let pass_param = self.cs.new_send(pg_id, param_chn, expr)?;
+        let pass_param = self.cs.new_send(pg_id, param_chn, exprs)?;
         let next_loc = self.cs.new_location(pg_id).expect("PG exists");
         self.cs
             .add_transition(pg_id, param_loc, pass_param, next_loc, None)
@@ -1272,7 +1221,7 @@ impl ModelBuilder {
                             | ArithmeticOp::Sub
                             | ArithmeticOp::Mul
                             | ArithmeticOp::Exp => {
-                                lhs_hint = expr_type.clone();
+                                lhs_hint = expr_type;
                                 rhs_hint = expr_type;
                             }
                             ArithmeticOp::Div => {
@@ -1513,25 +1462,26 @@ impl ModelBuilder {
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
                                 match prop_target {
-                                    EcmaObj::PrimitiveData(expr, type_name) => {
+                                    EcmaObj::PrimitiveData(_expr, type_name) => {
                                         match &self
                                             .types
                                             .get(&type_name)
                                             .ok_or(anyhow!("unknown type {}", type_name))?
                                             .0
                                         {
-                                            OmgType::Structure(fields) => {
-                                                let index = *self
-                                                    .structs
-                                                    .get(&(type_name, ident.to_owned()))
-                                                    .ok_or(anyhow!("field {} not found", ident))?;
-                                                let field_type_name = fields
-                                                    .get(ident)
-                                                    .ok_or(anyhow!("field {} not found", ident))?;
-                                                Ok(EcmaObj::PrimitiveData(
-                                                    Expression::component(expr, index),
-                                                    field_type_name.to_owned(),
-                                                ))
+                                            OmgType::Structure(_fields) => {
+                                                bail!("structures are not currently supported")
+                                                // let index = *self
+                                                //     .structs
+                                                //     .get(&(type_name, ident.to_owned()))
+                                                //     .ok_or(anyhow!("field {} not found", ident))?;
+                                                // let field_type_name = fields
+                                                //     .get(ident)
+                                                //     .ok_or(anyhow!("field {} not found", ident))?;
+                                                // Ok(EcmaObj::PrimitiveData(
+                                                //     Expression::component(expr, index),
+                                                //     field_type_name.to_owned(),
+                                                // ))
                                             }
                                             t => bail!("type '{t:?}' has no accessible fields"),
                                         }
@@ -1578,14 +1528,20 @@ impl ModelBuilder {
                         None,
                         &HashMap::new(),
                         None,
-                    )?
-                    .eval_constant()?;
-                let channel = *self
+                    )
+                    .with_context(|| {
+                        format!("failed building default value expression for port {port_id}")
+                    })?
+                    .eval_constant()
+                    .with_context(|| {
+                        format!("failed evaluating default value for port {port_id}")
+                    })?;
+                let (channel, param_idx) = *self
                     .parameters
                     .get(&(origin, target, event_id, param.to_owned()))
                     .ok_or(anyhow!("param {param} not found"))?;
                 self.ports
-                    .insert(port_id.to_owned(), (Atom::State(channel), init));
+                    .insert(port_id.to_owned(), (Atom::State(channel, param_idx), init));
             } else {
                 let channel = target_builder.ext_queue;
                 self.ports.insert(
@@ -1594,10 +1550,13 @@ impl ModelBuilder {
                         Atom::Event(Event {
                             pg_id: origin,
                             channel,
-                            event_type: EventType::Send(Val::Tuple(vec![
-                                Val::Integer(event_id as Integer),
-                                Val::Integer(u16::from(origin) as Integer),
-                            ])),
+                            event_type: EventType::Send(
+                                vec![
+                                    Val::Integer(event_id as Integer),
+                                    Val::Integer(u16::from(origin) as Integer),
+                                ]
+                                .into(),
+                            ),
                         }),
                         Val::Boolean(false),
                     ),
@@ -1647,19 +1606,19 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(self) -> (CsModel<SmallRng>, PmtlOracle, ScxmlModel) {
+    fn build_model(self) -> (CsModel, PmtlOracle, ScxmlModel) {
         let mut model = CsModel::new(self.cs);
         let mut ports = Vec::new();
         for (port_name, (atom, init)) in self.ports {
             // TODO FIXME handle error.
-            if let Atom::State(channel) = atom {
-                model.add_port(channel, init.clone());
-                ports.push((channel, port_name, init.r#type()));
+            if let Atom::State(channel, param_idx) = atom {
+                model.add_port(channel, param_idx, init);
+                ports.push((channel, param_idx, port_name, init.r#type()));
             }
         }
         // Ports need to be sorted by channel or will not match state iterator
-        ports.sort_by_key(|(c, ..)| *c);
-        let ports = ports.into_iter().map(|(_, n, t)| (n, t)).collect();
+        ports.sort_by_key(|(c, param_idx, _, _)| (*c, *param_idx));
+        let ports = ports.into_iter().map(|(_, _, n, t)| (n, t)).collect();
         for pred_expr in self.predicates {
             // TODO FIXME handle error.
             let _id = model.add_predicate(pred_expr);
@@ -1684,9 +1643,9 @@ impl ModelBuilder {
             ScxmlModel {
                 fsm_names: self.fsm_names,
                 parameters: self
-                    .parameters
+                    .parameter_channels
                     .into_iter()
-                    .map(|((src, trg, event, name), chn)| (chn, (src, trg, event, name)))
+                    .map(|((src, trg, event), chn)| (chn, (src, trg, event)))
                     .collect(),
                 ext_queues: self
                     .fsm_builders

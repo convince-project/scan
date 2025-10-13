@@ -188,11 +188,11 @@ pub enum PgError {
 }
 
 #[derive(Debug, Clone)]
-enum Effect<R: Rng> {
+enum Effect {
     // NOTE: Could use a SmallVec for clock resets
-    Effects(Vec<(Var, FnExpression<Var, R>)>, Vec<Clock>),
-    Send(FnExpression<Var, R>),
-    Receive(Var),
+    Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
+    Send(SmallVec<[Expression<Var>; 2]>),
+    Receive(SmallVec<[Var; 2]>),
 }
 
 type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
@@ -215,7 +215,7 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// # use rand::rngs::SmallRng;
 /// # use rand::SeedableRng;
 /// // Create and populate a PG builder object
-/// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+/// let mut pg_builder = ProgramGraphBuilder::new();
 /// let initial = pg_builder.new_initial_location();
 /// pg_builder.add_autonomous_transition(initial, initial, None).expect("add transition");
 ///
@@ -233,9 +233,9 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// pg.transition(e, &[initial], &mut rng).expect("transition is active");
 /// ```
 #[derive(Debug, Clone)]
-pub struct ProgramGraph<R: Rng> {
+pub struct ProgramGraph {
     initial_states: SmallVec<[Location; 8]>,
-    effects: Vec<Effect<R>>,
+    effects: Vec<Effect>,
     locations: Vec<LocationData>,
     // Time invariants of each location
     vars: Vec<Val>,
@@ -243,17 +243,29 @@ pub struct ProgramGraph<R: Rng> {
     clocks: u16,
 }
 
-impl<R: Rng> ProgramGraph<R> {
+impl ProgramGraph {
     /// Creates a new [`ProgramGraphRun`] which allows to execute the PG as defined.
     ///
     /// The new instance borrows the caller to refer to the PG definition without copying its data,
     /// so that spawning instances is (relatively) inexpensive.
-    pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def, R> {
+    pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def> {
         ProgramGraphRun {
             current_states: self.initial_states.clone(),
             vars: self.vars.clone(),
             def: self,
             clocks: vec![0; self.clocks as usize],
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_communication(&self, action: Action) -> Result<bool, PgError> {
+        if action == EPSILON {
+            Ok(false)
+        } else {
+            self.effects
+                .get(action.0 as usize)
+                .map(|e| !matches!(e, Effect::Effects(_, _)))
+                .ok_or(PgError::MissingAction(action))
         }
     }
 
@@ -266,7 +278,7 @@ impl<R: Rng> ProgramGraph<R> {
         pre_state: Location,
         action: Action,
         post_state: Location,
-    ) -> impl Iterator<Item = (&Option<Guard>, &Vec<TimeConstraint>)> {
+    ) -> impl Iterator<Item = (&Option<Expression<Var>>, &Vec<TimeConstraint>)> {
         let (a_transitions, ..) = &self.locations[pre_state.0 as usize];
         a_transitions
             .binary_search_by_key(&action, |(a, ..)| *a)
@@ -293,21 +305,20 @@ impl<R: Rng> ProgramGraph<R> {
 /// Though, this restriction makes it so that cloning the [`ProgramGraphRun`] is cheap,
 /// because only the internal state needs to be duplicated.
 #[derive(Debug, Clone)]
-pub struct ProgramGraphRun<'def, R: Rng> {
+pub struct ProgramGraphRun<'def> {
     current_states: SmallVec<[Location; 8]>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
-    def: &'def ProgramGraph<R>,
+    def: &'def ProgramGraph,
 }
 
-impl<'def, R: Rng> ProgramGraphRun<'def, R> {
+impl<'def> ProgramGraphRun<'def> {
     /// Returns the current location.
     ///
     /// ```
     /// # use scan_core::program_graph::ProgramGraphBuilder;
-    /// # use rand::rngs::SmallRng;
     /// // Create a new PG builder
-    /// let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
+    /// let mut pg_builder = ProgramGraphBuilder::new();
     ///
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
@@ -332,97 +343,85 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
     /// The guard (if any) is guaranteed to be satisfied.
     pub fn possible_transitions(
         &self,
-    ) -> impl Iterator<
-        Item = (
-            Action,
-            impl Iterator<Item = impl Iterator<Item = Location> + use<'_, R>> + use<'_, R>,
-        ),
-    > + use<'_, R> {
+    ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
         self.def.locations[self.current_states[0].0 as usize]
             .0
             .iter()
-            .enumerate()
-            .map(|(idx, (action, ..))| {
-                (
-                    *action,
-                    self.possible_transitions_action(*action, Some(idx)),
-                )
-            })
+            .map(|&(action, ..)| (action, self.possible_transitions_action(action)))
     }
 
     #[inline(always)]
     fn possible_transitions_action(
         &self,
         action: Action,
-        mut hint: Option<usize>,
-    ) -> impl Iterator<Item = impl Iterator<Item = Location> + use<'_, R>> + use<'_, R> {
+    ) -> impl Iterator<Item = impl Iterator<Item = Location>> {
         self.current_states
             .iter()
-            .map(move |loc| self.possible_transitions_action_loc(action, *loc, hint.take()))
+            .map(move |loc| self.possible_transitions_action_loc(action, *loc))
     }
 
     fn possible_transitions_action_loc(
         &self,
         action: Action,
         current_state: Location,
-        hint: Option<usize>,
-    ) -> impl Iterator<Item = Location> + use<'_, R> {
+    ) -> impl Iterator<Item = Location> {
         let mut last_post_state: Option<Location> = None;
-        hint.or_else(|| {
-            self.def.locations[current_state.0 as usize]
-                .0
-                .binary_search_by_key(&action, |(a, ..)| *a)
-                .ok()
-        })
-        .into_iter()
-        .flat_map(move |action_idx| {
-            self.def.locations[current_state.0 as usize].0[action_idx]
-                .1
-                .iter()
-                .filter_map(move |(post_state, guard, constraints)| {
-                    // prevent post_states to be duplicated wastefully
-                    if last_post_state.is_some_and(|s| s == *post_state) {
-                        return None;
-                    }
-                    let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-                    if if action == EPSILON {
-                        self.active_autonomous_transition(guard.as_ref(), constraints, invariants)
-                    } else {
-                        match self.def.effects[action.0 as usize] {
-                            Effect::Effects(_, ref resets) => self.active_transition(
+        self.def.locations[current_state.0 as usize]
+            .0
+            .binary_search_by_key(&action, |(a, ..)| *a)
+            .ok()
+            .into_iter()
+            .flat_map(move |action_idx| {
+                self.def.locations[current_state.0 as usize].0[action_idx]
+                    .1
+                    .iter()
+                    .filter_map(move |(post_state, guard, constraints)| {
+                        // prevent post_states to be duplicated wastefully
+                        if last_post_state.is_some_and(|s| s == *post_state) {
+                            return None;
+                        }
+                        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
+                        if if action == EPSILON {
+                            self.active_autonomous_transition(
                                 guard.as_ref(),
                                 constraints,
                                 invariants,
-                                resets,
-                            ),
-                            Effect::Send(_) | Effect::Receive(_) => self
-                                .active_autonomous_transition(
+                            )
+                        } else {
+                            match self.def.effects[action.0 as usize] {
+                                Effect::Effects(_, ref resets) => self.active_transition(
                                     guard.as_ref(),
                                     constraints,
                                     invariants,
+                                    resets,
                                 ),
+                                Effect::Send(_) | Effect::Receive(_) => self
+                                    .active_autonomous_transition(
+                                        guard.as_ref(),
+                                        constraints,
+                                        invariants,
+                                    ),
+                            }
+                        } {
+                            last_post_state = Some(*post_state);
+                            last_post_state
+                        } else {
+                            None
                         }
-                    } {
-                        last_post_state = Some(*post_state);
-                        last_post_state
-                    } else {
-                        None
-                    }
-                })
-        })
+                    })
+            })
     }
 
     fn active_transition(
         &self,
-        guard: Option<&Guard>,
+        guard: Option<&Expression<Var>>,
         constraints: &[TimeConstraint],
         invariants: &[TimeConstraint],
         resets: &[Clock],
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            if let Val::Boolean(pass) =
-                guard.eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng)
+            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
             {
                 pass
             } else {
@@ -443,14 +442,13 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
 
     fn active_autonomous_transition(
         &self,
-        guard: Option<&Guard>,
+        guard: Option<&Expression<Var>>,
         constraints: &[TimeConstraint],
         invariants: &[TimeConstraint],
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            if let Val::Boolean(pass) =
-                guard.eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng)
+            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
             {
                 pass
             } else {
@@ -506,7 +504,7 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
     ///
     /// Fails if the requested transition is not admissible,
     /// or if the post-location time invariants are violated.
-    pub fn transition(
+    pub fn transition<R: Rng>(
         &mut self,
         action: Action,
         post_states: &[Location],
@@ -531,8 +529,7 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         {
             if self.active_transitions(action, post_states, resets) {
                 effects.iter().for_each(|(var, effect)| {
-                    self.vars[var.0 as usize] =
-                        effect.eval(&|var| self.vars[var.0 as usize].clone(), rng)
+                    self.vars[var.0 as usize] = effect.eval(&|var| self.vars[var.0 as usize], rng)
                 });
                 resets
                     .iter()
@@ -572,19 +569,22 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         }
     }
 
-    pub(crate) fn send<'a>(
+    pub(crate) fn send<'a, R: Rng>(
         &'a mut self,
         action: Action,
         post_states: &[Location],
         rng: &'a mut R,
-    ) -> Result<Val, PgError> {
+    ) -> Result<SmallVec<[Val; 2]>, PgError> {
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
-            if let Effect::Send(effect) = &self.def.effects[action.0 as usize] {
-                let val = effect.eval(&|var| self.vars[var.0 as usize].clone(), rng);
+            if let Effect::Send(effects) = &self.def.effects[action.0 as usize] {
+                let vals = effects
+                    .iter()
+                    .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], rng))
+                    .collect();
                 self.current_states.copy_from_slice(post_states);
-                Ok(val)
+                Ok(vals)
             } else {
                 Err(PgError::NotSend(action))
             }
@@ -597,15 +597,25 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         &mut self,
         action: Action,
         post_states: &[Location],
-        val: Val,
+        vals: &[Val],
     ) -> Result<(), PgError> {
         if action == EPSILON {
             Err(PgError::NotReceive(action))
         } else if self.active_transitions(action, post_states, &[]) {
-            if let Effect::Receive(var) = self.def.effects[action.0 as usize] {
-                let var_content = self.vars.get_mut(var.0 as usize).expect("variable exists");
-                if var_content.r#type() == val.r#type() {
-                    *var_content = val;
+            if let Effect::Receive(ref vars) = self.def.effects[action.0 as usize] {
+                // let var_content = self.vars.get_mut(var.0 as usize).expect("variable exists");
+                if vars.len() == vals.len()
+                    && vals.iter().zip(vars).all(|(val, var)| {
+                        self.vars
+                            .get(var.0 as usize)
+                            .expect("variable exists")
+                            .r#type()
+                            == val.r#type()
+                    })
+                {
+                    vals.iter().zip(vars).for_each(|(&val, var)| {
+                        *self.vars.get_mut(var.0 as usize).expect("variable exists") = val
+                    });
                     self.current_states.copy_from_slice(post_states);
                     // self.current_states = post_states;
                     // self.update_buf();
@@ -621,22 +631,23 @@ impl<'def, R: Rng> ProgramGraphRun<'def, R> {
         }
     }
 
-    pub(crate) fn eval(&self, expr: &FnExpression<Var, DummyRng>) -> Val {
+    pub(crate) fn eval(&self, expr: &Expression<Var>) -> Val {
         expr.eval(
-            &|v: Var| self.vars.get(v.0 as usize).unwrap().clone(),
+            &|v: Var| *self.vars.get(v.0 as usize).unwrap(),
             &mut DummyRng,
         )
     }
 
-    pub(crate) fn val(&self, var: Var) -> Result<&Val, PgError> {
+    pub(crate) fn val(&self, var: Var) -> Result<Val, PgError> {
         self.vars
             .get(var.0 as usize)
+            .copied()
             .ok_or(PgError::MissingVar(var))
     }
 }
 
-impl<'def, R: Rng + SeedableRng> ProgramGraphRun<'def, R> {
-    pub(crate) fn montecarlo(&mut self, rng: &mut R) -> Option<Action> {
+impl<'def> ProgramGraphRun<'def> {
+    pub(crate) fn montecarlo<R: Rng + SeedableRng>(&mut self, rng: &mut R) -> Option<Action> {
         let mut rand = R::from_rng(rng);
         if let Some((action, post_states)) = self
             .possible_transitions()
@@ -665,7 +676,7 @@ mod tests {
 
     #[test]
     fn wait() {
-        let mut builder = ProgramGraphBuilder::<SmallRng>::new();
+        let mut builder = ProgramGraphBuilder::new();
         let _ = builder.new_initial_location();
         let pg_def = builder.build();
         let mut pg = pg_def.new_instance();
@@ -701,7 +712,7 @@ mod tests {
     #[test]
     fn program_graph() -> Result<(), PgError> {
         // Create Program Graph
-        let mut builder = ProgramGraphBuilder::<SmallRng>::new();
+        let mut builder = ProgramGraphBuilder::new();
         // Variables
         let mut rng = SmallRng::from_seed([0; 32]);
         let battery = builder.new_var(Expression::Const(Val::Integer(0)))?;

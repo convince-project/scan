@@ -12,11 +12,10 @@ lrpar_mod!("spinv4.y");
 #[path = "builder.rs"]
 pub mod builder;
 pub use builder::*;
-use rand::rngs::SmallRng;
 use regex::Regex;
 use scan_core::{CsModel, PmtlOracle, Scan};
 
-pub type PromelaScan = Scan<CsModel<SmallRng>, PmtlOracle>;
+pub type PromelaScan = Scan<CsModel, PmtlOracle>;
 
 pub type PromelaModel = ();
 
