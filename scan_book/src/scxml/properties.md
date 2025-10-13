@@ -18,7 +18,7 @@ The following example shows the format structure and its elements:
 
       <!-- Event variables are boolean variables associated only to the event, -->
       <!-- and their value is true when the event is being sent, false otherwise. -->
-      <!-- Event variables have no associated type, param or expr -->
+      <!-- Event variables have no associated type, param or value -->
       <event_var id="event_variable_id"/>
     </scxml_event_send>
 
@@ -28,7 +28,10 @@ The following example shows the format structure and its elements:
   <!-- Properties can either be specified as guarantees to verify, -->
   <!-- or as assumes to restrict the system execution. -->
   <guarantees>
-    <!-- Only currently supported logic is pmtl -->
+    <!-- Properties are assigned an id. -->
+    <!-- Currently, the only supported logic is pMTL; -->
+    <!-- thus the only accepted value for the `logic` attribute is "pmtl" -->
+    <!-- The property itself is expressed via the `expr` attribute. -->
     <property id="property_id" logic="pmtl" expr="pMTL_formula"/>
 
     <!-- Other properties... -->
@@ -46,7 +49,7 @@ The properties themselves are expressed in (a subset of) the [Rye](https://dogan
 as already used by the [Reelay](https://doganulus.github.io/reelay/) monitoring library.
 In this format, atomic predicates are written in curly braces and can include:
 
-- State and event variables;
+- Previously declared state and event variables;
 - Boolean constant values (`true` and `false`);
 - Boolean operators (`&&`, `||`, `!`, `->`);
 - Arithmetic values (integers and float);
