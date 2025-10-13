@@ -1,5 +1,6 @@
-# SCAN Promela
+# SCAN Core
 
-Promela parser for the SCAN model checker.
+Core library crate for the SCAN model checker.
 
 See [SCAN homepage](https://convince-project.github.io/scan/) for more information.
+

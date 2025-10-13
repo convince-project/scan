@@ -9,7 +9,7 @@ repository = "https://github.com/convince-project/scan"
 readme = "README.md"
 license = "Apache-2.0"
 keywords = ["verification", "model-checking"]
-categories = ["compilers", "concurrency", "parser-implementations", "science::robotics"]
+categories = ["compilers", "concurrency", "parser-implementations", "science::robotics", "simulation"]
 
 [lib]
 name = "scan"     # The name of the target.
