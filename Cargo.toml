@@ -6,7 +6,10 @@ description = "Statistical model checker for large concurrent systems."
 documentation = "https://convince-project.github.io/scan/crates/scan/index.html"
 homepage = "https://convince-project.github.io/scan/"
 repository = "https://github.com/convince-project/scan"
+readme = "README.md"
 license = "Apache-2.0"
+keywords = ["verification", "model-checking"]
+categories = ["compilers", "concurrency", "parser-implementations", "science::robotics"]
 
 [lib]
 name = "scan"     # The name of the target.
