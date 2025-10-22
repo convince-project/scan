@@ -326,13 +326,13 @@ impl ModelBuilder {
                     .ok_or(anyhow!("type cannot be inferred"))
             }
             boa_ast::Expression::Literal(lit) => {
-                use boa_ast::expression::literal::Literal;
-                match lit {
-                    Literal::String(_) => Ok(String::from("string")),
-                    Literal::Num(_) => Ok(String::from("f64")),
-                    Literal::Int(_) => Ok(String::from("int32")),
+                use boa_ast::expression::literal::LiteralKind;
+                match lit.kind() {
+                    LiteralKind::String(_) => Ok(String::from("string")),
+                    LiteralKind::Num(_) => Ok(String::from("f64")),
+                    LiteralKind::Int(_) => Ok(String::from("int32")),
                     // Literal::BigInt(_) => todo!(),
-                    Literal::Bool(_) => Ok(String::from("bool")),
+                    LiteralKind::Bool(_) => Ok(String::from("bool")),
                     _ => Err(anyhow!(
                         "unable to infer type for literal expression '{lit:?}'"
                     )),
@@ -1140,7 +1140,7 @@ impl ModelBuilder {
         expr_type: Option<Type>,
     ) -> anyhow::Result<Expression<V>> {
         let expr = match expr {
-            boa_ast::Expression::This => todo!(),
+            boa_ast::Expression::This(_this) => todo!(),
             boa_ast::Expression::Identifier(ident) => {
                 let ident = ident.to_interned_string(interner);
                 self.enums
@@ -1157,9 +1157,9 @@ impl ModelBuilder {
                     .ok_or(anyhow!("unknown identifier: {ident}"))?
             }
             boa_ast::Expression::Literal(lit) => {
-                use boa_ast::expression::literal::Literal;
-                match lit {
-                    Literal::String(s) => {
+                use boa_ast::expression::literal::LiteralKind;
+                match lit.kind() {
+                    LiteralKind::String(s) => {
                         let len = self.enums.len() as Integer;
                         Expression::from(
                             *self
@@ -1168,15 +1168,15 @@ impl ModelBuilder {
                                 .or_insert(len),
                         )
                     }
-                    Literal::Num(f) => Expression::from(*f),
-                    Literal::Int(i) if expr_type.is_some_and(|t| matches!(t, Type::Float)) => {
+                    LiteralKind::Num(f) => Expression::from(*f),
+                    LiteralKind::Int(i) if expr_type.is_some_and(|t| matches!(t, Type::Float)) => {
                         Expression::from(*i as f64)
                     }
-                    Literal::Int(i) => Expression::from(*i),
-                    Literal::BigInt(_) => todo!(),
-                    Literal::Bool(b) => Expression::from(*b),
-                    Literal::Null => todo!(),
-                    Literal::Undefined => todo!(),
+                    LiteralKind::Int(i) => Expression::from(*i),
+                    LiteralKind::BigInt(_) => todo!(),
+                    LiteralKind::Bool(b) => Expression::from(*b),
+                    LiteralKind::Null => todo!(),
+                    LiteralKind::Undefined => todo!(),
                 }
             }
             boa_ast::Expression::ArrayLiteral(_arr) => {
@@ -1314,10 +1314,10 @@ impl ModelBuilder {
                             .utf8()
                             .ok_or(anyhow!("not utf8"))?;
                         match property_access.field() {
-                            boa_ast::expression::access::PropertyAccessField::Const(sym) => {
+                            boa_ast::expression::access::PropertyAccessField::Const(ident) => {
                                 let ident: &str = interner
-                                    .resolve(*sym)
-                                    .ok_or(anyhow!("unknown symbol {:?}", sym))?
+                                    .resolve(ident.sym())
+                                    .ok_or(anyhow!("unknown identifier {:?}", ident))?
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
                                 if target == "Math" {
@@ -1371,7 +1371,7 @@ impl ModelBuilder {
         params: &HashMap<String, (V, String)>,
     ) -> anyhow::Result<EcmaObj<V>> {
         match expr {
-            boa_ast::Expression::This => todo!(),
+            boa_ast::Expression::This(_this) => todo!(),
             boa_ast::Expression::Identifier(ident) => {
                 let ident = ident.to_interned_string(interner);
                 match ident.as_str() {
@@ -1455,10 +1455,10 @@ impl ModelBuilder {
                             params,
                         )?;
                         match simp_prop_acc.field() {
-                            PropertyAccessField::Const(sym) => {
+                            PropertyAccessField::Const(ident) => {
                                 let ident: &str = interner
-                                    .resolve(*sym)
-                                    .ok_or(anyhow!("unknown symbol {:?}", sym))?
+                                    .resolve(ident.sym())
+                                    .ok_or(anyhow!("unknown symbol {:?}", ident))?
                                     .utf8()
                                     .ok_or(anyhow!("not utf8"))?;
                                 match prop_target {

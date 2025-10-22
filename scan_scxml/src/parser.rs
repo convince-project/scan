@@ -113,7 +113,10 @@ fn ecmascript(code: &str, scope: &Scope, interner: &mut Interner) -> anyhow::Res
             .ok_or_else(|| anyhow!("expression {code} is not a statement"))?
             .to_owned();
         match statement {
-            StatementListItem::Statement(boa_ast::Statement::Expression(expr)) => Ok(expr),
+            StatementListItem::Statement(statement) => match *statement {
+                boa_ast::Statement::Expression(expression) => Ok(expression),
+                _ => Err(anyhow!("{statement:?} assignment is not an expression")),
+            },
             _ => Err(anyhow!("{statement:?} assignment is not an expression")),
         }
     } else {

@@ -17,9 +17,9 @@ crate-type = ["lib"]   # The crate types to generate.
 [dependencies]
 scan_core = { version = "0.1.0", path="../scan_core" }
 anyhow = { workspace = true }
-boa_ast = "0.20.0"
-boa_interner = "0.20.0"
-boa_parser = "0.20.0"
+boa_ast = "0.21.0"
+boa_interner = "0.21.0"
+boa_parser = "0.21.0"
 log = { workspace = true }
 rand = { workspace = true }
 quick-xml = "0.38.3"
