@@ -15,14 +15,14 @@ name = "scan_promela"  # The name of the target.
 crate-type = ["lib"]   # The crate types to generate.
 
 [build-dependencies]
-cfgrammar = "0.13"
-lrlex = "0.13.10"
-lrpar = "0.13.10"
+cfgrammar = "0.14"
+lrlex = "0.14.0"
+lrpar = "0.14.0"
 
 [dependencies]
-cfgrammar = "0.13"
-lrlex = "0.13.10"
-lrpar = "0.13.10"
+cfgrammar = "0.14"
+lrlex = "0.14.0"
+lrpar = "0.14.0"
 regex = "1"
 scan_core = { path="../scan_core" }
 anyhow = { workspace = true }
