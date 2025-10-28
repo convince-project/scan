@@ -44,7 +44,7 @@ clap = { version = "4.5.50", features = ["derive"] }
 clap-verbosity-flag = "3.0.4"
 env_logger = "0.11.8"
 human-panic = "2.0.3"
-indicatif = { version = "0.18.1", features = ["improved_unicode"] }
+indicatif = { version = "0.18.2", features = ["improved_unicode"] }
 log = { workspace = true }
 scan_core = { version = "0.1.0", path = "scan_core" }
 scan_jani = { version = "0.1.0", path = "scan_jani" }
