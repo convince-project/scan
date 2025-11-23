@@ -160,7 +160,7 @@ impl ModelBuilder {
                     Type::Integer
                 }
                 OmgType::String => Type::Integer,
-                _ => todo!(),
+                _ => bail!("type {omg_type:?} currently unsupported"),
             };
             self.types
                 .insert(name.to_owned(), (omg_type.to_owned(), scan_type));
@@ -198,7 +198,15 @@ impl ModelBuilder {
     fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
         for (id, fsm) in parser.process_list.iter_mut() {
             let pg_id = self.fsm_builder(id).pg_id;
-            self.prebuild_fsms(pg_id, fsm, &parser.interner)?;
+            self.prebuild_fsms(pg_id, fsm, &parser.interner)
+                .with_context(|| {
+                    format!(
+                        "failed pre-processing of fsm {}",
+                        self.fsm_names
+                            .get(&pg_id)
+                            .unwrap_or(&String::from("unknown")),
+                    )
+                })?;
         }
         Ok(())
     }
@@ -215,9 +223,15 @@ impl ModelBuilder {
         }
         for (_, state) in fmt.states.iter_mut() {
             for exec in state.on_entry.iter_mut() {
-                self.prebuild_exec(pg_id, exec, &types, interner)?;
+                self.prebuild_exec(pg_id, exec, &types, interner)
+                    .with_context(|| {
+                        format!(
+                            "failed pre-processing of executable on entry of state {}",
+                            state.id
+                        )
+                    })?;
             }
-            for transition in state.transitions.iter_mut() {
+            for (index, transition) in state.transitions.iter_mut().enumerate() {
                 if let Some(ref event) = transition.event {
                     // Event may or may not have been processed before
                     let event_index = self.event_index(event);
@@ -225,11 +239,19 @@ impl ModelBuilder {
                     builder.receivers.insert(pg_id);
                 }
                 for exec in transition.effects.iter_mut() {
-                    self.prebuild_exec(pg_id, exec, &types, interner)?;
+                    self.prebuild_exec(pg_id, exec, &types, interner).with_context(|| {
+                        format!("failed pre-processing of executable in transition {index} of state {}", state.id)
+                    })?;
                 }
             }
             for exec in state.on_exit.iter_mut() {
-                self.prebuild_exec(pg_id, exec, &types, interner)?;
+                self.prebuild_exec(pg_id, exec, &types, interner)
+                    .with_context(|| {
+                        format!(
+                            "failed pre-processing of executable on exit of state {}",
+                            state.id
+                        )
+                    })?;
             }
         }
         Ok(())
@@ -266,21 +288,25 @@ impl ModelBuilder {
                 let builder = self.events.get_mut(event_index).expect("index must exist");
                 builder.senders.insert(pg_id);
                 for param in params {
-                    let param_type = param.omg_type.to_owned();
-                    let param_type = param_type
-                        .or_else(|| self.infer_type(&param.expr, types, interner).ok())
-                        .ok_or(anyhow!("missing type annotation for param {}", param.name))?;
                     // Update OMG_type value so that it contains its type for sure
-                    param.omg_type = Some(param_type.to_owned());
                     let builder = self.events.get_mut(event_index).expect("index must exist");
-                    let prev_type = builder
-                        .params
-                        .insert(param.name.to_owned(), param_type.clone());
-                    // Type parameters should not change type
-                    if let Some(prev_type) = prev_type
-                        && prev_type != param_type
-                    {
-                        return Err(anyhow!("type parameter mismatch"));
+                    if let Some(t) = builder.params.get(&param.name) {
+                        if let Some(omg) = param.omg_type.as_ref() {
+                            if t != omg {
+                                bail!(
+                                    "type parameter mismatch: {t} != {omg} for parameter {}",
+                                    param.name
+                                );
+                            }
+                        } else {
+                            let _ = param.omg_type.insert(t.clone());
+                        }
+                    } else if let Some(t) = param.omg_type.as_ref() {
+                        builder.params.insert(param.name.clone(), t.clone());
+                    } else if let Ok(t) = self.infer_type(&param.expr, types, interner) {
+                        let _ = param.omg_type.insert(t.clone());
+                        let builder = self.events.get_mut(event_index).expect("index must exist");
+                        builder.params.insert(param.name.clone(), t);
                     }
                 }
                 Ok(())
@@ -293,11 +319,13 @@ impl ModelBuilder {
                 // preprocess all executables
                 for (_, executables) in elifs {
                     for executable in executables {
-                        self.prebuild_exec(pg_id, executable, types, interner)?;
+                        self.prebuild_exec(pg_id, executable, types, interner)
+                            .context("failed pre-processing executable content in <if> element")?;
                     }
                 }
                 for executable in r#else {
-                    self.prebuild_exec(pg_id, executable, types, interner)?;
+                    self.prebuild_exec(pg_id, executable, types, interner)
+                        .context("failed pre-processing executable content in <else> element")?;
                 }
                 Ok(())
             }
@@ -329,7 +357,7 @@ impl ModelBuilder {
                 use boa_ast::expression::literal::LiteralKind;
                 match lit.kind() {
                     LiteralKind::String(_) => Ok(String::from("string")),
-                    LiteralKind::Num(_) => Ok(String::from("f64")),
+                    LiteralKind::Num(_) => Ok(String::from("float64")),
                     LiteralKind::Int(_) => Ok(String::from("int32")),
                     // Literal::BigInt(_) => todo!(),
                     LiteralKind::Bool(_) => Ok(String::from("bool")),
@@ -403,7 +431,7 @@ impl ModelBuilder {
             let scan_type = self
                 .types
                 .get(data.omg_type.as_str())
-                .ok_or(anyhow!("unknown type"))?
+                .ok_or(anyhow!("data {} has unknown type", data.id))?
                 .1
                 .to_owned();
             let expr = data
@@ -419,7 +447,8 @@ impl ModelBuilder {
                         Some(scan_type),
                     )
                 })
-                .transpose()?
+                .transpose()
+                .with_context(|| anyhow!("failed computing expression for data {}", data.id))?
                 .unwrap_or_else(|| CsExpression::Const(scan_type.default_value()));
             let var = self.cs.new_var(pg_id, expr).expect("program graph exists!");
             vars.insert(data.id.to_owned(), (var, data.omg_type.to_owned()));
@@ -488,7 +517,9 @@ impl ModelBuilder {
                 let param_type = self
                     .types
                     .get(param_type_name)
-                    .ok_or_else(|| anyhow!("type not found"))?
+                    .ok_or_else(|| {
+                        anyhow!("type {param_type_name} of param {param_name} not found")
+                    })?
                     .1;
                 // Variable where to store parameter.
                 let param_var = self
@@ -542,16 +573,23 @@ impl ModelBuilder {
             for executable in state.on_entry.iter() {
                 // Each executable content attaches suitable transitions to the point-of-entry location
                 // and returns the target of such transitions as updated point-of-entry location.
-                onentry_loc = self.add_executable(
-                    executable,
-                    pg_id,
-                    int_queue,
-                    onentry_loc,
-                    &vars,
-                    None,
-                    &HashMap::new(),
-                    interner,
-                )?;
+                onentry_loc = self
+                    .add_executable(
+                        executable,
+                        pg_id,
+                        int_queue,
+                        onentry_loc,
+                        &vars,
+                        None,
+                        &HashMap::new(),
+                        interner,
+                    )
+                    .with_context(|| {
+                        anyhow!(
+                            "failed building executable content on entry of state {}",
+                            state.id
+                        )
+                    })?;
             }
             // Make immutable
             let onentry_loc = onentry_loc;
@@ -667,7 +705,7 @@ impl ModelBuilder {
                 .expect("has to work");
 
             // Consider each of the state's transitions.
-            for transition in state.transitions.iter() {
+            for (transition_index, transition) in state.transitions.iter().enumerate() {
                 // Skip if event is never sent/raised
                 if let Some(ref event_name) = transition.event {
                     let event_index = *self
@@ -730,7 +768,7 @@ impl ModelBuilder {
                             exec_origin.as_ref(),
                             &exec_params,
                             Some(Type::Boolean),
-                        )
+                        ).with_context(|| anyhow!("failed building conditional expression for transition #{transition_index} in state {}", state.id))
                     })
                     .transpose()?;
 
@@ -784,17 +822,43 @@ impl ModelBuilder {
                 )?;
                 // First execute the executable content of the state's `on_exit` tag,
                 // then that of the `transition` tag, following the specs.
-                for exec in state.on_exit.iter().chain(transition.effects.iter()) {
-                    exec_trans_loc = self.add_executable(
-                        exec,
-                        pg_id,
-                        int_queue,
-                        exec_trans_loc,
-                        &vars,
-                        exec_origin,
-                        &exec_params,
-                        interner,
-                    )?;
+                for exec in state.on_exit.iter() {
+                    exec_trans_loc = self
+                        .add_executable(
+                            exec,
+                            pg_id,
+                            int_queue,
+                            exec_trans_loc,
+                            &vars,
+                            exec_origin,
+                            &exec_params,
+                            interner,
+                        )
+                        .with_context(|| {
+                            anyhow!(
+                                "failed building executable content on exit of state {}",
+                                state.id
+                            )
+                        })?;
+                }
+                for exec in transition.effects.iter() {
+                    exec_trans_loc = self
+                        .add_executable(
+                            exec,
+                            pg_id,
+                            int_queue,
+                            exec_trans_loc,
+                            &vars,
+                            exec_origin,
+                            &exec_params,
+                            interner,
+                        )
+                        .with_context(|| {
+                            anyhow!(
+                                "failed building executable content of transition #{transition_index} of state {}",
+                                state.id
+                            )
+                        })?;
                 }
                 // Transitioning to the target state/location.
                 // At this point, the transition cannot be stopped so there can be no guard.
@@ -1011,15 +1075,35 @@ impl ModelBuilder {
             Executable::Assign { location, expr } => {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
                 let (var, scan_type) = vars.get(location).ok_or(anyhow!("undefined variable"))?;
-                let scan_type = self.types.get(scan_type).expect("type").1;
-                let expr = self.expression(
-                    expr,
-                    interner,
-                    vars,
-                    origin.as_ref(),
-                    params,
-                    Some(scan_type),
-                )?;
+                let scan_type = self
+                    .types
+                    .get(scan_type)
+                    .ok_or(anyhow!("unknown type for location {location}"))?
+                    .1;
+                let expr = self
+                    .expression(
+                        expr,
+                        interner,
+                        vars,
+                        origin.as_ref(),
+                        params,
+                        Some(scan_type),
+                    )
+                    .with_context(|| {
+                        anyhow!(
+                            "failed building expression in <assign> element for location {location}"
+                        )
+                    })?;
+                let expr_type = expr.r#type().with_context(|| {
+                    anyhow!(
+                        "type mismatch in expression in <assign> element for location {location}"
+                    )
+                })?;
+                if scan_type != expr_type {
+                    bail!(
+                        "type of location {location} does not match that of expression ({scan_type:?} != {expr_type:?})"
+                    );
+                }
                 let assign = self.cs.new_action(pg_id).expect("PG exists");
                 self.cs.add_effect(pg_id, assign, *var, expr)?;
                 let next_loc = self.cs.new_location(pg_id).unwrap();
@@ -1032,14 +1116,16 @@ impl ModelBuilder {
                 let mut curr_loc = loc;
                 for (cond, execs) in r#elif {
                     let mut next_loc = self.cs.new_location(pg_id).unwrap();
-                    let cond = self.expression(
-                        cond,
-                        interner,
-                        vars,
-                        origin.as_ref(),
-                        params,
-                        Some(Type::Boolean),
-                    )?;
+                    let cond = self
+                        .expression(
+                            cond,
+                            interner,
+                            vars,
+                            origin.as_ref(),
+                            params,
+                            Some(Type::Boolean),
+                        )
+                        .context("failed building condition expression in <if> element")?;
                     self.cs.add_autonomous_transition(
                         pg_id,
                         curr_loc,
@@ -1047,9 +1133,11 @@ impl ModelBuilder {
                         Some(cond.to_owned()),
                     )?;
                     for exec in execs {
-                        next_loc = self.add_executable(
-                            exec, pg_id, int_queue, next_loc, vars, origin, params, interner,
-                        )?;
+                        next_loc = self
+                            .add_executable(
+                                exec, pg_id, int_queue, next_loc, vars, origin, params, interner,
+                            )
+                            .context("failed building executable content in <if> element")?;
                     }
                     // end of `if` branch, go to end_loc
                     self.cs
@@ -1068,9 +1156,11 @@ impl ModelBuilder {
                 }
                 // Add executables for `else` (if any)
                 for exec in r#else {
-                    curr_loc = self.add_executable(
-                        exec, pg_id, int_queue, curr_loc, vars, origin, params, interner,
-                    )?;
+                    curr_loc = self
+                        .add_executable(
+                            exec, pg_id, int_queue, curr_loc, vars, origin, params, interner,
+                        )
+                        .context("failed building executable content in <else> element")?;
                 }
                 self.cs
                     .add_autonomous_transition(pg_id, curr_loc, end_loc, None)?;
@@ -1099,7 +1189,12 @@ impl ModelBuilder {
             // Get param type.
             let scan_type = self
                 .types
-                .get(param.omg_type.as_ref().expect("type name annotation"))
+                .get(
+                    param
+                        .omg_type
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("param {} needs type annotation", param.name))?,
+                )
                 .cloned()
                 .ok_or(anyhow!("undefined type"))?
                 .1;

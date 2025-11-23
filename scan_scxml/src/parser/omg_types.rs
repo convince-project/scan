@@ -3,7 +3,7 @@ use std::{
     io::{BufRead, Read},
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use log::{error, info, trace, warn};
 use quick_xml::{
     Reader,
@@ -12,7 +12,6 @@ use quick_xml::{
         attributes::{AttrError, Attribute},
     },
 };
-use std::str;
 
 use crate::parser::{ATTR_ID, TAG_DATA_TYPE_LIST, TAG_ENUMERATION, TAG_LABEL, TAG_STRUCT};
 use crate::parser::{ATTR_TYPE, ConvinceTag, ParserError, TAG_FIELD};
@@ -114,7 +113,6 @@ impl OmgTypes {
                     let tag_name = tag.name();
                     let tag_name = str::from_utf8(tag_name.as_ref())?;
                     trace!("'{tag_name}' empty tag");
-                    // let tag_name = ConvinceTag::from(tag_name.as_str());
                     match tag_name {
                         TAG_LABEL
                             if stack
@@ -165,24 +163,24 @@ impl OmgTypes {
                 }
                 Event::Comment(_comment) => continue,
                 Event::CData(_) => {
-                    return Err(anyhow!("CData not supported"));
+                    bail!("CData not supported");
                 }
                 Event::Decl(_) => continue,
                 Event::PI(_) => {
-                    return Err(anyhow!("Processing Instructions not supported"));
+                    bail!("Processing Instructions not supported");
                 }
                 Event::DocType(_) => {
-                    return Err(anyhow!("DocType not supported"));
+                    bail!("DocType not supported");
                 }
                 Event::Eof => {
                     info!("parsing completed");
                     if !stack.is_empty() {
-                        return Err(anyhow!(ParserError::UnclosedTags,));
+                        bail!(ParserError::UnclosedTags);
                     }
                     break;
                 }
                 Event::GeneralRef(_bytes_ref) => {
-                    return Err(anyhow!("General References not supported"));
+                    bail!("General References not supported");
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
@@ -204,7 +202,7 @@ impl OmgTypes {
                 }
                 key => {
                     error!("found unknown attribute {key}");
-                    return Err(anyhow!(ParserError::UnknownAttrKey(key.to_owned()),));
+                    bail!(ParserError::UnknownAttrKey(key.to_owned()));
                 }
             }
         }
@@ -227,9 +225,7 @@ impl OmgTypes {
                 }
                 key => {
                     error!("found unknown attribute {key}");
-                    return Err(anyhow::Error::new(ParserError::UnknownAttrKey(
-                        key.to_owned(),
-                    )));
+                    bail!(ParserError::UnknownAttrKey(key.to_owned()));
                 }
             }
         }

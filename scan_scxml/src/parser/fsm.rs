@@ -347,6 +347,7 @@ pub(super) fn parse<R: BufRead>(
                 trace!(target: "parser", "start tag '{tag_name}'");
                 let tag_obj = parse_start_tag(tag_name, &stack, tag, interner)?;
                 stack.push(tag_obj);
+                type_annotation = None;
             }
             Event::End(tag) => {
                 let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
@@ -426,13 +427,20 @@ pub(super) fn parse<R: BufRead>(
                     error!(target: "parser", "unexpected end tag {tag_name}");
                     bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
                 }
+                type_annotation = None;
             }
             Event::Empty(tag) => {
                 let tag_name = reader
                     .decoder()
                     .decode(tag.name().into_inner())?
                     .into_owned();
-                parse_empty_tag(tag_name, &mut stack, tag, &mut type_annotation, interner)?;
+                parse_empty_tag(
+                    tag_name,
+                    &mut stack,
+                    tag,
+                    &mut type_annotation.take(),
+                    interner,
+                )?;
             }
             Event::Text(text) => {
                 let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
@@ -451,21 +459,21 @@ pub(super) fn parse<R: BufRead>(
                 type_annotation = parse_comment(comment)?;
             }
             Event::CData(_) => {
-                return Err(anyhow!("CData not supported"));
+                bail!("CData not supported");
             }
             Event::Decl(_) => continue,
             Event::PI(_) => {
-                return Err(anyhow!("Processing Instructions not supported"));
+                bail!("Processing Instructions not supported");
             }
             Event::DocType(_) => {
-                return Err(anyhow!("DocType not supported"));
+                bail!("DocType not supported");
             }
             Event::Eof => {
                 error!(target: "parser", "parsing completed with unclosed tags");
-                return Err(anyhow!(ParserError::UnclosedTags));
+                bail!(ParserError::UnclosedTags);
             }
             Event::GeneralRef(_bytes_ref) => {
-                return Err(anyhow!("General References not supported"));
+                bail!("General References not supported");
             }
         }
         // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
