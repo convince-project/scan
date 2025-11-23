@@ -1,6 +1,5 @@
 [book]
 authors = ["Enrico Ghiorzi"]
 language = "en"
-multilingual = false
 src = "src"
 title = "The SCAN Book"
