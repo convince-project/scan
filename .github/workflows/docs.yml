@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
       - name: install-mdbook
         run: |
-          cargo install mdbook --no-default-features --features search --vers "^0.4" --locked
+          cargo install mdbook --no-default-features --features search --vers "^0.5" --locked
       - name: build-manual
         run: |
           mdbook build scan_book
