@@ -36,6 +36,7 @@ struct FsmBuilder {
 #[derive(Debug, Clone)]
 struct EventBuilder {
     // Associates parameter's name with its type's name.
+    name: String,
     params: BTreeMap<String, String>,
     senders: HashSet<PgId>,
     receivers: HashSet<PgId>,
@@ -172,6 +173,7 @@ impl ModelBuilder {
         self.event_indexes.get(id).cloned().unwrap_or_else(|| {
             let index = self.events.len();
             self.events.push(EventBuilder {
+                name: id.to_string(),
                 params: BTreeMap::new(),
                 index,
                 senders: HashSet::new(),
@@ -198,7 +200,7 @@ impl ModelBuilder {
     fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
         for (id, fsm) in parser.process_list.iter_mut() {
             let pg_id = self.fsm_builder(id).pg_id;
-            self.prebuild_fsms(pg_id, fsm, &parser.interner)
+            self.prebuild_fsm(pg_id, fsm, &parser.interner)
                 .with_context(|| {
                     format!(
                         "failed pre-processing of fsm {}",
@@ -208,10 +210,18 @@ impl ModelBuilder {
                     )
                 })?;
         }
+        for eb in &self.events {
+            for (param, t) in &eb.params {
+                // Mark with empty string parameters without known type
+                if t.is_empty() {
+                    bail!("param {param} of event {} needs type annotation", eb.name);
+                }
+            }
+        }
         Ok(())
     }
 
-    fn prebuild_fsms(
+    fn prebuild_fsm(
         &mut self,
         pg_id: PgId,
         fmt: &mut Scxml,
@@ -290,7 +300,9 @@ impl ModelBuilder {
                 for param in params {
                     // Update OMG_type value so that it contains its type for sure
                     let builder = self.events.get_mut(event_index).expect("index must exist");
-                    if let Some(t) = builder.params.get(&param.name) {
+                    if let Some(t) = builder.params.get(&param.name)
+                        && !t.is_empty()
+                    {
                         if let Some(omg) = param.omg_type.as_ref() {
                             if t != omg {
                                 bail!(
@@ -307,6 +319,10 @@ impl ModelBuilder {
                         let _ = param.omg_type.insert(t.clone());
                         let builder = self.events.get_mut(event_index).expect("index must exist");
                         builder.params.insert(param.name.clone(), t);
+                    } else {
+                        // Mark with empty string parameters without known type
+                        let builder = self.events.get_mut(event_index).expect("index must exist");
+                        builder.params.insert(param.name.clone(), String::new());
                     }
                 }
                 Ok(())
@@ -399,7 +415,9 @@ impl ModelBuilder {
                             ))
                         }
                     }
-                    boa_ast::expression::operator::binary::BinaryOp::Bitwise(_) => todo!(),
+                    boa_ast::expression::operator::binary::BinaryOp::Bitwise(_) => {
+                        Err(anyhow!("bitwise operations not supported"))
+                    }
                     boa_ast::expression::operator::binary::BinaryOp::Relational(_)
                     | boa_ast::expression::operator::binary::BinaryOp::Logical(_) => {
                         Ok(String::from("bool"))
@@ -409,6 +427,48 @@ impl ModelBuilder {
                     )),
                 }
             }
+            boa_ast::Expression::Call(call) => self.infer_type(call.function(), types, interner),
+            boa_ast::Expression::PropertyAccess(property_access) => match property_access {
+                boa_ast::expression::access::PropertyAccess::Simple(simple_property_access) => {
+                    if let &boa_ast::Expression::Identifier(ident) = simple_property_access.target()
+                    {
+                        if ident.sym() == interner.get("Math").unwrap() {
+                            match simple_property_access.field() {
+                                boa_ast::expression::access::PropertyAccessField::Const(
+                                    identifier,
+                                ) => {
+                                    if identifier.sym() == interner.get("floor").unwrap() {
+                                        Ok(String::from("int32"))
+                                    } else if identifier.sym() == interner.get("random").unwrap() {
+                                        Ok(String::from("float64"))
+                                    } else {
+                                        Err(anyhow!(
+                                            "unknown expression '{expr:?}', unable to infer type"
+                                        ))
+                                    }
+                                }
+                                boa_ast::expression::access::PropertyAccessField::Expr(
+                                    _expression,
+                                ) => todo!(),
+                            }
+                        } else {
+                            Err(anyhow!(
+                                "unknown expression '{expr:?}', unable to infer type"
+                            ))
+                        }
+                    } else {
+                        Err(anyhow!(
+                            "unknown expression '{expr:?}', unable to infer type"
+                        ))
+                    }
+                }
+                boa_ast::expression::access::PropertyAccess::Private(_private_property_access) => {
+                    todo!()
+                }
+                boa_ast::expression::access::PropertyAccess::Super(_super_property_access) => {
+                    todo!()
+                }
+            },
             _ => Err(anyhow!(
                 "unknown expression '{expr:?}', unable to infer type"
             )),
@@ -1023,17 +1083,21 @@ impl ModelBuilder {
                         // Pass parameters. This could fail due to param content.
                         if !send_params.is_empty() {
                             // Updates next location.
-                            next_loc = self.send_params(
-                                pg_id,
-                                target_id,
-                                &send_params,
-                                event_idx,
-                                next_loc,
-                                vars,
-                                origin,
-                                params,
-                                interner,
-                            )?;
+                            next_loc = self
+                                .send_params(
+                                    pg_id,
+                                    target_id,
+                                    &send_params,
+                                    event_idx,
+                                    next_loc,
+                                    vars,
+                                    origin,
+                                    params,
+                                    interner,
+                                )
+                                .with_context(|| {
+                                    anyhow!("failed sending params for event {event}")
+                                })?;
                         }
                         // Once sending event and args done, get to exit-point
                         self.cs
@@ -1183,6 +1247,12 @@ impl ModelBuilder {
         interner: &Interner,
     ) -> Result<Location, anyhow::Error> {
         assert!(!params.is_empty());
+        // Check that no param is missing
+        for p in self.events[event_idx].params.keys() {
+            if !params.iter().any(|param| param.name == *p) {
+                bail!("missing param {p}");
+            }
+        }
         let mut exprs = Vec::new();
         let mut scan_types = Vec::new();
         for param in params {
@@ -1284,7 +1354,9 @@ impl ModelBuilder {
             }
             boa_ast::Expression::PropertyAccess(prop_acc) => {
                 let expr = &boa_ast::Expression::PropertyAccess(prop_acc.to_owned());
-                let ecma_obj = self.expression_prop_access(expr, interner, vars, origin, params)?;
+                let ecma_obj = self
+                    .expression_prop_access(expr, interner, vars, origin, params)
+                    .context("failed building expression with property access")?;
                 // WARN: If the EcmaObj is a primitive SCAN data, we return that.
                 // If it is a dictionary of properties, instead, we have no way to represent it properly as a SCAN type.
                 match ecma_obj {
@@ -1470,61 +1542,38 @@ impl ModelBuilder {
             boa_ast::Expression::Identifier(ident) => {
                 let ident = ident.to_interned_string(interner);
                 match ident.as_str() {
-                    "_event" => Ok(EcmaObj::Properties(HashMap::from_iter(
-                        [
-                            (
-                                String::from("origin"),
-                                EcmaObj::PrimitiveData(
-                                    Expression::Var(
-                                        origin
-                                            .cloned()
-                                            .ok_or(anyhow!("missing origin of _event"))?,
-                                        Type::Integer,
-                                    ),
-                                    String::from("int32"),
+                    "_event" => Ok(EcmaObj::Properties(HashMap::from_iter([
+                        (
+                            String::from("origin"),
+                            EcmaObj::PrimitiveData(
+                                Expression::Var(
+                                    origin.cloned().ok_or(anyhow!("missing origin of _event"))?,
+                                    Type::Integer,
                                 ),
+                                String::from("int32"),
                             ),
-                            (
-                                String::from("data"),
-                                EcmaObj::Properties(HashMap::from_iter(params.iter().map(
-                                    |(n, (v, t))| {
-                                        (
-                                            n.to_owned(),
-                                            EcmaObj::PrimitiveData(
-                                                Expression::Var(
-                                                    v.clone(),
-                                                    self.types
-                                                        .get(t)
-                                                        .map(|(_, t)| t.to_owned())
-                                                        .expect("type of data parameter"),
-                                                ),
-                                                t.to_owned(),
+                        ),
+                        (
+                            String::from("data"),
+                            EcmaObj::Properties(HashMap::from_iter(params.iter().map(
+                                |(n, (v, t))| {
+                                    (
+                                        n.to_owned(),
+                                        EcmaObj::PrimitiveData(
+                                            Expression::Var(
+                                                v.clone(),
+                                                self.types
+                                                    .get(t)
+                                                    .map(|(_, t)| t.to_owned())
+                                                    .expect("type of data parameter"),
                                             ),
-                                        )
-                                    },
-                                ))),
-                            ),
-                        ]
-                        // WARN: This allows the non-conformant notation `_event.<PARAM>` in place of `_event.data.<PARAM>`
-                        // for compatibility with the format produced by AS2FM.
-                        // TODO: remove when not necessary anymore.
-                        .into_iter()
-                        .chain(params.iter().map(|(n, (v, t))| {
-                            (
-                                n.to_owned(),
-                                EcmaObj::PrimitiveData(
-                                    Expression::Var(
-                                        v.clone(),
-                                        self.types
-                                            .get(t)
-                                            .map(|(_, t)| t.to_owned())
-                                            .expect("type of data parameter"),
-                                    ),
-                                    t.to_owned(),
-                                ),
-                            )
-                        })),
-                    ))),
+                                            t.to_owned(),
+                                        ),
+                                    )
+                                },
+                            ))),
+                        ),
+                    ]))),
                     ident => {
                         let (var, type_name) = vars
                             .get(ident)
