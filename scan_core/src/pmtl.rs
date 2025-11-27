@@ -202,6 +202,7 @@ where
 fn subformulae(set: HashSet<Pmtl<usize>>) -> Vec<UPmtl> {
     let mut vec = Vec::from_iter(set);
     vec.sort_unstable_by_key(Pmtl::depth);
+    vec.dedup();
     vec.shrink_to_fit();
     let mut idx_vec: Vec<UPmtl> = Vec::new();
     for pmtl in vec {

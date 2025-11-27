@@ -197,9 +197,8 @@ impl Cli {
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
-                if args.all {
-                    args.properties = scxml_model.guarantees.clone();
-                }
+                // Reorder properties as they appear in the model
+                args.properties = scxml_model.guarantees.clone();
                 run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan_def)
                     .print(json);
             }
@@ -215,9 +214,8 @@ impl Cli {
                 let (scan_def, scxml_model) = load(&self.model, &[], args.all)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
-                if args.all {
-                    args.properties = scxml_model.guarantees.clone();
-                }
+                // Reorder properties as they appear in the model
+                args.properties = scxml_model.guarantees.clone();
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(&scxml_model);
                 eprint!("Trace computation in progress...");
@@ -243,9 +241,8 @@ impl Cli {
                 let (scan, jani_model) = load(&self.model, &properties)?;
                 eprintln!(" done");
                 validate_properties(&args.properties, &jani_model.guarantees)?;
-                if args.all {
-                    args.properties = jani_model.guarantees;
-                }
+                // Reorder properties as they appear in the model
+                args.properties = jani_model.guarantees.clone();
                 run_verification::<PgModel, MtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
@@ -284,9 +281,8 @@ impl Cli {
                 let (scan, _promela_model) = load(&self.model, &properties, args.all)?;
                 eprintln!(" done");
                 // validate_properties(&args.properties, &jani_model.guarantees)?;
-                // if args.all {
-                //     args.properties = jani_model.guarantees;
-                // }
+                // // Reorder properties as they appear in the model
+                // args.properties = _promela_model.guarantees.clone();
                 run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
@@ -331,6 +327,8 @@ fn run_verification<'a, Ts, O>(
 where
     Ts: 'a + TransitionSystemGenerator + Sync,
     O: 'a + OracleGenerator + Sync,
+    Ts::Ts<'a>: Clone + Sync,
+    O::O<'a>: Clone + Sync,
 {
     if let Some(bar) = progress {
         eprintln!(

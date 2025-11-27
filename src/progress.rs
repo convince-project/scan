@@ -56,16 +56,23 @@ impl Bar {
             bars_guarantees.push((header, property));
         }
 
-        let overall_line = ProgressBar::new(1)
-            .with_style(property_header_style)
-            .with_prefix("overall system")
-            .with_message("0/0");
-        let overall_line = bars.add(overall_line);
-        overall_line.tick();
+        let overall_bar;
+        let mut overall_line;
+        if guarantees.len() > 1 {
+            overall_line = ProgressBar::new(1)
+                .with_style(property_header_style)
+                .with_prefix("overall system")
+                .with_message("0/0");
+            overall_line = bars.add(overall_line);
+            overall_line.tick();
 
-        // Overall property bar
-        let overall_bar = bars.add(ProgressBar::new(0).with_style(property_style));
-        overall_bar.tick();
+            // Overall property bar
+            overall_bar = bars.add(ProgressBar::new(0).with_style(property_style));
+            overall_bar.tick();
+        } else {
+            overall_line = ProgressBar::hidden();
+            overall_bar = ProgressBar::hidden();
+        }
 
         // Spinner
         let spinner_style =
@@ -111,11 +118,15 @@ impl Bar {
                 }
 
                 // overall property bar
-                overall_line.set_message(format!("{successes}/{failures}"));
-                overall_line.tick();
-                overall_bar.set_position(successes.into());
-                overall_bar.set_length(runs);
-                overall_bar.tick();
+                if !overall_line.is_hidden() {
+                    overall_line.set_message(format!("{successes}/{failures}"));
+                    overall_line.tick();
+                }
+                if !overall_bar.is_hidden() {
+                    overall_bar.set_position(successes.into());
+                    overall_bar.set_length(runs);
+                    overall_bar.tick();
+                }
 
                 // task progress bar
                 spinner.set_position(runs);
