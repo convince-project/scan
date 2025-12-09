@@ -27,9 +27,7 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{
-    CsModel, MtlOracle, OracleGenerator, PgModel, PmtlOracle, Scan, TransitionSystemGenerator,
-};
+use scan_core::{CsModel, MtlOracle, Oracle, PgModel, PmtlOracle, Scan, TransitionSystemGenerator};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -326,9 +324,8 @@ fn run_verification<'a, Ts, O>(
 ) -> Report
 where
     Ts: 'a + TransitionSystemGenerator + Sync,
-    O: 'a + OracleGenerator + Sync,
+    O: 'a + Oracle + Clone + Sync,
     Ts::Ts<'a>: Clone + Sync,
-    O::O<'a>: Clone + Sync,
 {
     if let Some(bar) = progress {
         eprintln!(

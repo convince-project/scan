@@ -1,4 +1,4 @@
-use crate::{Oracle, OracleGenerator, Time};
+use crate::{Oracle, Time};
 
 /// An Metric Temporal Logic (MTL) formula.
 #[derive(Debug, Clone)]
@@ -16,6 +16,7 @@ pub enum Mtl<V: Clone> {
 pub struct MtlOracle {
     assumes: Vec<(Mtl<usize>, Option<bool>)>,
     guarantees: Vec<(Mtl<usize>, Option<bool>)>,
+    time: Time,
 }
 
 impl MtlOracle {
@@ -30,20 +31,8 @@ impl MtlOracle {
     }
 }
 
-impl OracleGenerator for MtlOracle {
-    type O<'a>
-        = MtlOracle
-    where
-        Self: 'a;
-
-    fn generate<'a>(&'a self) -> Self::O<'a> {
-        // TODO real implementation
-        self.clone()
-    }
-}
-
 impl Oracle for MtlOracle {
-    fn update(&mut self, state: &[bool], _time: Time) {
+    fn update_state(&mut self, state: &[bool]) {
         self.guarantees
             .iter_mut()
             .chain(self.assumes.iter_mut())
@@ -79,5 +68,9 @@ impl Oracle for MtlOracle {
 
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool> {
         self.guarantees.iter().map(|(_, opt)| opt.unwrap_or(false))
+    }
+
+    fn update_time(&mut self, time: Time) {
+        self.time = time;
     }
 }

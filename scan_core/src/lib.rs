@@ -24,9 +24,9 @@ use dummy_rng::DummyRng;
 pub use grammar::{Expression, Float, Integer, Type, TypeError, Val};
 use log::{info, trace};
 pub use mtl::{Mtl, MtlOracle};
-pub use oracle::{Oracle, OracleGenerator};
+pub use oracle::Oracle;
 pub use pg_model::{PgModel, PgModelRun};
-pub use pmtl::{Pmtl, PmtlOracle, PmtlOracleRun};
+pub use pmtl::{Pmtl, PmtlOracle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
@@ -110,14 +110,13 @@ impl<TsG, OG> Scan<TsG, OG> {
     }
 }
 
-impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
+impl<TsG: TransitionSystemGenerator, OG: Oracle> Scan<TsG, OG> {
     fn verification(&self, confidence: f64, precision: f64, duration: Time) {
         let local_successes;
         let local_failures;
-        let oracle = self.oracle.generate();
         let mut ts = self.tsd.generate();
 
-        let result = ts.experiment(duration, oracle, self.running.clone());
+        let result = ts.experiment(duration, self.oracle.clone(), self.running.clone());
         if !self.running.load(Ordering::Relaxed) {
             return;
         }
@@ -185,9 +184,8 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
     where
         T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
-        let oracle = self.oracle.generate();
         let mut ts = self.tsd.generate();
-        ts.trace(duration, oracle, tracer)
+        ts.trace(duration, self.oracle.clone(), tracer)
     }
 
     /// Produces and saves the traces for the given number of runs,
@@ -211,7 +209,7 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
 impl<TsG, OG> Scan<TsG, OG>
 where
     TsG: TransitionSystemGenerator + Sync,
-    OG: OracleGenerator + Sync,
+    OG: Oracle + Sync,
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.
