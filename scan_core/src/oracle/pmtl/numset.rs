@@ -34,7 +34,7 @@ impl NumSet {
     }
 
     #[inline(always)]
-    pub(super) fn contains_interval(&self, lower_bound: Time, upper_bound: Time) -> bool {
+    fn _contains_interval(&self, lower_bound: Time, upper_bound: Time) -> bool {
         assert!(lower_bound <= upper_bound);
         match self.0.binary_search_by_key(&lower_bound, |&(t, _)| t) {
             Ok(i) => self.0[i].1 >= upper_bound,

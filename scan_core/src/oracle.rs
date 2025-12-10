@@ -1,4 +1,9 @@
+mod mtl;
+mod pmtl;
+
 use crate::Time;
+pub use mtl::{Mtl, MtlOracle};
+pub use pmtl::{Pmtl, PmtlOracle};
 
 /// Implementators are induced by a temporal property.
 /// They can update their internal state when fed a new state of a trace,
