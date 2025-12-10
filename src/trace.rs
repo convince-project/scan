@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{OracleGenerator, Scan, Time, Tracer, TransitionSystem, TransitionSystemGenerator};
+use scan_core::{Oracle, Scan, Time, Tracer, TransitionSystem, TransitionSystemGenerator};
 
 const ALL_PROPS_ERR: &str =
     "the --all flag is incompatible with individually-specified properties.\n
@@ -52,7 +52,7 @@ impl TraceArgs {
     pub(crate) fn trace<'a, D, Od, Tr>(&self, scan: &'a Scan<D, Od>, tracer: Tr)
     where
         D: TransitionSystemGenerator + Sync + 'a,
-        Od: OracleGenerator + Sync + 'a,
+        Od: Oracle + Sync + 'a,
         Tr: Clone
             + Sync
             + Tracer<<<D as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,

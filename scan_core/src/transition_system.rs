@@ -51,10 +51,13 @@ pub trait TransitionSystem {
 
     /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
     /// unless the execution is terminated and no further events can happen.
-    fn transition(&mut self, duration: Time) -> Option<Self::Event>;
+    fn transition(&mut self) -> Option<Self::Event>;
 
     /// Current time of the [`TransitionSystem`] (for timed systems).
     fn time(&self) -> Time;
+
+    /// Increase current time of the [`TransitionSystem`] (for timed systems).
+    fn time_tick(&mut self);
 
     /// The current values of the [`TransitionSystem`]'s labels.
     fn labels(&self) -> impl Iterator<Item = bool>;
@@ -73,15 +76,16 @@ pub trait TransitionSystem {
         let mut time;
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
-        while let Some(_event) = self.transition(duration) {
-            labels.clear();
-            labels.extend(self.labels());
-            time = self.time();
-            if time >= duration {
-                trace!("run stopped");
-                return RunOutcome::Incomplete;
+        while self.time() <= duration {
+            if let Some(_event) = self.transition() {
+                labels.clear();
+                labels.extend(self.labels());
+                oracle.update_state(&labels);
+            } else {
+                self.time_tick();
+                time = self.time();
+                oracle.update_time(time);
             }
-            oracle.update(&labels, time);
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return RunOutcome::Incomplete;
@@ -108,18 +112,18 @@ pub trait TransitionSystem {
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
         tracer.init();
-        while let Some(event) = self.transition(duration) {
-            // current_len += 1;
-            labels.clear();
-            labels.extend(self.labels());
-            time = self.time();
-            if time >= duration {
-                trace!("run stopped");
-                tracer.finalize(&RunOutcome::Incomplete);
-                return;
+        while self.time() <= duration {
+            if let Some(event) = self.transition() {
+                labels.clear();
+                labels.extend(self.labels());
+                time = self.time();
+                tracer.trace(&event, time, self.state());
+                oracle.update_state(&labels);
+            } else {
+                self.time_tick();
+                time = self.time();
+                oracle.update_time(time);
             }
-            tracer.trace(&event, time, self.state());
-            oracle.update(&labels, time);
         }
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());

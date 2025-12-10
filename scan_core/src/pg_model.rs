@@ -1,7 +1,7 @@
 use rand::{SeedableRng, rngs::SmallRng};
 
 use crate::{
-    Expression, TransitionSystem, Val,
+    Expression, Time, TransitionSystem, Val,
     program_graph::{
         Action, PgExpression, ProgramGraph, ProgramGraphBuilder, ProgramGraphRun, Var,
     },
@@ -44,6 +44,7 @@ impl TransitionSystemGenerator for PgModel {
             rng: SmallRng::from_os_rng(),
             global_vars: &self.global_vars,
             predicates: &self.predicates,
+            time: 0,
         }
     }
 }
@@ -56,17 +57,22 @@ pub struct PgModelRun<'def> {
     rng: SmallRng,
     global_vars: &'def [Var],
     predicates: &'def [Expression<Var>],
+    time: Time,
 }
 
 impl<'def> TransitionSystem for PgModelRun<'def> {
     type Event = Action;
 
-    fn transition(&mut self, _duration: crate::Time) -> Option<Action> {
+    fn transition(&mut self) -> Option<Action> {
         self.pg.montecarlo(&mut self.rng)
     }
 
-    fn time(&self) -> crate::Time {
-        0
+    fn time(&self) -> Time {
+        self.time
+    }
+
+    fn time_tick(&mut self) {
+        self.time += 1;
     }
 
     fn labels(&self) -> impl Iterator<Item = bool> {

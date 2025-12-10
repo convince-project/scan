@@ -10,10 +10,8 @@ pub mod channel_system;
 mod cs_model;
 mod dummy_rng;
 mod grammar;
-mod mtl;
 mod oracle;
 mod pg_model;
-mod pmtl;
 pub mod program_graph;
 mod smc;
 mod transition_system;
@@ -23,10 +21,8 @@ pub use cs_model::{Atom, CsModel, CsModelRun};
 use dummy_rng::DummyRng;
 pub use grammar::{Expression, Float, Integer, Type, TypeError, Val};
 use log::{info, trace};
-pub use mtl::{Mtl, MtlOracle};
-pub use oracle::{Oracle, OracleGenerator};
+pub use oracle::*;
 pub use pg_model::{PgModel, PgModelRun};
-pub use pmtl::{Pmtl, PmtlOracle, PmtlOracleRun};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
@@ -44,14 +40,9 @@ pub type Time = u32;
 /// The possible outcomes of a model execution.
 #[derive(Debug, Clone)]
 pub enum RunOutcome {
-    /// The run was not completed.
-    /// This can happen because:
-    ///
-    /// - Execution exceeded maximum length;
-    /// - Execution exceeded maximum duration; or
-    /// - Execution violated an assume.
+    /// The run was not completed because the execution violated an assume.
     Incomplete,
-    /// The run failed by violating the guarantees corresponding to the given index.
+    /// The run failed by violating the guarantees corresponding to the given index (if any).
     Verified(Vec<bool>),
 }
 
@@ -60,18 +51,18 @@ pub enum RunOutcome {
 /// The type of models and properties is abstracted through the [`TransitionSystem`] and [`Oracle`] traits,
 /// to provide a unified interface.
 #[derive(Debug, Clone)]
-pub struct Scan<TsG, OG> {
+pub struct Scan<TsG, O> {
     tsd: TsG,
-    oracle: OG,
+    oracle: O,
     running: Arc<AtomicBool>,
     successes: Arc<AtomicU32>,
     failures: Arc<AtomicU32>,
     violations: Arc<Mutex<Vec<u32>>>,
 }
 
-impl<TsG, OG> Scan<TsG, OG> {
+impl<TsG, O> Scan<TsG, O> {
     /// Create new [`Scan`] object.
-    pub fn new(tsd: TsG, oracle: OG) -> Self {
+    pub fn new(tsd: TsG, oracle: O) -> Self {
         Scan {
             tsd,
             oracle,
@@ -110,14 +101,13 @@ impl<TsG, OG> Scan<TsG, OG> {
     }
 }
 
-impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
+impl<TsG: TransitionSystemGenerator, O: Oracle> Scan<TsG, O> {
     fn verification(&self, confidence: f64, precision: f64, duration: Time) {
         let local_successes;
         let local_failures;
-        let oracle = self.oracle.generate();
         let mut ts = self.tsd.generate();
 
-        let result = ts.experiment(duration, oracle, self.running.clone());
+        let result = ts.experiment(duration, self.oracle.clone(), self.running.clone());
         if !self.running.load(Ordering::Relaxed) {
             return;
         }
@@ -185,9 +175,8 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
     where
         T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
     {
-        let oracle = self.oracle.generate();
         let mut ts = self.tsd.generate();
-        ts.trace(duration, oracle, tracer)
+        ts.trace(duration, self.oracle.clone(), tracer)
     }
 
     /// Produces and saves the traces for the given number of runs,
@@ -208,10 +197,10 @@ impl<TsG: TransitionSystemGenerator, OG: OracleGenerator> Scan<TsG, OG> {
     }
 }
 
-impl<TsG, OG> Scan<TsG, OG>
+impl<TsG, O> Scan<TsG, O>
 where
     TsG: TransitionSystemGenerator + Sync,
-    OG: OracleGenerator + Sync,
+    O: Oracle + Sync,
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.
