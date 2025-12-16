@@ -92,8 +92,8 @@ pub struct CsModelRun<'def> {
 impl<'def> TransitionSystem for CsModelRun<'def> {
     type Event = Event;
 
-    fn transition(&mut self, duration: Time) -> Option<Event> {
-        let event = self.cs.montecarlo_execution(duration);
+    fn transition(&mut self) -> Option<Event> {
+        let event = self.cs.montecarlo_execution();
         if let Some(ref event) = event
             && let EventType::Send(ref vals) = event.event_type
         {
@@ -113,6 +113,10 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
 
     fn time(&self) -> Time {
         self.cs.time()
+    }
+
+    fn time_tick(&mut self) {
+        self.cs.wait(1).expect("time error")
     }
 
     fn labels(&self) -> impl Iterator<Item = bool> {
