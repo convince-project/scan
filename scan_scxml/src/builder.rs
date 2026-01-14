@@ -290,13 +290,27 @@ impl ModelBuilder {
             }
             Executable::Send(Send {
                 event,
-                target: _,
+                target,
                 delay: _,
                 params,
             }) => {
                 let event_index = self.event_index(event);
-                let builder = self.events.get_mut(event_index).expect("index must exist");
-                builder.senders.insert(pg_id);
+                // add FSM to event's senders
+                self.events
+                    .get_mut(event_index)
+                    .expect("index must exist")
+                    .senders
+                    .insert(pg_id);
+                // If target is given by Id, add it to event's receivers
+                // This is not possible with dynamic targets
+                if let Some(Target::Id(target)) = target {
+                    let target_id = self.fsm_builder(target).pg_id;
+                    self.events
+                        .get_mut(event_index)
+                        .expect("index must exist")
+                        .receivers
+                        .insert(target_id);
+                }
                 for param in params {
                     // Update OMG_type value so that it contains its type for sure
                     let builder = self.events.get_mut(event_index).expect("index must exist");
