@@ -22,7 +22,7 @@ boa_interner = "0.21.0"
 boa_parser = "0.21.0"
 log = { workspace = true }
 rand = { workspace = true }
-quick-xml = "0.38.4"
+quick-xml = "0.39.0"
 thiserror = { workspace = true }
 logos = "0.16.0"
 chumsky = "0.12.0"
