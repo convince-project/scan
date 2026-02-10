@@ -118,7 +118,7 @@ use crate::{Time, grammar::*};
 pub use builder::*;
 use rand::rngs::SmallRng;
 use rand::seq::IteratorRandom;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use smallvec::SmallVec;
 use std::collections::VecDeque;
 use thiserror::Error;
@@ -327,7 +327,7 @@ impl ChannelSystem {
     /// See also [`ProgramGraph::new_instance`].
     pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
         ChannelSystemRun {
-            rng: SmallRng::from_os_rng(),
+            rng: rand::make_rng(),
             time: 0,
             program_graphs: Vec::from_iter(
                 self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),

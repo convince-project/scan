@@ -5,7 +5,7 @@
 //! The language features base types and product types,
 //! Boolean logic and basic arithmetic expressions.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::hash::Hash;
 use thiserror::Error;
 

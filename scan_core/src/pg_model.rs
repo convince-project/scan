@@ -1,4 +1,4 @@
-use rand::{SeedableRng, rngs::SmallRng};
+use rand::rngs::SmallRng;
 
 use crate::{
     Expression, Time, TransitionSystem, Val,
@@ -41,7 +41,7 @@ impl TransitionSystemGenerator for PgModel {
     fn generate<'a>(&'a self) -> Self::Ts<'a> {
         PgModelRun {
             pg: self.pg.new_instance(),
-            rng: SmallRng::from_os_rng(),
+            rng: rand::make_rng(),
             global_vars: &self.global_vars,
             predicates: &self.predicates,
             time: 0,

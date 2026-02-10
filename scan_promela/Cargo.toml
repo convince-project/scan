@@ -16,13 +16,13 @@ crate-type = ["lib"]   # The crate types to generate.
 
 [build-dependencies]
 cfgrammar = "0.14"
-lrlex = "0.14.0"
-lrpar = "0.14.0"
+lrlex = "0.14.1"
+lrpar = "0.14.1"
 
 [dependencies]
 cfgrammar = "0.14"
-lrlex = "0.14.0"
-lrpar = "0.14.0"
+lrlex = "0.14.1"
+lrpar = "0.14.1"
 regex = "1"
 scan_core = { path="../scan_core" }
 anyhow = { workspace = true }
