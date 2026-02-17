@@ -1,9 +1,9 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::{BufRead, Read},
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use log::{error, info, trace, warn};
 use quick_xml::{
     Reader,
@@ -12,48 +12,129 @@ use quick_xml::{
         attributes::{AttrError, Attribute},
     },
 };
+use scan_core::Type;
 
 use crate::parser::{ATTR_ID, TAG_DATA_TYPE_LIST, TAG_ENUMERATION, TAG_LABEL, TAG_STRUCT};
 use crate::parser::{ATTR_TYPE, ConvinceTag, ParserError, TAG_FIELD};
 
-#[derive(Debug, Clone)]
-pub enum OmgType {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OmgBaseType {
     Boolean,
     Int32,
     F64,
     Uri,
     String,
-    Structure(HashMap<String, String>),
+}
+
+impl TryFrom<&str> for OmgBaseType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "boolean" => Ok(OmgBaseType::Boolean),
+            "bool" => Ok(OmgBaseType::Boolean),
+            "int8" => Ok(OmgBaseType::Int32),
+            "int16" => Ok(OmgBaseType::Int32),
+            "int32" => Ok(OmgBaseType::Int32),
+            "int64" => Ok(OmgBaseType::Int32),
+            "string" => Ok(OmgBaseType::String),
+            "float32" => Ok(OmgBaseType::F64),
+            "float64" => Ok(OmgBaseType::F64),
+            "URI" => Ok(OmgBaseType::Uri),
+            _ => Err(anyhow!("unknown base type {value}")),
+        }
+    }
+}
+
+impl From<OmgBaseType> for Type {
+    fn from(value: OmgBaseType) -> Self {
+        match value {
+            OmgBaseType::Boolean => Type::Boolean,
+            OmgBaseType::Int32 => Type::Integer,
+            OmgBaseType::F64 => Type::Float,
+            OmgBaseType::Uri => Type::Integer,
+            OmgBaseType::String => Type::Integer,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OmgType {
+    Base(OmgBaseType),
+    Array(OmgBaseType, Option<usize>),
+    Custom(String),
+}
+
+impl OmgType {
+    pub fn size(&self, omg_types: &OmgTypes) -> anyhow::Result<usize> {
+        match self {
+            OmgType::Base(_omg_base_type) => Ok(1),
+            OmgType::Array(_omg_base_type, len) => len.ok_or(anyhow!("array of unknown len")),
+            OmgType::Custom(omg_name) => omg_types.size(&omg_name),
+        }
+    }
+}
+
+impl TryFrom<&str> for OmgType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if value.ends_with("[]") {
+            OmgBaseType::try_from(value).map(|t| OmgType::Array(t, None))
+        } else {
+            OmgBaseType::try_from(value).map(OmgType::Base)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum OmgTypeDef {
     Enumeration(Vec<String>),
+    Structure(BTreeMap<String, OmgType>),
+}
+
+impl From<OmgBaseType> for OmgType {
+    fn from(value: OmgBaseType) -> Self {
+        OmgType::Base(value)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct OmgTypes {
-    pub(crate) types: Vec<(String, OmgType)>,
+    pub(crate) type_defs: HashMap<String, OmgTypeDef>,
 }
 
 impl OmgTypes {
-    pub const BASE_TYPES: [(&'static str, OmgType); 10] = [
-        ("boolean", OmgType::Boolean),
-        ("bool", OmgType::Boolean),
-        ("int8", OmgType::Int32),
-        ("int16", OmgType::Int32),
-        ("int32", OmgType::Int32),
-        ("int64", OmgType::Int32),
-        ("string", OmgType::String),
-        ("float32", OmgType::F64),
-        ("float64", OmgType::F64),
-        ("URI", OmgType::Uri),
-    ];
-
     pub fn new() -> Self {
         Self {
-            types: Vec::from_iter(
-                Self::BASE_TYPES
-                    .into_iter()
-                    .map(|(id, ty)| (id.to_owned(), ty)),
-            ),
+            type_defs: HashMap::new(),
         }
+    }
+
+    pub fn size(&self, omg_name: &str) -> anyhow::Result<usize> {
+        match self.find_type(omg_name)? {
+            OmgType::Base(_omg_base_type) => Ok(1),
+            OmgType::Array(_omg_base_type, len) => len.ok_or(anyhow!("array of unknown len")),
+            OmgType::Custom(_) => match self.type_defs.get(omg_name).unwrap() {
+                OmgTypeDef::Enumeration(_items) => Ok(1),
+                OmgTypeDef::Structure(fields) => fields
+                    .iter()
+                    .map(|(_, omg_type)| omg_type.size(&self))
+                    .sum(),
+            },
+        }
+    }
+
+    pub fn find_type(&self, omg_name: &str) -> anyhow::Result<OmgType> {
+        omg_name
+            .try_into()
+            .ok()
+            .or_else(|| {
+                self.type_defs
+                    .get(omg_name)
+                    .map(|_def| OmgType::Custom(omg_name.to_string()))
+            })
+            .ok_or_else(|| anyhow!("type {} not known", omg_name))
     }
 
     pub fn parse<R: BufRead>(&mut self, reader: &mut Reader<R>) -> anyhow::Result<()> {
@@ -76,8 +157,8 @@ impl OmgTypes {
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
                             let id = self.parse_id(tag)?;
-                            self.types
-                                .push((id.to_owned(), OmgType::Enumeration(Vec::new())));
+                            self.type_defs
+                                .insert(id.to_owned(), OmgTypeDef::Enumeration(Vec::new()));
                             stack.push(ConvinceTag::Enumeration(id));
                         }
                         TAG_STRUCT
@@ -86,8 +167,8 @@ impl OmgTypes {
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
                             let id = self.parse_id(tag)?;
-                            self.types
-                                .push((id.to_owned(), OmgType::Structure(HashMap::new())));
+                            self.type_defs
+                                .insert(id.to_owned(), OmgTypeDef::Structure(BTreeMap::new()));
                             stack.push(ConvinceTag::Structure(id));
                         }
                         // Unknown tag: skip till matching end tag
@@ -121,9 +202,8 @@ impl OmgTypes {
                         {
                             if let Some(ConvinceTag::Enumeration(id)) = stack.last() {
                                 let label = self.parse_id(tag)?;
-                                let (enum_id, omg_type) = self.types.last_mut().unwrap();
-                                assert_eq!(id, enum_id);
-                                if let OmgType::Enumeration(labels) = omg_type {
+                                let omg_type = self.type_defs.get_mut(id).unwrap();
+                                if let OmgTypeDef::Enumeration(labels) = omg_type {
                                     labels.push(label.to_owned());
                                 } else {
                                     panic!("unexpected type");
@@ -136,10 +216,12 @@ impl OmgTypes {
                                 .is_some_and(|tag| matches!(*tag, ConvinceTag::Structure(_))) =>
                         {
                             if let Some(ConvinceTag::Structure(id)) = stack.last() {
-                                let (field_id, field_type) = self.parse_struct(tag)?;
-                                let (struct_id, omg_type) = self.types.last_mut().unwrap();
-                                assert_eq!(id, struct_id);
-                                if let OmgType::Structure(fields) = omg_type {
+                                let (field_id, field_type) =
+                                    self.parse_struct(tag).with_context(|| {
+                                        format!("failed parsing field of struct {id}")
+                                    })?;
+                                let omg_type = self.type_defs.get_mut(id).unwrap();
+                                if let OmgTypeDef::Structure(fields) = omg_type {
                                     fields.insert(field_id, field_type);
                                 } else {
                                     panic!("unexpected type");
@@ -209,7 +291,7 @@ impl OmgTypes {
         id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))
     }
 
-    fn parse_struct(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<(String, String)> {
+    fn parse_struct(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<(String, OmgType)> {
         let mut id: Option<String> = None;
         let mut field_type: Option<String> = None;
         for attr in tag
@@ -232,6 +314,9 @@ impl OmgTypes {
         let id = id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))?;
         let field_type =
             field_type.ok_or(anyhow!(ParserError::MissingAttr(ATTR_TYPE.to_string())))?;
+        let field_type = self.find_type(field_type.as_str()).with_context(|| {
+            format!("field {id} of type {field_type} not a supported base type")
+        })?;
         Ok((id, field_type))
     }
 }

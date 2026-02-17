@@ -1,7 +1,11 @@
 //! Model builder for SCAN's XML specification format.
 
-use crate::parser::{Executable, If, OmgType, OmgTypes, Param, Parser, Scxml, Send, Target};
+use crate::parser::{
+    Data, Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send,
+    Target,
+};
 use anyhow::{Context, anyhow, bail};
+use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
 use boa_interner::{Interner, ToInternedString};
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
@@ -17,7 +21,9 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct ScxmlModel {
     pub fsm_names: HashMap<PgId, String>,
+    // TODO FIXME Remove fsm indexes and use PgId.0 instead
     pub fsm_indexes: HashMap<usize, String>,
+    // usize here represents event index
     pub parameters: HashMap<Channel, (PgId, PgId, usize)>,
     pub int_queues: HashSet<Channel>,
     pub ext_queues: HashMap<Channel, PgId>,
@@ -37,27 +43,26 @@ struct FsmBuilder {
 struct EventBuilder {
     // Associates parameter's name with its type's name.
     name: String,
-    params: BTreeMap<String, String>,
+    params: BTreeMap<String, Option<OmgType>>,
     senders: HashSet<PgId>,
     receivers: HashSet<PgId>,
     index: usize,
 }
 
-#[derive(Debug, Clone)]
-enum EcmaObj<V: Clone> {
-    PrimitiveData(Expression<V>, String),
-    // Associates property name with content, which can be another object.
-    Properties(HashMap<String, EcmaObj<V>>),
+impl EventBuilder {
+    pub fn r#type(&self) -> Option<OmgTypeDef> {
+        self.params
+            .iter()
+            .map(|(name, t)| t.clone().map(|t| (name.clone(), t)))
+            .collect::<Option<BTreeMap<_, _>>>()
+            .map(|fields| OmgTypeDef::Structure(fields))
+    }
 }
 
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
 #[derive(Default)]
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder,
-    // Associates a type's id with both its OMG type and SCAN type.
-    // NOTE: This is necessary because, at the moment, it is not possible to derive one from the other.
-    // QUESTION: is there a better way?
-    types: HashMap<String, (OmgType, Type)>,
     // Associates an enum's label with a **globally unique** index.
     // The same label can belong to multiple enums,
     // and given a label it is not possible to recover the originating enum.
@@ -82,18 +87,20 @@ pub struct ModelBuilder {
     // - sentEvent (index)
     // - paramName
     // that is needed
-    parameters: HashMap<(PgId, PgId, usize, String), (Channel, usize)>,
+    parameters: HashMap<(PgId, PgId, usize, String), (Channel, Vec<(usize, Type)>)>,
     parameter_channels: HashMap<(PgId, PgId, usize), Channel>,
     // Properties
     guarantees: Vec<(String, Pmtl<usize>)>,
     assumes: Vec<(String, Pmtl<usize>)>,
     predicates: Vec<Expression<Atom>>,
-    ports: HashMap<String, (Atom, Val)>,
+    ports: HashMap<String, (OmgType, Vec<(Atom, Val)>)>,
     // extra data
     int_queues: HashSet<Channel>,
 }
 
 impl ModelBuilder {
+    const ENTRY: &str = "ENTRY";
+
     /// Turns the [`Parser`] into a [`ChannelSystem`].
     ///
     /// Can fail if the model specification contains semantic errors
@@ -111,7 +118,7 @@ impl ModelBuilder {
         info!(target: "build", "Visit process list");
         for (id, fsm) in parser.process_list.iter() {
             model_builder
-                .build_fsm(fsm, &mut parser.interner)
+                .build_fsm(fsm, &mut parser.interner, &parser.types)
                 .with_context(|| format!("failed building FSM '{id}'"))?;
         }
 
@@ -125,12 +132,20 @@ impl ModelBuilder {
 
     fn build_types(&mut self, omg_types: &OmgTypes) -> anyhow::Result<()> {
         info!(target: "build", "Building types");
-        for (name, omg_type) in omg_types.types.iter() {
-            let scan_type = match omg_type {
-                OmgType::Boolean => Type::Boolean,
-                OmgType::Int32 => Type::Integer,
-                OmgType::F64 => Type::Float,
-                OmgType::Uri => Type::Integer,
+        for (name, omg_type) in omg_types.type_defs.iter() {
+            match omg_type {
+                // OmgType::Base(base) => {
+                //     self.types.insert(name.to_owned(), (*base, base.into()));
+                // }
+                // OmgType::Array(data, len) => {
+                //     // Create a variable for each entry of the array and identify it with a derived name
+                //     // WARN: risk of name clashing
+                //     // TODO: find more robust solution
+                //     for i in 0..*len {
+                //         self.types
+                //             .insert(format!("{name}__{}_{i}", Self::ENTRY), (*data, data.into()));
+                //     }
+                // }
                 // OmgType::Structure(fields) => {
                 //     let mut fields_type: Vec<Type> = Vec::new();
                 //     for (index, (field_id, field_type)) in fields.iter().enumerate() {
@@ -148,7 +163,7 @@ impl ModelBuilder {
                 //     }
                 //     Type::Product(fields_type)
                 // }
-                OmgType::Enumeration(labels) => {
+                OmgTypeDef::Enumeration(labels) => {
                     // NOTE: enum labels are assigned a **globally unique** index,
                     // and the same label can appear in different enums.
                     // This makes it so that SUCCESS and FAILURE from ActionResponse are the same as those in ConditionResponse.
@@ -158,13 +173,9 @@ impl ModelBuilder {
                             self.enums.insert(label.to_owned(), idx as Integer);
                         }
                     }
-                    Type::Integer
                 }
-                OmgType::String => Type::Integer,
-                _ => bail!("type {omg_type:?} currently unsupported"),
-            };
-            self.types
-                .insert(name.to_owned(), (omg_type.to_owned(), scan_type));
+                _ => {} // _ => bail!("type {omg_type:?} currently unsupported"),
+            }
         }
         Ok(())
     }
@@ -200,7 +211,7 @@ impl ModelBuilder {
     fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
         for (id, fsm) in parser.process_list.iter_mut() {
             let pg_id = self.fsm_builder(id).pg_id;
-            self.prebuild_fsm(pg_id, fsm, &parser.interner)
+            self.prebuild_fsm(pg_id, fsm, &parser.interner, &parser.types)
                 .with_context(|| {
                     format!(
                         "failed pre-processing of fsm {}",
@@ -213,7 +224,7 @@ impl ModelBuilder {
         for eb in &self.events {
             for (param, t) in &eb.params {
                 // Mark with empty string parameters without known type
-                if t.is_empty() {
+                if t.is_none() {
                     bail!("param {param} of event {} needs type annotation", eb.name);
                 }
             }
@@ -226,14 +237,17 @@ impl ModelBuilder {
         pg_id: PgId,
         fmt: &mut Scxml,
         interner: &Interner,
+        omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
-        let mut types = HashMap::new();
+        let mut vars: HashMap<String, OmgType> = HashMap::new();
         for data in &fmt.datamodel {
-            types.insert(data.id.to_owned(), data.omg_type.as_str().to_owned());
+            if let Some(r#type) = &data.omg_type {
+                vars.insert(data.id.to_owned(), r#type.clone());
+            }
         }
         for (_, state) in fmt.states.iter_mut() {
             for exec in state.on_entry.iter_mut() {
-                self.prebuild_exec(pg_id, exec, &types, interner)
+                self.prebuild_exec(pg_id, exec, &vars, interner, omg_types)
                     .with_context(|| {
                         format!(
                             "failed pre-processing of executable on entry of state {}",
@@ -249,13 +263,13 @@ impl ModelBuilder {
                     builder.receivers.insert(pg_id);
                 }
                 for exec in transition.effects.iter_mut() {
-                    self.prebuild_exec(pg_id, exec, &types, interner).with_context(|| {
+                    self.prebuild_exec(pg_id, exec, &vars, interner, omg_types).with_context(|| {
                         format!("failed pre-processing of executable in transition {index} of state {}", state.id)
                     })?;
                 }
             }
             for exec in state.on_exit.iter_mut() {
-                self.prebuild_exec(pg_id, exec, &types, interner)
+                self.prebuild_exec(pg_id, exec, &vars, interner, omg_types)
                     .with_context(|| {
                         format!(
                             "failed pre-processing of executable on exit of state {}",
@@ -271,8 +285,9 @@ impl ModelBuilder {
         &mut self,
         pg_id: PgId,
         executable: &mut Executable,
-        types: &HashMap<String, String>,
+        vars: &HashMap<String, OmgType>,
         interner: &Interner,
+        omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
         match executable {
             Executable::Assign {
@@ -314,13 +329,11 @@ impl ModelBuilder {
                 for param in params {
                     // Update OMG_type value so that it contains its type for sure
                     let builder = self.events.get_mut(event_index).expect("index must exist");
-                    if let Some(t) = builder.params.get(&param.name)
-                        && !t.is_empty()
-                    {
+                    if let Some(Some(t)) = builder.params.get(&param.name) {
                         if let Some(omg) = param.omg_type.as_ref() {
                             if t != omg {
                                 bail!(
-                                    "type parameter mismatch: {t} != {omg} for parameter {}",
+                                    "type parameter mismatch: {t:?} != {omg:?} for parameter {}",
                                     param.name
                                 );
                             }
@@ -328,15 +341,15 @@ impl ModelBuilder {
                             let _ = param.omg_type.insert(t.clone());
                         }
                     } else if let Some(t) = param.omg_type.as_ref() {
-                        builder.params.insert(param.name.clone(), t.clone());
-                    } else if let Ok(t) = self.infer_type(&param.expr, types, interner) {
+                        builder.params.insert(param.name.clone(), Some(t.clone()));
+                    } else if let Ok(t) = self.infer_type(&param.expr, vars, interner, omg_types) {
                         let _ = param.omg_type.insert(t.clone());
                         let builder = self.events.get_mut(event_index).expect("index must exist");
-                        builder.params.insert(param.name.clone(), t);
+                        builder.params.insert(param.name.clone(), Some(t));
                     } else {
-                        // Mark with empty string parameters without known type
+                        // Mark with None parameters without known type
                         let builder = self.events.get_mut(event_index).expect("index must exist");
-                        builder.params.insert(param.name.clone(), String::new());
+                        builder.params.insert(param.name.clone(), None);
                     }
                 }
                 Ok(())
@@ -349,12 +362,12 @@ impl ModelBuilder {
                 // preprocess all executables
                 for (_, executables) in elifs {
                     for executable in executables {
-                        self.prebuild_exec(pg_id, executable, types, interner)
+                        self.prebuild_exec(pg_id, executable, vars, interner, omg_types)
                             .context("failed pre-processing executable content in <if> element")?;
                     }
                 }
                 for executable in r#else {
-                    self.prebuild_exec(pg_id, executable, types, interner)
+                    self.prebuild_exec(pg_id, executable, vars, interner, omg_types)
                         .context("failed pre-processing executable content in <else> element")?;
                 }
                 Ok(())
@@ -365,18 +378,18 @@ impl ModelBuilder {
     fn infer_type(
         &self,
         expr: &boa_ast::Expression,
-        types: &HashMap<String, String>,
+        vars: &HashMap<String, OmgType>,
         interner: &Interner,
-    ) -> anyhow::Result<String> {
+        omg_types: &OmgTypes,
+    ) -> anyhow::Result<OmgType> {
         match expr {
             boa_ast::Expression::Identifier(ident) => {
                 let ident = ident.to_interned_string(interner);
-                types
-                    .get(&ident)
+                vars.get(&ident)
                     .cloned()
                     .or_else(|| {
                         if self.enums.contains_key(&ident) {
-                            Some(String::from("int32"))
+                            Some(OmgBaseType::Int32.into())
                         } else {
                             None
                         }
@@ -386,22 +399,24 @@ impl ModelBuilder {
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::LiteralKind;
                 match lit.kind() {
-                    LiteralKind::String(_) => Ok(String::from("string")),
-                    LiteralKind::Num(_) => Ok(String::from("float64")),
-                    LiteralKind::Int(_) => Ok(String::from("int32")),
+                    LiteralKind::String(_) => Ok(OmgBaseType::String.into()),
+                    LiteralKind::Num(_) => Ok(OmgBaseType::F64.into()),
+                    LiteralKind::Int(_) => Ok(OmgBaseType::Int32.into()),
                     // Literal::BigInt(_) => todo!(),
-                    LiteralKind::Bool(_) => Ok(String::from("bool")),
+                    LiteralKind::Bool(_) => Ok(OmgBaseType::Boolean.into()),
                     _ => Err(anyhow!(
                         "unable to infer type for literal expression '{lit:?}'"
                     )),
                 }
             }
             boa_ast::Expression::Unary(unary) => {
-                let type_name = self.infer_type(unary.target(), types, interner)?;
+                let type_name = self.infer_type(unary.target(), vars, interner, omg_types)?;
                 match unary.op() {
                     boa_ast::expression::operator::unary::UnaryOp::Minus
                     | boa_ast::expression::operator::unary::UnaryOp::Plus => Ok(type_name),
-                    boa_ast::expression::operator::unary::UnaryOp::Not => Ok(String::from("bool")),
+                    boa_ast::expression::operator::unary::UnaryOp::Not => {
+                        Ok(OmgBaseType::Boolean.into())
+                    }
                     _ => Err(anyhow!(
                         "unable to infer type for operator '{:?}'",
                         unary.op()
@@ -409,20 +424,18 @@ impl ModelBuilder {
                 }
             }
             boa_ast::Expression::Binary(bin) => {
-                let type_name = self.infer_type(bin.lhs(), types, interner)?;
-                let lhs = self
-                    .types
-                    .get(&type_name)
-                    .ok_or(anyhow!("unknown type {type_name}"))?
-                    .1;
-                let rhs = self
-                    .infer_type(bin.lhs(), types, interner)
-                    .and_then(|t| self.types.get(&t).ok_or(anyhow!("unknown type {t}")))?
-                    .1;
+                let lhs = self.infer_type(bin.lhs(), vars, interner, omg_types)?;
+                let rhs = self.infer_type(bin.rhs(), vars, interner, omg_types)?;
                 match bin.op() {
                     boa_ast::expression::operator::binary::BinaryOp::Arithmetic(op) => {
-                        if lhs == rhs {
-                            Ok(type_name)
+                        if let (OmgType::Base(lhs_type), OmgType::Base(rhs_type)) = (lhs, rhs) {
+                            if lhs_type == rhs_type {
+                                Ok(OmgType::Base(lhs_type))
+                            } else {
+                                Err(anyhow!(
+                                    "unable to infer type for operator '{op:?}' arithmetic expression"
+                                ))
+                            }
                         } else {
                             Err(anyhow!(
                                 "unable to infer type for operator '{op:?}' arithmetic expression"
@@ -434,14 +447,16 @@ impl ModelBuilder {
                     }
                     boa_ast::expression::operator::binary::BinaryOp::Relational(_)
                     | boa_ast::expression::operator::binary::BinaryOp::Logical(_) => {
-                        Ok(String::from("bool"))
+                        Ok(OmgBaseType::Boolean.into())
                     }
                     boa_ast::expression::operator::binary::BinaryOp::Comma => Err(anyhow!(
                         "unknown binary operator 'comma', unable to infer type"
                     )),
                 }
             }
-            boa_ast::Expression::Call(call) => self.infer_type(call.function(), types, interner),
+            boa_ast::Expression::Call(call) => {
+                self.infer_type(call.function(), vars, interner, omg_types)
+            }
             boa_ast::Expression::PropertyAccess(property_access) => match property_access {
                 boa_ast::expression::access::PropertyAccess::Simple(simple_property_access) => {
                     if let &boa_ast::Expression::Identifier(ident) = simple_property_access.target()
@@ -452,9 +467,9 @@ impl ModelBuilder {
                                     identifier,
                                 ) => {
                                     if identifier.sym() == interner.get("floor").unwrap() {
-                                        Ok(String::from("int32"))
+                                        Ok(OmgBaseType::Int32.into())
                                     } else if identifier.sym() == interner.get("random").unwrap() {
-                                        Ok(String::from("float64"))
+                                        Ok(OmgBaseType::F64.into())
                                     } else {
                                         Err(anyhow!(
                                             "unknown expression '{expr:?}', unable to infer type"
@@ -489,7 +504,12 @@ impl ModelBuilder {
         }
     }
 
-    fn build_fsm(&mut self, scxml: &Scxml, interner: &mut Interner) -> anyhow::Result<()> {
+    fn build_fsm(
+        &mut self,
+        scxml: &Scxml,
+        interner: &mut Interner,
+        omg_types: &OmgTypes,
+    ) -> anyhow::Result<()> {
         trace!(target: "build", "build FSM {}", scxml.name);
         // Initialize FSM.
         let pg_builder = self
@@ -500,35 +520,24 @@ impl ModelBuilder {
         let ext_queue = pg_builder.ext_queue;
         // Initialize variables from datamodel
         // NOTE vars cannot be initialized using previously defined vars because datamodel is an HashMap
-        let mut vars = HashMap::new();
+        let mut vars: HashMap<String, (OmgType, Vec<(Var, Type)>)> = HashMap::new();
         for data in scxml.datamodel.iter() {
-            let scan_type = self
-                .types
-                .get(data.omg_type.as_str())
-                .ok_or(anyhow!("data {} has unknown type", data.id))?
-                .1
-                .to_owned();
-            let expr = data
-                .expression
+            let omg_type = data
+                .omg_type
                 .as_ref()
-                .map(|expr| {
-                    self.expression(
-                        expr,
-                        interner,
-                        &vars,
-                        None,
-                        &HashMap::new(),
-                        Some(scan_type),
-                    )
-                })
-                .transpose()
-                .with_context(|| anyhow!("failed computing expression for data {}", data.id))?
-                .unwrap_or_else(|| CsExpression::Const(scan_type.default_value()));
-            let var = self.cs.new_var(pg_id, expr).expect("program graph exists!");
-            vars.insert(data.id.to_owned(), (var, data.omg_type.to_owned()));
+                .ok_or_else(|| anyhow!("data {} has unknown type", data.id))?;
+            let data_vars = self.build_data(
+                interner,
+                pg_id,
+                &mut vars,
+                data.expression.as_ref(),
+                omg_type,
+                omg_types,
+            )?;
+            vars.insert(data.id.to_owned(), (omg_type.clone(), data_vars));
         }
         // Make vars immutable
-        let vars = vars;
+        let mut vars = vars;
         // Initial location of Program Graph.
         let initial_loc = self
             .cs
@@ -575,36 +584,35 @@ impl ModelBuilder {
             .expect("hand-coded args");
 
         // Create variables and channels for the storage of the parameters sent by external events.
-        let mut param_vars: HashMap<(usize, String), (Var, String)> = HashMap::new(); // maps (event_idx, param_name) -> (param_var, type_name)
-        let mut param_actions: HashMap<(PgId, usize), Action> = HashMap::new(); // maps (sender_pg_id, event) -> param_action
+        let mut params_vars: HashMap<(usize, String), (OmgType, Vec<(Var, Type)>)> = HashMap::new(); // maps (event_idx, param_name) -> (omg_type, (param_vars, var_types))
+        let mut params_actions: HashMap<(PgId, usize), Action> = HashMap::new(); // maps (sender_pg_id, event) -> param_action
         for event_builder in self
             .events
             .iter()
             // only consider events that can activate some transition and that some other process is sending.
             .filter(|eb| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
+            // WARN TODO Necessary to satisfy the borrow checker but it should be possible to avoid cloning.
+            .cloned()
+            .collect::<Vec<_>>()
         {
             let event_index = event_builder.index;
             let mut param_vars_vec = Vec::new();
             let mut param_types_vec = Vec::new();
             // sorted in alphabetical order because of BTreeMap
-            for (param_name, param_type_name) in event_builder.params.iter() {
-                let param_type = self
-                    .types
-                    .get(param_type_name)
-                    .ok_or_else(|| {
-                        anyhow!("type {param_type_name} of param {param_name} not found")
-                    })?
-                    .1;
-                // Variable where to store parameter.
-                let param_var = self
-                    .cs
-                    .new_var(pg_id, CsExpression::Const(param_type.default_value()))
-                    .expect("hand-made input");
-                param_vars_vec.push(param_var);
-                param_types_vec.push(param_type);
-                let old = param_vars.insert(
+            for (param_name, param_type) in event_builder.params.iter() {
+                let param_omg_type = param_type
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("type of param {param_name} not found"))?;
+                // Variables where to store parameter.
+                let param_vars_types =
+                    self.build_data(interner, pg_id, &mut vars, None, param_omg_type, omg_types)?;
+                let param_vars: Vec<Var> = param_vars_types.iter().map(|(v, _)| *v).collect();
+                let param_types: Vec<Type> = param_vars_types.iter().map(|(_, t)| *t).collect();
+                param_vars_vec.extend_from_slice(&param_vars);
+                param_types_vec.extend_from_slice(&param_types);
+                let old = params_vars.insert(
                     (event_index, param_name.to_owned()),
-                    (param_var, param_type_name.clone()),
+                    (param_omg_type.clone(), param_vars_types),
                 );
                 assert!(old.is_none());
             }
@@ -614,25 +622,39 @@ impl ModelBuilder {
                         .parameter_channels
                         .entry((sender_id, pg_id, event_index))
                         .or_insert(self.cs.new_channel(param_types_vec.clone(), None));
-                    for (param_idx, (param_name, _)) in event_builder.params.iter().enumerate() {
+                    let mut param_idx = 0;
+                    for (param_name, omg_type) in event_builder.params.iter() {
+                        let omg_type = omg_type.as_ref().ok_or_else(|| {
+                            anyhow!("type of param {param_name} of event {}", event_builder.name)
+                        })?;
+                        let param_size = omg_type.size(omg_types)?;
                         self.parameters.insert(
                             (sender_id, pg_id, event_index, param_name.clone()),
-                            (params_channel, param_idx),
+                            (
+                                params_channel,
+                                Vec::from_iter(
+                                    param_types_vec[param_idx..param_idx + param_size]
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(idx, var_type)| (idx + param_idx, var_type.clone())),
+                                ),
+                            ),
                         );
+                        param_idx += param_size;
                     }
 
                     let read = self
                         .cs
                         .new_receive(pg_id, params_channel, param_vars_vec.clone())
                         .expect("must work");
-                    let old = param_actions.insert((sender_id, event_index), read);
+                    let old = params_actions.insert((sender_id, event_index), read);
                     assert!(old.is_none());
                 }
             }
         }
         // Make non-mut
-        let param_vars = param_vars;
-        let param_actions = param_actions;
+        let param_vars = params_vars;
+        let param_actions = params_actions;
 
         // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
@@ -657,6 +679,7 @@ impl ModelBuilder {
                         None,
                         &HashMap::new(),
                         interner,
+                        omg_types,
                     )
                     .with_context(|| {
                         anyhow!(
@@ -820,10 +843,10 @@ impl ModelBuilder {
                     exec_params = param_vars
                         .iter()
                         .filter(|((ev_ix, _), _)| *ev_ix == event_index)
-                        .map(|((_, param_name), (var, tp))| {
-                            (param_name.to_owned(), (*var, tp.to_owned()))
+                        .map(|((_, param_name), (t, vars))| {
+                            (param_name.to_owned(), (t.clone(), vars.clone()))
                         })
-                        .collect::<HashMap<String, (Var, String)>>();
+                        .collect::<HashMap<String, (OmgType, Vec<(Var, Type)>)>>();
                 } else {
                     exec_origin = None;
                     exec_params = HashMap::new();
@@ -831,7 +854,7 @@ impl ModelBuilder {
                 // Condition activating the transition.
                 // It has to be parsed/built as a Boolean expression.
                 // Could fail if `expr` is invalid.
-                let cond: Option<CsExpression> = transition
+                let cond: Option<Vec<CsExpression>> = transition
                     .cond
                     .as_ref()
                     .map(|cond| {
@@ -841,10 +864,15 @@ impl ModelBuilder {
                             &vars,
                             exec_origin.as_ref(),
                             &exec_params,
-                            Some(Type::Boolean),
+                            Some(&OmgBaseType::Boolean.into()),
+                            omg_types,
                         ).with_context(|| anyhow!("failed building conditional expression for transition #{transition_index} in state {}", state.id))
                     })
                     .transpose()?;
+                if cond.as_ref().is_some_and(|cond| cond.len() != 1) {
+                    bail!("condition is not a boolean expression");
+                }
+                let cond = cond.map(|cond| cond.first().expect("length 1").clone());
 
                 // Location corresponding to checking if the transition is active.
                 // Has to be defined depending on the type of transition.
@@ -907,6 +935,7 @@ impl ModelBuilder {
                             exec_origin,
                             &exec_params,
                             interner,
+                            omg_types,
                         )
                         .with_context(|| {
                             anyhow!(
@@ -926,6 +955,7 @@ impl ModelBuilder {
                             exec_origin,
                             &exec_params,
                             interner,
+                            omg_types,
                         )
                         .with_context(|| {
                             anyhow!(
@@ -967,6 +997,113 @@ impl ModelBuilder {
         Ok(())
     }
 
+    fn build_data(
+        &mut self,
+        interner: &mut Interner,
+        pg_id: PgId,
+        vars: &mut HashMap<String, (OmgType, Vec<(Var, Type)>)>,
+        expr: Option<&boa_ast::Expression>,
+        omg_type: &OmgType,
+        omg_types: &OmgTypes,
+    ) -> Result<Vec<(Var, Type)>, anyhow::Error> {
+        match omg_type {
+            OmgType::Base(omg_base_type) => {
+                let r#type = Type::from(*omg_base_type);
+                let expr = expr
+                    .map(|expr| {
+                        self.expression(
+                            expr,
+                            interner,
+                            vars,
+                            None,
+                            &HashMap::new(),
+                            Some(&(*omg_base_type).into()),
+                            omg_types,
+                        )
+                    })
+                    .transpose()
+                    .context(anyhow!("failed computing expression while building data"))?
+                    .unwrap_or_else(|| vec![CsExpression::Const(r#type.default_value())]);
+                if expr.len() != 1 {
+                    bail!("expression is not of type {omg_base_type:?}",);
+                }
+                let expr = expr.first().expect("vec of lenght 1").clone();
+                let var = self.cs.new_var(pg_id, expr).expect("program graph exists!");
+                Ok(vec![(var, r#type)])
+            }
+            OmgType::Custom(name) => match omg_types
+                .type_defs
+                .get(name)
+                .ok_or_else(|| anyhow!("type {name} not defined"))?
+            {
+                OmgTypeDef::Enumeration(_labels) => {
+                    let expr = expr
+                        .map(|expr| {
+                            self.expression(
+                                expr,
+                                interner,
+                                vars,
+                                None,
+                                &HashMap::new(),
+                                Some(&OmgBaseType::Int32.into()),
+                                omg_types,
+                            )
+                        })
+                        .transpose()
+                        .context(anyhow!("failed computing expression while building data"))?
+                        .unwrap_or_else(|| {
+                            vec![CsExpression::Const(Type::Integer.default_value())]
+                        });
+                    if expr.len() != 1 {
+                        bail!("expression {:?} is not of enumeration type", expr);
+                    }
+                    let expr = expr.first().expect("vec of lenght 1").clone();
+                    let var = self.cs.new_var(pg_id, expr).expect("program graph exists!");
+                    Ok(vec![(var, Type::Integer)])
+                }
+                OmgTypeDef::Structure(_hash_map) => todo!(),
+            },
+            OmgType::Array(omg_base_type, len) => {
+                let r#type = Type::from(*omg_base_type);
+                // Create a variable for each entry of the array and identify it with a derived name
+                // WARN: risk of name clashing
+                // TODO: find more robust solution
+                let expr = expr
+                    .map(|expr| {
+                        self.expression(
+                            expr,
+                            interner,
+                            &*vars,
+                            None,
+                            &HashMap::new(),
+                            Some(&(*omg_base_type).into()),
+                            omg_types,
+                        )
+                    })
+                    .transpose()
+                    .context(anyhow!("failed computing expression while building data"))?
+                    .or_else(|| {
+                        len.map(|len| vec![CsExpression::Const(r#type.default_value()); len])
+                    })
+                    .ok_or_else(|| anyhow!("cannot initialize data"))?;
+                (0..expr.len())
+                    .map(|i| {
+                        expr.get(i)
+                            .map(|expr| {
+                                (
+                                    self.cs
+                                        .new_var(pg_id, expr.clone())
+                                        .expect("program graph exists!"),
+                                    r#type,
+                                )
+                            })
+                            .ok_or_else(|| anyhow!("wrong lenght of array"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            }
+        }
+    }
+
     // WARN: vars and params have the same type so they could be easily swapped by mistake when calling the function.
     fn add_executable(
         &mut self,
@@ -974,10 +1111,11 @@ impl ModelBuilder {
         pg_id: PgId,
         int_queue: Channel,
         loc: Location,
-        vars: &HashMap<String, (Var, String)>,
+        vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
         origin: Option<Var>,
-        params: &HashMap<String, (Var, String)>,
+        params: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
+        omg_types: &OmgTypes,
     ) -> Result<Location, anyhow::Error> {
         match executable {
             Executable::Raise { event } => {
@@ -1049,14 +1187,19 @@ impl ModelBuilder {
                             ));
                         }
                         Target::Expr(targetexpr) => {
-                            target_expr = Some(self.expression(
+                            let target_exprs = self.expression(
                                 targetexpr,
                                 interner,
                                 vars,
                                 origin.as_ref(),
                                 params,
-                                Some(Type::Integer),
-                            )?);
+                                Some(&OmgBaseType::Int32.into()),
+                                omg_types,
+                            )?;
+                            if target_exprs.len() != 1 {
+                                bail!("epression is not a target");
+                            }
+                            target_expr = target_exprs.first().cloned();
                             targets = self.events[event_idx].receivers.iter().cloned().collect();
                         }
                     }
@@ -1108,6 +1251,7 @@ impl ModelBuilder {
                                     origin,
                                     params,
                                     interner,
+                                    omg_types,
                                 )
                                 .with_context(|| {
                                     anyhow!("failed sending params for event {event}")
@@ -1145,6 +1289,7 @@ impl ModelBuilder {
                             origin,
                             params,
                             interner,
+                            omg_types,
                         )?;
                     }
                     Ok(next_loc)
@@ -1152,12 +1297,8 @@ impl ModelBuilder {
             }
             Executable::Assign { location, expr } => {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
-                let (var, scan_type) = vars.get(location).ok_or(anyhow!("undefined variable"))?;
-                let scan_type = self
-                    .types
-                    .get(scan_type)
-                    .ok_or(anyhow!("unknown type for location {location}"))?
-                    .1;
+                let (omg_type, scan_vars) =
+                    vars.get(location).ok_or(anyhow!("undefined variable"))?;
                 let expr = self
                     .expression(
                         expr,
@@ -1165,25 +1306,28 @@ impl ModelBuilder {
                         vars,
                         origin.as_ref(),
                         params,
-                        Some(scan_type),
+                        Some(omg_type),
+                        omg_types,
                     )
                     .with_context(|| {
                         anyhow!(
                             "failed building expression in <assign> element for location {location}"
                         )
                     })?;
-                let expr_type = expr.r#type().with_context(|| {
-                    anyhow!(
-                        "type mismatch in expression in <assign> element for location {location}"
-                    )
-                })?;
-                if scan_type != expr_type {
-                    bail!(
-                        "type of location {location} does not match that of expression ({scan_type:?} != {expr_type:?})"
-                    );
-                }
                 let assign = self.cs.new_action(pg_id).expect("PG exists");
-                self.cs.add_effect(pg_id, assign, *var, expr)?;
+                scan_vars
+                    .iter()
+                    .zip(expr)
+                    .try_for_each(|((var, scan_type), expr)| {
+                        if expr.r#type().map_err(|terr| CsError::Type(terr))? == *scan_type {
+                            self.cs.add_effect(pg_id, assign, *var, expr)
+                        } else {
+                            Err(CsError::Type(TypeError::TypeMismatch))
+                        }
+                    })
+                    .with_context(|| {
+                        anyhow!("failed building assignments for location '{location}'")
+                    })?;
                 let next_loc = self.cs.new_location(pg_id).unwrap();
                 self.cs.add_transition(pg_id, loc, assign, next_loc, None)?;
                 Ok(next_loc)
@@ -1201,9 +1345,14 @@ impl ModelBuilder {
                             vars,
                             origin.as_ref(),
                             params,
-                            Some(Type::Boolean),
+                            Some(&OmgBaseType::Boolean.into()),
+                            omg_types,
                         )
                         .context("failed building condition expression in <if> element")?;
+                    if cond.len() != 1 {
+                        bail!("<cond> is not a boolean expression");
+                    }
+                    let cond = cond.first().expect("len equals 1").clone();
                     self.cs.add_autonomous_transition(
                         pg_id,
                         curr_loc,
@@ -1214,6 +1363,7 @@ impl ModelBuilder {
                         next_loc = self
                             .add_executable(
                                 exec, pg_id, int_queue, next_loc, vars, origin, params, interner,
+                                omg_types,
                             )
                             .context("failed building executable content in <if> element")?;
                     }
@@ -1237,6 +1387,7 @@ impl ModelBuilder {
                     curr_loc = self
                         .add_executable(
                             exec, pg_id, int_queue, curr_loc, vars, origin, params, interner,
+                            omg_types,
                         )
                         .context("failed building executable content in <else> element")?;
                 }
@@ -1255,10 +1406,11 @@ impl ModelBuilder {
         params: &Vec<Param>,
         event_idx: usize,
         param_loc: Location,
-        vars: &HashMap<String, (Var, String)>,
+        vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
         origin: Option<Var>,
-        all_params: &HashMap<String, (Var, String)>,
+        all_params: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
+        omg_types: &OmgTypes,
     ) -> Result<Location, anyhow::Error> {
         assert!(!params.is_empty());
         // Check that no param is missing
@@ -1271,17 +1423,11 @@ impl ModelBuilder {
         let mut scan_types = Vec::new();
         for param in params {
             // Get param type.
-            let scan_type = self
-                .types
-                .get(
-                    param
-                        .omg_type
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("param {} needs type annotation", param.name))?,
-                )
+            let (omg_type, scan_type) = all_params
+                .get(param.name.as_str())
                 .cloned()
-                .ok_or(anyhow!("undefined type"))?
-                .1;
+                .ok_or(anyhow!("undefined type"))?;
+            assert_eq!(omg_type, param.omg_type.clone().expect("type of parameter"));
             // Build expression from ECMAScript expression.
             let expr = self.expression(
                 &param.expr,
@@ -1289,10 +1435,11 @@ impl ModelBuilder {
                 vars,
                 origin.as_ref(),
                 all_params,
-                Some(scan_type),
+                Some(&omg_type),
+                omg_types,
             )?;
-            exprs.push(expr);
-            scan_types.push(scan_type);
+            exprs.extend_from_slice(&expr);
+            scan_types.extend(scan_type.iter().map(|(_, t)| *t));
         }
         // Retreive or create channel for parameter passing.
         let param_chn = *self
@@ -1313,23 +1460,24 @@ impl ModelBuilder {
         &mut self,
         expr: &boa_ast::Expression,
         interner: &Interner,
-        vars: &HashMap<String, (V, String)>,
+        vars: &HashMap<String, (OmgType, Vec<(V, Type)>)>,
         origin: Option<&V>,
-        params: &HashMap<String, (V, String)>,
-        expr_type: Option<Type>,
-    ) -> anyhow::Result<Expression<V>> {
+        params: &HashMap<String, (OmgType, Vec<(V, Type)>)>,
+        expr_type: Option<&OmgType>,
+        omg_types: &OmgTypes,
+    ) -> anyhow::Result<Vec<Expression<V>>> {
         let expr = match expr {
             boa_ast::Expression::This(_this) => todo!(),
             boa_ast::Expression::Identifier(ident) => {
                 let ident = ident.to_interned_string(interner);
                 self.enums
                     .get(&ident)
-                    .map(|i| Expression::from(*i))
+                    .map(|i| vec![Expression::from(*i)])
                     .or_else(|| {
-                        vars.get(&ident).and_then(|(var, t)| {
-                            self.types
-                                .get(t)
-                                .map(|(_, t)| Expression::Var(var.clone(), t.to_owned()))
+                        vars.get(&ident).map(|(_, vars)| {
+                            vars.iter()
+                                .map(|(var, t)| Expression::Var(var.clone(), t.to_owned()))
+                                .collect::<Vec<Expression<V>>>()
                             // .ok_or(anyhow!("missing type {t}"))
                         })
                     })
@@ -1337,7 +1485,7 @@ impl ModelBuilder {
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::LiteralKind;
-                match lit.kind() {
+                vec![match lit.kind() {
                     LiteralKind::String(s) => {
                         let len = self.enums.len() as Integer;
                         Expression::from(
@@ -1348,7 +1496,10 @@ impl ModelBuilder {
                         )
                     }
                     LiteralKind::Num(f) => Expression::from(*f),
-                    LiteralKind::Int(i) if expr_type.is_some_and(|t| matches!(t, Type::Float)) => {
+                    LiteralKind::Int(i)
+                        if expr_type
+                            .is_some_and(|t| matches!(t, OmgType::Base(OmgBaseType::F64))) =>
+                    {
                         Expression::from(*i as f64)
                     }
                     LiteralKind::Int(i) => Expression::from(*i),
@@ -1356,7 +1507,7 @@ impl ModelBuilder {
                     LiteralKind::Bool(b) => Expression::from(*b),
                     LiteralKind::Null => todo!(),
                     LiteralKind::Undefined => todo!(),
-                }
+                }]
             }
             boa_ast::Expression::ArrayLiteral(_arr) => {
                 todo!()
@@ -1366,28 +1517,91 @@ impl ModelBuilder {
                 //             .into_iter()
                 //             .map(|element| match element {})
             }
-            boa_ast::Expression::PropertyAccess(prop_acc) => {
-                let expr = &boa_ast::Expression::PropertyAccess(prop_acc.to_owned());
-                let ecma_obj = self
-                    .expression_prop_access(expr, interner, vars, origin, params)
-                    .context("failed building expression with property access")?;
-                // WARN: If the EcmaObj is a primitive SCAN data, we return that.
-                // If it is a dictionary of properties, instead, we have no way to represent it properly as a SCAN type.
-                match ecma_obj {
-                    EcmaObj::PrimitiveData(expr, _) => expr,
-                    EcmaObj::Properties(_) => todo!(),
+            boa_ast::Expression::PropertyAccess(prop_acc) => match prop_acc {
+                PropertyAccess::Simple(simple_property_access) => {
+                    let target = simple_property_access.target();
+                    let target_type = self.infer_type(
+                        target,
+                        &vars
+                            .iter()
+                            .map(|(var, (omg_type, _))| (var.clone(), omg_type.clone()))
+                            .collect(),
+                        interner,
+                        omg_types,
+                    )?;
+                    let target = self.expression(
+                        target,
+                        interner,
+                        vars,
+                        origin,
+                        params,
+                        Some(&target_type),
+                        omg_types,
+                    )?;
+                    let target_type_def = match target_type {
+                        OmgType::Base(omg_base_type) => bail!("property access on base type"),
+                        OmgType::Array(omg_base_type, _) => bail!("property access on array"),
+                        OmgType::Custom(omg_name) => omg_types
+                            .type_defs
+                            .get(&omg_name)
+                            .ok_or(anyhow!("type '{omg_name}' undefined"))?,
+                    };
+                    let field = simple_property_access.field();
+                    match field {
+                        PropertyAccessField::Const(identifier) => {
+                            let id = interner
+                                .resolve(identifier.sym())
+                                .ok_or(anyhow!("unknown ECMAScript identifier"))?
+                                .to_string();
+                            match target_type_def {
+                                OmgTypeDef::Enumeration(items) => {
+                                    bail!("property access on enumeration")
+                                }
+                                OmgTypeDef::Structure(fields) => {
+                                    let mut target = target.as_slice();
+                                    for (field_name, field_type) in fields {
+                                        let field_size = field_type.size(omg_types)?;
+                                        if *field_name == id {
+                                            return Ok(Vec::from_iter(
+                                                target[..field_size].into_iter().cloned(),
+                                            ));
+                                        } else {
+                                            // Skip field-size-many expressions
+                                            target = &target[..field_size];
+                                        }
+                                    }
+                                    bail!("unknown field {id}");
+                                }
+                            }
+                        }
+                        PropertyAccessField::Expr(expression) => todo!(),
+                    }
                 }
-            }
+                PropertyAccess::Private(private_property_access) => todo!(),
+                PropertyAccess::Super(super_property_access) => todo!(),
+            },
             boa_ast::Expression::Unary(unary) => {
                 use boa_ast::expression::operator::unary::UnaryOp;
-                let expr =
-                    self.expression(unary.target(), interner, vars, origin, params, expr_type)?;
-                match unary.op() {
+                let expr = self.expression(
+                    unary.target(),
+                    interner,
+                    vars,
+                    origin,
+                    params,
+                    expr_type,
+                    omg_types,
+                )?;
+                if expr.len() != 1 {
+                    bail!("expression does not support unary operator");
+                }
+                let expr = expr[0].clone();
+                let new_expr = match unary.op() {
                     UnaryOp::Minus => -expr,
                     UnaryOp::Plus => expr,
                     UnaryOp::Not => Expression::not(expr)?,
                     _ => return Err(anyhow!("unimplemented operator")),
-                }
+                };
+                vec![new_expr]
             }
             boa_ast::Expression::Binary(bin) => {
                 use boa_ast::expression::operator::binary::{
@@ -1411,30 +1625,75 @@ impl ModelBuilder {
                                 rhs_hint = None;
                             }
                             ArithmeticOp::Mod => {
-                                lhs_hint = Some(Type::Integer);
-                                rhs_hint = Some(Type::Integer);
+                                lhs_hint = Some(&OmgType::Base(OmgBaseType::Int32));
+                                rhs_hint = Some(&OmgType::Base(OmgBaseType::Int32));
                             }
                         }
-                        let lhs =
-                            self.expression(bin.lhs(), interner, vars, origin, params, lhs_hint)?;
-                        let rhs =
-                            self.expression(bin.rhs(), interner, vars, origin, params, rhs_hint)?;
-                        match ar_bin {
+                        let lhs = self.expression(
+                            bin.lhs(),
+                            interner,
+                            vars,
+                            origin,
+                            params,
+                            lhs_hint,
+                            omg_types,
+                        )?;
+                        if lhs.len() != 1 {
+                            bail!("expression does not support unary operator");
+                        }
+                        let lhs = lhs[0].clone();
+                        let rhs = self.expression(
+                            bin.rhs(),
+                            interner,
+                            vars,
+                            origin,
+                            params,
+                            rhs_hint,
+                            omg_types,
+                        )?;
+                        if rhs.len() != 1 {
+                            bail!("expression does not support unary operator");
+                        }
+                        let rhs = rhs[0].clone();
+                        let new_expr = match ar_bin {
                             ArithmeticOp::Add => lhs + rhs,
                             ArithmeticOp::Sub => lhs + (-rhs),
                             ArithmeticOp::Div => Expression::Div(Box::new((lhs, rhs))),
                             ArithmeticOp::Mul => lhs * rhs,
                             ArithmeticOp::Exp => todo!(),
                             ArithmeticOp::Mod => Expression::Mod(Box::new((lhs, rhs))),
-                        }
+                        };
+                        vec![new_expr]
                     }
                     BinaryOp::Relational(rel_bin) => {
                         // Type inference is not possible as multiple types are possible
-                        let lhs =
-                            self.expression(bin.lhs(), interner, vars, origin, params, None)?;
-                        let rhs =
-                            self.expression(bin.rhs(), interner, vars, origin, params, None)?;
-                        match rel_bin {
+                        let lhs = self.expression(
+                            bin.lhs(),
+                            interner,
+                            vars,
+                            origin,
+                            params,
+                            None,
+                            omg_types,
+                        )?;
+                        if lhs.len() != 1 {
+                            bail!("expression does not support unary operator");
+                        }
+                        let lhs = lhs[0].clone();
+                        let rhs = self.expression(
+                            bin.rhs(),
+                            interner,
+                            vars,
+                            origin,
+                            params,
+                            None,
+                            omg_types,
+                        )?;
+                        if rhs.len() != 1 {
+                            bail!("expression does not support unary operator");
+                        }
+                        let rhs = rhs[0].clone();
+                        let new_expr = match rel_bin {
                             RelationalOp::Equal => Expression::Equal(Box::new((lhs, rhs))),
                             RelationalOp::NotEqual => {
                                 Expression::Equal(Box::new((lhs, rhs))).not()?
@@ -1448,7 +1707,8 @@ impl ModelBuilder {
                                 Expression::LessEq(Box::new((lhs, rhs)))
                             }
                             _ => return Err(anyhow!("unimplemented operator")),
-                        }
+                        };
+                        vec![new_expr]
                     }
                     BinaryOp::Logical(op) => {
                         let lhs = self.expression(
@@ -1457,30 +1717,47 @@ impl ModelBuilder {
                             vars,
                             origin,
                             params,
-                            Some(Type::Boolean),
+                            Some(&OmgType::Base(OmgBaseType::Boolean)),
+                            omg_types,
                         )?;
+                        if lhs.len() != 1 {
+                            bail!("expression does not support unary operator");
+                        }
+                        let lhs = lhs[0].clone();
                         let rhs = self.expression(
                             bin.rhs(),
                             interner,
                             vars,
                             origin,
                             params,
-                            Some(Type::Boolean),
+                            Some(&OmgType::Base(OmgBaseType::Boolean)),
+                            omg_types,
                         )?;
-                        match op {
+                        if rhs.len() != 1 {
+                            bail!("expression does not support unary operator");
+                        }
+                        let rhs = rhs[0].clone();
+                        let new_expr = match op {
                             LogicalOp::And => Expression::and(vec![lhs, rhs])?,
                             LogicalOp::Or => Expression::or(vec![lhs, rhs])?,
                             _ => return Err(anyhow!("unimplemented operator")),
-                        }
+                        };
+                        vec![new_expr]
                     }
                     BinaryOp::Comma => todo!(),
                     _ => return Err(anyhow!("unimplemented operator")),
                 }
             }
             boa_ast::Expression::Conditional(_) => todo!(),
-            boa_ast::Expression::Parenthesized(par) => {
-                self.expression(par.expression(), interner, vars, origin, params, expr_type)?
-            }
+            boa_ast::Expression::Parenthesized(par) => self.expression(
+                par.expression(),
+                interner,
+                vars,
+                origin,
+                params,
+                expr_type,
+                omg_types,
+            )?,
             boa_ast::Expression::Call(call) => {
                 let fun = call.function();
                 let args = call.args();
@@ -1503,7 +1780,7 @@ impl ModelBuilder {
                                     .ok_or(anyhow!("not utf8"))?;
                                 if target == "Math" {
                                     match ident {
-                                        "random" => return Ok(Expression::RandFloat(0., 1.)),
+                                        "random" => vec![Expression::RandFloat(0., 1.)],
                                         "floor" => {
                                             if let [arg] = args {
                                                 let arg = self.expression(
@@ -1512,9 +1789,16 @@ impl ModelBuilder {
                                                     vars,
                                                     origin,
                                                     params,
-                                                    Some(Type::Float),
+                                                    Some(&OmgType::Base(OmgBaseType::F64)),
+                                                    omg_types,
                                                 )?;
-                                                return Ok(Expression::Floor(Box::new(arg)));
+                                                if arg.len() != 1 {
+                                                    bail!(
+                                                        "expression does not support floor operator"
+                                                    );
+                                                }
+                                                let arg = arg[0].clone();
+                                                vec![Expression::Floor(Box::new(arg))]
                                             } else {
                                                 bail!(
                                                     "Math.floor() called with wrong number of arguments"
@@ -1543,123 +1827,123 @@ impl ModelBuilder {
         Ok(expr)
     }
 
-    fn expression_prop_access<V: Clone>(
-        &mut self,
-        expr: &boa_ast::Expression,
-        interner: &Interner,
-        vars: &HashMap<String, (V, String)>,
-        origin: Option<&V>,
-        params: &HashMap<String, (V, String)>,
-    ) -> anyhow::Result<EcmaObj<V>> {
-        match expr {
-            boa_ast::Expression::This(_this) => todo!(),
-            boa_ast::Expression::Identifier(ident) => {
-                let ident = ident.to_interned_string(interner);
-                match ident.as_str() {
-                    "_event" => Ok(EcmaObj::Properties(HashMap::from_iter([
-                        (
-                            String::from("origin"),
-                            EcmaObj::PrimitiveData(
-                                Expression::Var(
-                                    origin.cloned().ok_or(anyhow!("missing origin of _event"))?,
-                                    Type::Integer,
-                                ),
-                                String::from("int32"),
-                            ),
-                        ),
-                        (
-                            String::from("data"),
-                            EcmaObj::Properties(HashMap::from_iter(params.iter().map(
-                                |(n, (v, t))| {
-                                    (
-                                        n.to_owned(),
-                                        EcmaObj::PrimitiveData(
-                                            Expression::Var(
-                                                v.clone(),
-                                                self.types
-                                                    .get(t)
-                                                    .map(|(_, t)| t.to_owned())
-                                                    .expect("type of data parameter"),
-                                            ),
-                                            t.to_owned(),
-                                        ),
-                                    )
-                                },
-                            ))),
-                        ),
-                    ]))),
-                    ident => {
-                        let (var, type_name) = vars
-                            .get(ident)
-                            .ok_or(anyhow!("location {} not found", ident))?
-                            .to_owned();
-                        let (_, t) = self.types.get(&type_name).expect("var type");
-                        Ok(EcmaObj::PrimitiveData(
-                            Expression::Var(var, t.to_owned()),
-                            type_name,
-                        ))
-                    }
-                }
-            }
-            boa_ast::Expression::PropertyAccess(prop_acc) => {
-                use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
-                match prop_acc {
-                    PropertyAccess::Simple(simp_prop_acc) => {
-                        let prop_target = self.expression_prop_access(
-                            simp_prop_acc.target(),
-                            interner,
-                            vars,
-                            origin,
-                            params,
-                        )?;
-                        match simp_prop_acc.field() {
-                            PropertyAccessField::Const(ident) => {
-                                let ident: &str = interner
-                                    .resolve(ident.sym())
-                                    .ok_or(anyhow!("unknown symbol {:?}", ident))?
-                                    .utf8()
-                                    .ok_or(anyhow!("not utf8"))?;
-                                match prop_target {
-                                    EcmaObj::PrimitiveData(_expr, type_name) => {
-                                        match &self
-                                            .types
-                                            .get(&type_name)
-                                            .ok_or(anyhow!("unknown type {}", type_name))?
-                                            .0
-                                        {
-                                            OmgType::Structure(_fields) => {
-                                                bail!("structures are not currently supported")
-                                                // let index = *self
-                                                //     .structs
-                                                //     .get(&(type_name, ident.to_owned()))
-                                                //     .ok_or(anyhow!("field {} not found", ident))?;
-                                                // let field_type_name = fields
-                                                //     .get(ident)
-                                                //     .ok_or(anyhow!("field {} not found", ident))?;
-                                                // Ok(EcmaObj::PrimitiveData(
-                                                //     Expression::component(expr, index),
-                                                //     field_type_name.to_owned(),
-                                                // ))
-                                            }
-                                            t => bail!("type '{t:?}' has no accessible fields"),
-                                        }
-                                    }
-                                    EcmaObj::Properties(fields) => fields
-                                        .get(ident)
-                                        .ok_or(anyhow!("property {} not found", ident))
-                                        .cloned(),
-                                }
-                            }
-                            PropertyAccessField::Expr(_) => todo!(),
-                        }
-                    }
-                    PropertyAccess::Private(_) => todo!(),
-                    PropertyAccess::Super(_) => todo!(),
-                }
-            }
-            _ => todo!(),
-        }
-    }
+    // fn expression_prop_access<V: Clone>(
+    //     &mut self,
+    //     expr: &boa_ast::Expression,
+    //     interner: &Interner,
+    //     vars: &HashMap<String, Vec<(V, Type)>>,
+    //     origin: Option<&V>,
+    //     params: &HashMap<String, Vec<(V, Type)>>,
+    // ) -> anyhow::Result<EcmaObj<V>> {
+    //     match expr {
+    //         boa_ast::Expression::This(_this) => todo!(),
+    //         boa_ast::Expression::Identifier(ident) => {
+    //             let ident = ident.to_interned_string(interner);
+    //             match ident.as_str() {
+    //                 "_event" => Ok(EcmaObj::Properties(HashMap::from_iter([
+    //                     (
+    //                         String::from("origin"),
+    //                         EcmaObj::PrimitiveData(
+    //                             Expression::Var(
+    //                                 origin.cloned().ok_or(anyhow!("missing origin of _event"))?,
+    //                                 Type::Integer,
+    //                             ),
+    //                             String::from("int32"),
+    //                         ),
+    //                     ),
+    //                     (
+    //                         String::from("data"),
+    //                         EcmaObj::Properties(HashMap::from_iter(params.iter().map(
+    //                             |(n, (v, t))| {
+    //                                 (
+    //                                     n.to_owned(),
+    //                                     EcmaObj::PrimitiveData(
+    //                                         Expression::Var(
+    //                                             v.clone(),
+    //                                             self.types
+    //                                                 .get(t)
+    //                                                 .map(|(_, t)| t.to_owned())
+    //                                                 .expect("type of data parameter"),
+    //                                         ),
+    //                                         t.to_owned(),
+    //                                     ),
+    //                                 )
+    //                             },
+    //                         ))),
+    //                     ),
+    //                 ]))),
+    //                 ident => {
+    //                     let (var, type_name) = vars
+    //                         .get(ident)
+    //                         .ok_or(anyhow!("location {} not found", ident))?
+    //                         .to_owned();
+    //                     let (_, t) = self.types.get(&type_name).expect("var type");
+    //                     Ok(EcmaObj::PrimitiveData(
+    //                         Expression::Var(var, t.to_owned()),
+    //                         type_name,
+    //                     ))
+    //                 }
+    //             }
+    //         }
+    //         boa_ast::Expression::PropertyAccess(prop_acc) => {
+    //             use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
+    //             match prop_acc {
+    //                 PropertyAccess::Simple(simp_prop_acc) => {
+    //                     let prop_target = self.expression_prop_access(
+    //                         simp_prop_acc.target(),
+    //                         interner,
+    //                         vars,
+    //                         origin,
+    //                         params,
+    //                     )?;
+    //                     match simp_prop_acc.field() {
+    //                         PropertyAccessField::Const(ident) => {
+    //                             let ident: &str = interner
+    //                                 .resolve(ident.sym())
+    //                                 .ok_or(anyhow!("unknown symbol {:?}", ident))?
+    //                                 .utf8()
+    //                                 .ok_or(anyhow!("not utf8"))?;
+    //                             match prop_target {
+    //                                 EcmaObj::PrimitiveData(_expr, type_name) => {
+    //                                     match &self
+    //                                         .types
+    //                                         .get(&type_name)
+    //                                         .ok_or(anyhow!("unknown type {}", type_name))?
+    //                                         .0
+    //                                     {
+    //                                         OmgBaseType::Structure(_fields) => {
+    //                                             bail!("structures are not currently supported")
+    //                                             // let index = *self
+    //                                             //     .structs
+    //                                             //     .get(&(type_name, ident.to_owned()))
+    //                                             //     .ok_or(anyhow!("field {} not found", ident))?;
+    //                                             // let field_type_name = fields
+    //                                             //     .get(ident)
+    //                                             //     .ok_or(anyhow!("field {} not found", ident))?;
+    //                                             // Ok(EcmaObj::PrimitiveData(
+    //                                             //     Expression::component(expr, index),
+    //                                             //     field_type_name.to_owned(),
+    //                                             // ))
+    //                                         }
+    //                                         t => bail!("type '{t:?}' has no accessible fields"),
+    //                                     }
+    //                                 }
+    //                                 EcmaObj::Properties(fields) => fields
+    //                                     .get(ident)
+    //                                     .ok_or(anyhow!("property {} not found", ident))
+    //                                     .cloned(),
+    //                             }
+    //                         }
+    //                         PropertyAccessField::Expr(_) => todo!(),
+    //                     }
+    //                 }
+    //                 PropertyAccess::Private(_) => todo!(),
+    //                 PropertyAccess::Super(_) => todo!(),
+    //             }
+    //         }
+    //         _ => todo!(),
+    //     }
+    // }
 
     fn build_ports(&mut self, parser: &Parser) -> anyhow::Result<()> {
         for (port_id, port) in parser.properties.ports.iter() {
@@ -1677,7 +1961,18 @@ impl ModelBuilder {
                 .event_indexes
                 .get(&port.event)
                 .ok_or(anyhow!("missing event {}", port.event))?;
+            let event_builder = &self.events[event_id];
             if let Some((param, init)) = &port.param {
+                let param_type = event_builder
+                    .params
+                    .get(param)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "param {param} in event {} in port {port_id} not found",
+                            port.event
+                        )
+                    })?
+                    .clone();
                 let init = self
                     .expression::<Var>(
                         init,
@@ -1685,38 +1980,57 @@ impl ModelBuilder {
                         &HashMap::new(),
                         None,
                         &HashMap::new(),
-                        None,
+                        param_type.as_ref(),
+                        &parser.types,
                     )
                     .with_context(|| {
                         format!("failed building default value expression for port {port_id}")
                     })?
-                    .eval_constant()
+                    .iter()
+                    .map(|expr| expr.eval_constant())
+                    .collect::<Result<Vec<_>, _>>()
                     .with_context(|| {
                         format!("failed evaluating default value for port {port_id}")
                     })?;
-                let (channel, param_idx) = *self
+                let (channel, param_idx_type) = self
                     .parameters
                     .get(&(origin, target, event_id, param.to_owned()))
                     .ok_or(anyhow!("param {param} not found"))?;
-                self.ports
-                    .insert(port_id.to_owned(), (Atom::State(channel, param_idx), init));
+                self.ports.insert(
+                    port_id.to_owned(),
+                    (
+                        param_type.ok_or_else(|| {
+                            anyhow!("type of param {param} of event {} not found", port.event)
+                        })?,
+                        param_idx_type
+                            .iter()
+                            .zip(init)
+                            .map(|(&(param_idx, param_type), init)| {
+                                (Atom::State(*channel, param_idx), init)
+                            })
+                            .collect(),
+                    ),
+                );
             } else {
                 let channel = target_builder.ext_queue;
                 self.ports.insert(
                     port_id.to_owned(),
                     (
-                        Atom::Event(Event {
-                            pg_id: origin,
-                            channel,
-                            event_type: EventType::Send(
-                                vec![
-                                    Val::Integer(event_id as Integer),
-                                    Val::Integer(u16::from(origin) as Integer),
-                                ]
-                                .into(),
-                            ),
-                        }),
-                        Val::Boolean(false),
+                        OmgType::Base(OmgBaseType::Boolean),
+                        vec![(
+                            Atom::Event(Event {
+                                pg_id: origin,
+                                channel,
+                                event_type: EventType::Send(
+                                    vec![
+                                        Val::Integer(event_id as Integer),
+                                        Val::Integer(u16::from(origin) as Integer),
+                                    ]
+                                    .into(),
+                                ),
+                            }),
+                            Val::Boolean(false),
+                        )],
                     ),
                 );
             }
@@ -1737,20 +2051,30 @@ impl ModelBuilder {
                 &self
                     .ports
                     .iter()
-                    .map(|(name, (atom, _val))| {
+                    .map(|(name, (omg_type, atoms))| {
                         (
                             name.clone(),
                             (
-                                atom.clone(),
-                                parser.properties.ports.get(name).unwrap().r#type.clone(),
+                                omg_type.clone(),
+                                atoms
+                                    .iter()
+                                    .map(|(atom, val)| (atom.clone(), val.r#type()))
+                                    .collect(),
+                                // vec![(atom.clone(),)],
+                                // parser.properties.ports.get(name).unwrap().r#type.clone(),
                             ),
                         )
                     })
                     .collect(),
                 None,
                 &HashMap::new(),
-                Some(Type::Boolean),
+                Some(&OmgType::Base(OmgBaseType::Boolean)),
+                &parser.types,
             )?;
+            if predicate.len() != 1 {
+                bail!("predicate must be a boolean expression");
+            }
+            let predicate = predicate[0].clone();
             self.predicates.push(predicate);
         }
         self.guarantees = parser
@@ -1767,11 +2091,18 @@ impl ModelBuilder {
     fn build_model(self) -> (CsModel, PmtlOracle, ScxmlModel) {
         let mut model = CsModel::new(self.cs);
         let mut ports = Vec::new();
-        for (port_name, (atom, init)) in self.ports {
+        for (port_name, (omg_type, atoms)) in self.ports {
             // TODO FIXME handle error.
-            if let Atom::State(channel, param_idx) = atom {
-                model.add_port(channel, param_idx, init);
-                ports.push((channel, param_idx, port_name, init.r#type()));
+            for (atom, init) in atoms {
+                if let Atom::State(channel, param_idx) = atom {
+                    model.add_port(channel, param_idx, init);
+                    ports.push((
+                        channel,
+                        param_idx,
+                        port_name.clone() + &param_idx.to_string(),
+                        init.r#type(),
+                    ));
+                }
             }
         }
         // Ports need to be sorted by channel or will not match state iterator

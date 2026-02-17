@@ -207,13 +207,14 @@ impl Parser {
                     let mut reader = Reader::from_file(path).with_context(|| {
                         format!("failed to create reader from file '{}'", path.display())
                     })?;
-                    let fsm = fsm::parse(&mut reader, &mut self.interner).with_context(|| {
-                        format!(
-                            "failed to parse fsm at line {} in '{}'",
-                            count_lines(reader),
-                            path.display(),
-                        )
-                    })?;
+                    let fsm = fsm::parse(&mut reader, &mut self.interner, &self.types)
+                        .with_context(|| {
+                            format!(
+                                "failed to parse fsm at line {} in '{}'",
+                                count_lines(reader),
+                                path.display(),
+                            )
+                        })?;
                     self.process_list.insert(fsm.name.to_owned(), fsm);
                 }
                 "xml" => {
@@ -222,7 +223,7 @@ impl Parser {
                         format!("failed to create reader from file '{}'", path.display())
                     })?;
                     self.properties
-                        .parse(&mut reader, &mut self.interner)
+                        .parse(&mut reader, &mut self.interner, &self.types)
                         .with_context(|| {
                             format!(
                                 "failed to parse properties at line {} in '{}'",
@@ -324,7 +325,7 @@ impl Parser {
                                 format!("failed to create reader from file '{}'", path.display())
                             })?;
                             self.properties
-                                .parse(&mut reader, &mut self.interner)
+                                .parse(&mut reader, &mut self.interner, &self.types)
                                 .with_context(|| {
                                     format!(
                                         "failed to parse properties at line {} in '{}'",
@@ -354,8 +355,8 @@ impl Parser {
                                 path.display()
                             );
                             let mut reader = Reader::from_file(path.clone())?;
-                            let fsm =
-                                fsm::parse(&mut reader, &mut self.interner).with_context(|| {
+                            let fsm = fsm::parse(&mut reader, &mut self.interner, &self.types)
+                                .with_context(|| {
                                     format!(
                                         "failed to parse fsm at line {} in '{}'",
                                         count_lines(reader),
