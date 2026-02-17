@@ -281,19 +281,17 @@ impl ProgramGraphBuilder {
 
     /// Adds a new (synchronous) process to the PG starting from the given [`Location`].
     pub fn new_process(&mut self, location: Location) -> Result<(), PgError> {
-        if (location.0 as usize) < self.locations.len() {
-            let (_, invariants) = self.locations.get(location.0 as usize).expect("location");
-            if invariants.iter().any(|(clock, l, u)| {
-                l.is_some_and(|l| l > clock.0 as u32) || u.is_some_and(|u| (clock.0 as u32) >= u)
-            }) {
-                Err(PgError::Invariant)
-            } else {
-                self.initial_states.push(location);
-                Ok(())
-            }
-        } else {
-            Err(PgError::MissingLocation(location))
-        }
+        self.locations
+            .get(location.0 as usize)
+            .ok_or(PgError::MissingLocation(location))?
+            .1 // location's time invariants
+            .iter()
+            .all(|(_, l, u)| {
+                // All clocks start at time 0
+                l.is_none_or(|l| l == 0) && u.is_none_or(|u| u > 0)
+            })
+            .then(|| self.initial_states.push(location))
+            .ok_or(PgError::Invariant)
     }
 
     /// Adds a new process starting at a new location to the PG and returns the [`Location`] indexing object.

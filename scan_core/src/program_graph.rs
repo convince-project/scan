@@ -344,10 +344,23 @@ impl<'def> ProgramGraphRun<'def> {
     pub fn possible_transitions(
         &self,
     ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
-        self.def.locations[self.current_states[0].0 as usize]
-            .0
-            .iter()
-            .map(|&(action, ..)| (action, self.possible_transitions_action(action)))
+        self.current_states
+            .first()
+            .into_iter()
+            .flat_map(|loc| {
+                self.def.locations[loc.0 as usize]
+                    .0
+                    .iter()
+                    .map(|&(action, ..)| action)
+            })
+            .chain(
+                self.current_states
+                    .is_empty()
+                    .then_some((0..self.def.effects.len() as ActionIdx).map(Action))
+                    .into_iter()
+                    .flatten(),
+            )
+            .map(|action| (action, self.possible_transitions_action(action)))
     }
 
     #[inline(always)]

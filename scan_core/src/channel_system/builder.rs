@@ -675,31 +675,22 @@ impl ChannelSystemBuilder {
         self.channels.shrink_to_fit();
         let mut communications_map = Vec::from_iter(self.communications);
         communications_map.sort_unstable_by_key(|(a, _)| *a);
-        let mut communications = Vec::with_capacity(communications_map.len());
-        let mut communications_pg_idxs = Vec::with_capacity(program_graphs.len() + 1);
-        communications_pg_idxs.push(0);
-        // PG we are counting the occurrences of, yet to be inserted
-        for (action, (c, m)) in communications_map.into_iter() {
-            let pg_id = action.0;
-            if pg_id.0 != communications_pg_idxs.len() as u16 - 1 {
-                let last = *communications_pg_idxs.last().unwrap();
-                communications_pg_idxs
-                    .extend((0..(pg_id.0 - communications_pg_idxs.len() as u16)).map(|_| last));
-                communications_pg_idxs.push(communications.len() as u16);
-                assert_eq!(communications_pg_idxs.len() as u16, pg_id.0 + 1);
-            }
-            communications.push((action.1, c, m));
+        let communications = Vec::from_iter(
+            communications_map
+                .iter()
+                .map(|&(action, (c, m))| (action.1, c, m)),
+        );
+        let mut index = 0;
+        let mut communications_pg_idxs = Vec::<usize>::with_capacity(program_graphs.len() + 1);
+        communications_pg_idxs.push(index);
+        for pg_id in (0..program_graphs.len() as u16).map(PgId) {
+            index = communications_map[index..]
+                .iter()
+                .position(|(a, ..)| a.0.0 > pg_id.0)
+                .unwrap_or(communications_map.len());
+            communications_pg_idxs.push(index);
         }
-        if !program_graphs.is_empty() {
-            communications_pg_idxs.push(communications.len() as u16);
-            let last = *communications_pg_idxs.last().unwrap();
-            communications_pg_idxs.extend(
-                (0..((program_graphs.len() + 1)
-                    .checked_sub(communications_pg_idxs.len())
-                    .unwrap_or_default()) as u16)
-                    .map(|_| last),
-            );
-        }
+
         assert_eq!(communications_pg_idxs.len(), program_graphs.len() + 1);
 
         ChannelSystem {

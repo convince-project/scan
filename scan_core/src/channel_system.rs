@@ -314,7 +314,7 @@ pub enum EventType {
 pub struct ChannelSystem {
     channels: Vec<(Vec<Type>, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
-    communications_pg_idxs: Vec<u16>,
+    communications_pg_idxs: Vec<usize>,
     program_graphs: Vec<ProgramGraph>,
 }
 
