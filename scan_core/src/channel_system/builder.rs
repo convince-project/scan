@@ -687,7 +687,7 @@ impl ChannelSystemBuilder {
             index = communications_map[index..]
                 .iter()
                 .position(|(a, ..)| a.0.0 > pg_id.0)
-                .unwrap_or(communications_map.len());
+                .map_or(communications_map.len(), |pos| pos + index);
             communications_pg_idxs.push(index);
         }
 

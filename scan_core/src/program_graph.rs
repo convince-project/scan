@@ -264,7 +264,7 @@ impl ProgramGraph {
         } else {
             self.effects
                 .get(action.0 as usize)
-                .map(|e| !matches!(e, Effect::Effects(_, _)))
+                .map(|e| matches!(e, Effect::Send(_) | Effect::Receive(_)))
                 .ok_or(PgError::MissingAction(action))
         }
     }
