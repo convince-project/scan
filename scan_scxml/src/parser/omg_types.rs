@@ -70,7 +70,28 @@ impl OmgType {
         match self {
             OmgType::Base(_omg_base_type) => Ok(1),
             OmgType::Array(_omg_base_type, len) => len.ok_or(anyhow!("array of unknown len")),
-            OmgType::Custom(omg_name) => omg_types.size(&omg_name),
+            OmgType::Custom(omg_name) => omg_types.size(omg_name),
+        }
+    }
+
+    pub fn to_scan_types(&self, omg_types: &OmgTypes) -> anyhow::Result<Vec<Type>> {
+        match self {
+            OmgType::Base(omg_base_type) => Ok(vec![(*omg_base_type).into()]),
+            OmgType::Array(omg_base_type, len) => len
+                .ok_or(anyhow!("array length unknown"))
+                .map(|len| vec![(*omg_base_type).into(); len]),
+            OmgType::Custom(omg_name) => match omg_types
+                .type_defs
+                .get(omg_name)
+                .ok_or_else(|| anyhow!("type {omg_name} unknown"))?
+            {
+                OmgTypeDef::Enumeration(_items) => Ok(vec![Type::Integer]),
+                OmgTypeDef::Structure(fields) => fields
+                    .values()
+                    .map(|field| field.to_scan_types(omg_types))
+                    .collect::<anyhow::Result<Vec<Vec<Type>>>>()
+                    .map(|s| s.into_iter().flatten().collect()),
+            },
         }
     }
 }
@@ -117,10 +138,9 @@ impl OmgTypes {
             OmgType::Array(_omg_base_type, len) => len.ok_or(anyhow!("array of unknown len")),
             OmgType::Custom(_) => match self.type_defs.get(omg_name).unwrap() {
                 OmgTypeDef::Enumeration(_items) => Ok(1),
-                OmgTypeDef::Structure(fields) => fields
-                    .iter()
-                    .map(|(_, omg_type)| omg_type.size(&self))
-                    .sum(),
+                OmgTypeDef::Structure(fields) => {
+                    fields.values().map(|omg_type| omg_type.size(self)).sum()
+                }
             },
         }
     }
@@ -135,6 +155,11 @@ impl OmgTypes {
                     .map(|_def| OmgType::Custom(omg_name.to_string()))
             })
             .ok_or_else(|| anyhow!("type {} not known", omg_name))
+    }
+
+    pub fn to_scan_types(&self, omg_name: &str) -> anyhow::Result<Vec<Type>> {
+        self.find_type(omg_name)
+            .and_then(|omg_type| omg_type.to_scan_types(self))
     }
 
     pub fn parse<R: BufRead>(&mut self, reader: &mut Reader<R>) -> anyhow::Result<()> {

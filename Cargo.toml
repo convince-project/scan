@@ -40,11 +40,11 @@ thiserror = "2.0.18"
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { version = "4.5.57", features = ["derive"] }
+clap = { version = "4.5.59", features = ["derive"] }
 clap-verbosity-flag = "3.0.4"
-env_logger = "0.11.8"
+env_logger = "0.11.9"
 human-panic = "2.0.6"
-indicatif = { version = "0.18.3", features = ["improved_unicode"] }
+indicatif = { version = "0.18.4", features = ["improved_unicode"] }
 log = { workspace = true }
 scan_core = { version = "0.1.0", path = "scan_core" }
 scan_jani = { version = "0.1.0", path = "scan_jani" }
