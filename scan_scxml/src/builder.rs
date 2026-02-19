@@ -178,7 +178,6 @@ impl ModelBuilder {
         }
         for eb in &self.events {
             for (param, t) in &eb.params {
-                // Mark with empty string parameters without known type
                 if t.is_none() {
                     bail!("param {param} of event {} needs type annotation", eb.name);
                 }
@@ -196,8 +195,14 @@ impl ModelBuilder {
     ) -> anyhow::Result<()> {
         let mut vars: HashMap<String, OmgType> = HashMap::new();
         for data in &fmt.datamodel {
-            if let Some(r#type) = &data.omg_type {
+            if let Some(r#type) = &data.omg_type
+                // need to know len of arrays
+                && !matches!(r#type, OmgType::Array(_, None))
+            {
                 vars.insert(data.id.to_owned(), r#type.clone());
+            } else if let Some(expr) = data.expression.as_ref() {
+                let r#type = self.infer_type(expr, &vars, interner, omg_types)?;
+                vars.insert(data.id.to_owned(), r#type);
             }
         }
         for (_, state) in fmt.states.iter_mut() {
@@ -283,8 +288,11 @@ impl ModelBuilder {
                 }
                 for param in params {
                     // Update OMG_type value so that it contains its type for sure
-                    let builder = self.events.get_mut(event_index).expect("index must exist");
-                    if let Some(Some(t)) = builder.params.get(&param.name) {
+                    let builder = self.events.get(event_index).expect("index must exist");
+                    if let Some(Some(t)) = builder.params.get(&param.name)
+                        // need to know len of arrays
+                        && !matches!(t, OmgType::Array(_, None))
+                    {
                         if let Some(omg) = param.omg_type.as_ref() {
                             if t != omg {
                                 bail!(
@@ -295,7 +303,11 @@ impl ModelBuilder {
                         } else {
                             let _ = param.omg_type.insert(t.clone());
                         }
-                    } else if let Some(t) = param.omg_type.as_ref() {
+                    } else if let Some(t) = param.omg_type.as_ref()
+                        // need to know len of arrays
+                        && !matches!(t, OmgType::Array(_, None))
+                    {
+                        let builder = self.events.get_mut(event_index).expect("index must exist");
                         builder.params.insert(param.name.clone(), Some(t.clone()));
                     } else if let Ok(t) = self.infer_type(&param.expr, vars, interner, omg_types) {
                         let _ = param.omg_type.insert(t.clone());
@@ -350,6 +362,24 @@ impl ModelBuilder {
                         }
                     })
                     .ok_or(anyhow!("type cannot be inferred"))
+            }
+            boa_ast::Expression::ArrayLiteral(lit) => {
+                let omg_type = self.infer_type(
+                    lit.as_ref()
+                        .first()
+                        .ok_or(anyhow!("array literal missing expression"))?
+                        .as_ref()
+                        .ok_or(anyhow!("cannot infer type of this array"))?,
+                    vars,
+                    interner,
+                    omg_types,
+                )?;
+                let len = lit.as_ref().len();
+                if let OmgType::Base(omg_base_type) = omg_type {
+                    Ok(OmgType::Array(omg_base_type, Some(len)))
+                } else {
+                    Err(anyhow!("only arrays of base types are currently supported"))
+                }
             }
             boa_ast::Expression::Literal(lit) => {
                 use boa_ast::expression::literal::LiteralKind;
@@ -513,18 +543,26 @@ impl ModelBuilder {
         // NOTE vars cannot be initialized using previously defined vars because datamodel is an HashMap
         let mut vars: HashMap<String, (OmgType, Vec<(Var, Type)>)> = HashMap::new();
         for data in scxml.datamodel.iter() {
-            let omg_type = data
+            let mut omg_type = data
                 .omg_type
-                .as_ref()
+                .clone()
                 .ok_or_else(|| anyhow!("data {} has unknown type", data.id))?;
+            // Need to know len of array
+            if matches!(omg_type, OmgType::Array(_, None)) {
+                omg_type = data
+                    .expression
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("expression for data '{}' required", data.id))
+                    .and_then(|expr| self.infer_type(expr, &HashMap::new(), interner, omg_types))?;
+            }
             let vars_types = if let Some(expr) = data.expression.as_ref() {
-                self.expression(expr, interner, &vars, Some(omg_type), omg_types)?
+                self.expression(expr, interner, &vars, Some(&omg_type), omg_types)?
                     .iter()
                     .map(|expr| Ok((self.cs.new_var(pg_id, expr.clone())?, expr.r#type()?)))
                     .collect::<anyhow::Result<Vec<(Var, Type)>>>()?
             } else {
                 omg_type
-                    .to_scan_types(omg_types)?
+                    .to_scan_types(omg_types).with_context(|| anyhow!("failed converting type {omg_type:?} of location {} to Scan native types", data.id))?
                     .into_iter()
                     .map(|t| {
                         (
@@ -607,7 +645,7 @@ impl ModelBuilder {
                     .ok_or_else(|| anyhow!("type of param {param_name} not found"))?;
                 // Variables where to store parameter.
                 let param_vars_types = param_omg_type
-                    .to_scan_types(omg_types)?
+                    .to_scan_types(omg_types).with_context(|| anyhow!("failed converting type {param_omg_type:?} of param {param_name} to Scan native types"))?
                     .into_iter()
                     .map(|t| {
                         (
@@ -637,7 +675,11 @@ impl ModelBuilder {
                         let omg_type = omg_type.as_ref().ok_or_else(|| {
                             anyhow!("type of param {param_name} of event {}", event_builder.name)
                         })?;
-                        let param_size = omg_type.size(omg_types)?;
+                        let param_size = omg_type.size(omg_types).with_context(|| {
+                            anyhow!(
+                                "failed computing param '{param_name}' type '{omg_type:?}' size"
+                            )
+                        })?;
                         self.parameters.insert(
                             (sender_id, pg_id, event_index, param_name.clone()),
                             (
@@ -1399,13 +1441,33 @@ impl ModelBuilder {
                     LiteralKind::Undefined => todo!(),
                 }]
             }
-            boa_ast::Expression::ArrayLiteral(_arr) => {
-                todo!()
-                // arr
-                //             .to_pattern(true)
-                //             .ok_or(anyhow!("array syntax error"))?
-                //             .into_iter()
-                //             .map(|element| match element {})
+            boa_ast::Expression::ArrayLiteral(arr) => {
+                let expr_type = expr_type.ok_or(anyhow!("unknown array type"))?;
+                if let OmgType::Array(omg_base_type, len) = expr_type {
+                    let default = Expression::Const(Type::from(*omg_base_type).default_value());
+                    if len.is_some_and(|len| len != arr.as_ref().len()) {
+                        bail!("array literal of length incompatible with declared type len");
+                    }
+                    arr.as_ref()
+                        .iter()
+                        .map(|entry| {
+                            entry.as_ref().map_or(Ok(vec![default.clone()]), |entry| {
+                                self.expression(
+                                    entry,
+                                    interner,
+                                    vars,
+                                    Some((*omg_base_type).into()).as_ref(),
+                                    omg_types,
+                                )
+                            })
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?
+                        .into_iter()
+                        .flatten()
+                        .collect()
+                } else {
+                    bail!("expression not matching its type {expr_type:?}");
+                }
             }
             boa_ast::Expression::PropertyAccess(prop_acc) => match prop_acc {
                 PropertyAccess::Simple(simple_property_access) => {
@@ -1443,7 +1505,11 @@ impl ModelBuilder {
                                 OmgTypeDef::Structure(fields) => {
                                     let mut target = target.as_slice();
                                     for (next_field_name, next_field_type) in fields {
-                                        let field_size = next_field_type.size(omg_types)?;
+                                        let field_size = next_field_type.size(omg_types).with_context(|| {
+                                            anyhow!(
+                                                "failed computing field '{next_field_name}' type '{next_field_type:?}' size"
+                                            )
+                                        })?;
                                         if *next_field_name == field_name {
                                             return Ok(target[..field_size].to_vec());
                                         } else {

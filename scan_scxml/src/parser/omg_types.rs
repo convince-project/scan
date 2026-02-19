@@ -37,6 +37,10 @@ impl TryFrom<&str> for OmgBaseType {
             "int16" => Ok(OmgBaseType::Int32),
             "int32" => Ok(OmgBaseType::Int32),
             "int64" => Ok(OmgBaseType::Int32),
+            "uint8" => Ok(OmgBaseType::Int32),
+            "uint16" => Ok(OmgBaseType::Int32),
+            "uint32" => Ok(OmgBaseType::Int32),
+            "uint64" => Ok(OmgBaseType::Int32),
             "string" => Ok(OmgBaseType::String),
             "float32" => Ok(OmgBaseType::F64),
             "float64" => Ok(OmgBaseType::F64),
@@ -69,7 +73,7 @@ impl OmgType {
     pub fn size(&self, omg_types: &OmgTypes) -> anyhow::Result<usize> {
         match self {
             OmgType::Base(_omg_base_type) => Ok(1),
-            OmgType::Array(_omg_base_type, len) => len.ok_or(anyhow!("array of unknown len")),
+            OmgType::Array(_omg_base_type, len) => len.ok_or(anyhow!("array length unknown")),
             OmgType::Custom(omg_name) => omg_types.size(omg_name),
         }
     }
@@ -100,11 +104,10 @@ impl TryFrom<&str> for OmgType {
     type Error = anyhow::Error;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if value.ends_with("[]") {
-            OmgBaseType::try_from(value).map(|t| OmgType::Array(t, None))
-        } else {
-            OmgBaseType::try_from(value).map(OmgType::Base)
-        }
+        value.strip_suffix("[]").map_or_else(
+            || OmgBaseType::try_from(value).map(OmgType::Base),
+            |value| OmgBaseType::try_from(value).map(|t| OmgType::Array(t, None)),
+        )
     }
 }
 
@@ -157,10 +160,10 @@ impl OmgTypes {
             .ok_or_else(|| anyhow!("type {} not known", omg_name))
     }
 
-    pub fn to_scan_types(&self, omg_name: &str) -> anyhow::Result<Vec<Type>> {
-        self.find_type(omg_name)
-            .and_then(|omg_type| omg_type.to_scan_types(self))
-    }
+    // pub fn to_scan_types(&self, omg_name: &str) -> anyhow::Result<Vec<Type>> {
+    //     self.find_type(omg_name)
+    //         .and_then(|omg_type| omg_type.to_scan_types(self))
+    // }
 
     pub fn parse<R: BufRead>(&mut self, reader: &mut Reader<R>) -> anyhow::Result<()> {
         let mut buf = Vec::new();
