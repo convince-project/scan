@@ -106,8 +106,8 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
         fields.push(time.as_str());
 
         if let Some((src, trg, event_idx)) = self.model.parameters.get(&event.channel) {
-            origin_name = self.model.fsm_names.get(src).unwrap().to_owned();
-            target_name = self.model.fsm_names.get(trg).unwrap().to_owned();
+            origin_name = self.model.fsm_names.get(&(*src).into()).unwrap().to_owned();
+            target_name = self.model.fsm_names.get(&(*trg).into()).unwrap().to_owned();
             event_name = self.model.events.get(*event_idx).unwrap().clone();
             match event.event_type {
                 EventType::Send(ref val) => {
@@ -121,15 +121,15 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
                 EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
             }
         } else if let Some(trg) = self.model.ext_queues.get(&event.channel) {
-            target_name = self.model.fsm_names.get(trg).unwrap().to_owned();
+            target_name = self.model.fsm_names.get(&(*trg).into()).unwrap().to_owned();
             match event.event_type {
                 EventType::Send(ref vals) => {
                     action = "S".to_string();
                     if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
                         origin_name = self
                             .model
-                            .fsm_indexes
-                            .get(&(origin as usize))
+                            .fsm_names
+                            .get(&(origin as u16))
                             .unwrap()
                             .to_owned();
                         event_name = self.model.events.get(sent_event as usize).unwrap().clone();
@@ -142,8 +142,8 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
                     if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
                         origin_name = self
                             .model
-                            .fsm_indexes
-                            .get(&(origin as usize))
+                            .fsm_names
+                            .get(&(origin as u16))
                             .unwrap()
                             .to_owned();
                         event_name = self.model.events.get(sent_event as usize).unwrap().clone();
@@ -154,7 +154,12 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
                 EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
             }
         } else if self.model.int_queues.contains(&event.channel) {
-            origin_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
+            origin_name = self
+                .model
+                .fsm_names
+                .get(&event.pg_id.into())
+                .unwrap()
+                .to_owned();
             target_name = origin_name.clone();
             match event.event_type {
                 EventType::Send(ref vals) => {
@@ -180,14 +185,24 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
             match event.event_type {
                 EventType::Send(ref val) => {
                     action = "S".to_string();
-                    origin_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
+                    origin_name = self
+                        .model
+                        .fsm_names
+                        .get(&event.pg_id.into())
+                        .unwrap()
+                        .to_owned();
                     target_name = format!("{:?}", event.channel);
                     params = format!("{val:?}");
                 }
                 EventType::Receive(ref val) => {
                     action = "R".to_string();
                     origin_name = format!("{:?}", event.channel);
-                    target_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
+                    target_name = self
+                        .model
+                        .fsm_names
+                        .get(&event.pg_id.into())
+                        .unwrap()
+                        .to_owned();
                     params = format!("{val:?}");
                 }
                 EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,

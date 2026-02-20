@@ -19,9 +19,8 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct ScxmlModel {
-    pub fsm_names: HashMap<PgId, String>,
-    // TODO FIXME Remove fsm indexes and use PgId.0 instead
-    pub fsm_indexes: HashMap<usize, String>,
+    // u16 here represents PgId
+    pub fsm_names: HashMap<u16, String>,
     // usize here represents event index
     pub parameters: HashMap<Channel, (PgId, PgId, usize)>,
     pub int_queues: HashSet<Channel>,
@@ -45,7 +44,6 @@ struct EventBuilder {
     params: BTreeMap<String, Option<OmgType>>,
     senders: HashSet<PgId>,
     receivers: HashSet<PgId>,
-    index: usize,
 }
 
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
@@ -63,20 +61,12 @@ pub struct ModelBuilder {
     // structs: HashMap<(String, String), usize>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
-    fsm_names: HashMap<PgId, String>,
+    fsm_names: HashMap<u16, String>,
     fsm_builders: HashMap<String, FsmBuilder>,
     // Each event is associated to a unique global index and parameter(s).
     // WARN FIXME TODO: name clashes
     events: Vec<EventBuilder>,
     event_indexes: HashMap<String, usize>,
-    // Events carrying parameters have dedicated channels for them,
-    // one for each:
-    // - senderStateChart
-    // - receiverStateChart
-    // - sentEvent (index)
-    // - paramName
-    // that is needed
-    parameters: HashMap<(PgId, PgId, usize, String), (Channel, Vec<(usize, Type)>)>,
     parameter_channels: HashMap<(PgId, PgId, usize), Channel>,
     // Properties
     guarantees: Vec<(String, Pmtl<usize>)>,
@@ -141,7 +131,6 @@ impl ModelBuilder {
             self.events.push(EventBuilder {
                 name: id.to_string(),
                 params: BTreeMap::new(),
-                index,
                 senders: HashSet::new(),
                 receivers: HashSet::new(),
             });
@@ -158,7 +147,7 @@ impl ModelBuilder {
                 .new_channel(vec![Type::Integer, Type::Integer], None);
             let fsm = FsmBuilder { pg_id, ext_queue };
             self.fsm_builders.insert(id.to_string(), fsm);
-            self.fsm_names.insert(pg_id, id.to_string());
+            self.fsm_names.insert(pg_id.into(), id.to_string());
         }
         self.fsm_builders.get(id).expect("just inserted")
     }
@@ -171,7 +160,7 @@ impl ModelBuilder {
                     format!(
                         "failed pre-processing of fsm {}",
                         self.fsm_names
-                            .get(&pg_id)
+                            .get(&pg_id.into())
                             .unwrap_or(&String::from("unknown")),
                     )
                 })?;
@@ -626,16 +615,16 @@ impl ModelBuilder {
         let mut params_vars: BTreeMap<(usize, String), (OmgType, Vec<(Var, Type)>)> =
             BTreeMap::new(); // maps (event_idx, param_name) -> (omg_type, (param_vars, var_types))
         let mut params_actions: HashMap<(PgId, usize), Action> = HashMap::new(); // maps (sender_pg_id, event) -> param_action
-        for event_builder in self
+        for (event_index, event_builder) in self
             .events
             .iter()
+            .enumerate()
             // only consider events that can activate some transition and that some other process is sending.
-            .filter(|eb| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
+            .filter(|(_, eb)| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
+            .map(|(index, eb)| (index, eb.clone()))
             // WARN TODO Necessary to satisfy the borrow checker but it should be possible to avoid cloning.
-            .cloned()
             .collect::<Vec<_>>()
         {
-            let event_index = event_builder.index;
             let mut param_vars_vec = Vec::new();
             let mut param_types_vec = Vec::new();
             // sorted in alphabetical order because of BTreeMap
@@ -670,31 +659,6 @@ impl ModelBuilder {
                         .parameter_channels
                         .entry((sender_id, pg_id, event_index))
                         .or_insert(self.cs.new_channel(param_types_vec.clone(), None));
-                    let mut param_idx = 0;
-                    for (param_name, omg_type) in event_builder.params.iter() {
-                        let omg_type = omg_type.as_ref().ok_or_else(|| {
-                            anyhow!("type of param {param_name} of event {}", event_builder.name)
-                        })?;
-                        let param_size = omg_type.size(omg_types).with_context(|| {
-                            anyhow!(
-                                "failed computing param '{param_name}' type '{omg_type:?}' size"
-                            )
-                        })?;
-                        self.parameters.insert(
-                            (sender_id, pg_id, event_index, param_name.clone()),
-                            (
-                                params_channel,
-                                Vec::from_iter(
-                                    param_types_vec[param_idx..param_idx + param_size]
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(idx, var_type)| (idx + param_idx, *var_type)),
-                                ),
-                            ),
-                        );
-                        param_idx += param_size;
-                    }
-
                     let read = self
                         .cs
                         .new_receive(pg_id, params_channel, param_vars_vec.clone())
@@ -797,12 +761,13 @@ impl ModelBuilder {
             // We need to set up the parameter-passing channel for every possible event that could be sent,
             // from any possible other FSM,
             // and for any parameter of the event.
-            for event_builder in self
+            for (event_index, event_builder) in self
                 .events
                 .iter()
-                .filter(|eb| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
+                .enumerate()
+                // only consider events that can activate some transition and that some other process is sending.
+                .filter(|(_, eb)| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
             {
-                let event_index = event_builder.index;
                 for &sender_id in &event_builder.senders {
                     // Expression checking event and sender correspond to the given ones.
                     let is_event_sender = CsExpression::And(vec![
@@ -865,7 +830,7 @@ impl ModelBuilder {
                     if self.events[event_index].senders.is_empty() {
                         warn!(
                             "event '{event_name}' in FSM '{}' is never sent, skipping",
-                            self.fsm_names.get(&pg_id).expect("PG name")
+                            self.fsm_names.get(&pg_id.into()).expect("PG name")
                         );
                         continue;
                     }
@@ -1164,7 +1129,7 @@ impl ModelBuilder {
                         }
                     }
                     for target_id in targets {
-                        let target_name = self.fsm_names.get(&target_id).unwrap();
+                        let target_name = self.fsm_names.get(&target_id.into()).unwrap();
                         let target_builder =
                             self.fsm_builders.get(target_name).expect("it must exist");
                         let target_ext_queue = target_builder.ext_queue;
@@ -1232,7 +1197,7 @@ impl ModelBuilder {
                         .collect::<Vec<_>>();
                     let mut next_loc = loc;
                     for target in targets {
-                        let target_name = self.fsm_names.get(&target).cloned();
+                        let target_name = self.fsm_names.get(&target.into()).cloned();
                         next_loc = self.add_executable(
                             &Executable::Send(Send {
                                 event: event.to_owned(),
@@ -1736,6 +1701,18 @@ impl ModelBuilder {
                 .ok_or(anyhow!("missing event {}", port.event))?;
             let event_builder = &self.events[event_id];
             if let Some((param, init)) = &port.param {
+                let param_start_idx = event_builder
+                    .params
+                    .range(..param.clone())
+                    .map(|(_, omg_type)| {
+                        omg_type
+                            .as_ref()
+                            .ok_or_else(|| {
+                                anyhow!("type of param {param} of event {} not found", port.event)
+                            })
+                            .and_then(|omg_type| omg_type.size(&parser.types))
+                    })
+                    .sum::<anyhow::Result<usize>>()?;
                 let param_type = event_builder
                     .params
                     .get(param)
@@ -1763,21 +1740,20 @@ impl ModelBuilder {
                     .with_context(|| {
                         format!("failed evaluating default value for port {port_id}")
                     })?;
-                let (channel, param_idx_type) = self
-                    .parameters
-                    .get(&(origin, target, event_id, param.to_owned()))
-                    .ok_or(anyhow!("param {param} not found"))?;
+                let channel = self
+                    .parameter_channels
+                    .get(&(origin, target, event_id))
+                    .ok_or(anyhow!("parameters' channel for {} not found", port.event))?;
                 self.ports.insert(
                     port_id.to_owned(),
                     (
                         param_type.ok_or_else(|| {
                             anyhow!("type of param {param} of event {} not found", port.event)
                         })?,
-                        param_idx_type
-                            .iter()
-                            .zip(init)
-                            .map(|(&(param_idx, _param_type), init)| {
-                                (Atom::State(*channel, param_idx), init)
+                        init.iter()
+                            .enumerate()
+                            .map(|(param_idx, &init)| {
+                                (Atom::State(*channel, param_start_idx + param_idx), init)
                             })
                             .collect(),
                     ),
@@ -1912,11 +1888,6 @@ impl ModelBuilder {
                     .collect(),
                 int_queues: self.int_queues,
                 events,
-                fsm_indexes: self
-                    .fsm_builders
-                    .into_iter()
-                    .map(|(name, b)| (u16::from(b.pg_id) as usize, name))
-                    .collect(),
                 ports,
                 assumes: assume_names,
                 guarantees: guarantee_names,
