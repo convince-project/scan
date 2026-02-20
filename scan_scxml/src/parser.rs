@@ -77,10 +77,10 @@ fn attrs(
     let mut attrs = HashMap::new();
     for attr in tag.attributes() {
         let attr = attr?;
-        let key = String::from_utf8(attr.key.into_inner().to_vec())?;
-        if keys.contains(&key.as_str()) || opt_keys.contains(&key.as_str()) {
-            let val = attr.unescape_value()?.into_owned();
-            attrs.insert(key, val);
+        let key = str::from_utf8(attr.key.into_inner())?;
+        if keys.contains(&key) || opt_keys.contains(&key) {
+            let val = attr.unescape_value()?.to_string();
+            attrs.insert(key.to_string(), val);
         } else {
             error!(target: "parser", "found unknown attribute '{key}'");
             bail!(ParserError::UnknownAttrKey(key.to_string()));
@@ -127,7 +127,7 @@ fn ecmascript(code: &str, scope: &Scope, interner: &mut Interner) -> anyhow::Res
 /// Represents a model specified in the CONVINCE-XML format.
 #[derive(Debug)]
 pub struct Parser {
-    pub(crate) process_list: HashMap<String, Scxml>,
+    pub(crate) processes: HashMap<String, Scxml>,
     pub(crate) types: OmgTypes,
     pub(crate) properties: Properties,
     pub(crate) interner: Interner,
@@ -141,7 +141,7 @@ impl Parser {
     pub fn parse(path: &Path) -> anyhow::Result<Self> {
         info!(target: "parser", "creating parser");
         let mut parser = Parser {
-            process_list: HashMap::new(),
+            processes: HashMap::new(),
             types: OmgTypes::new(),
             properties: Properties::new(),
             interner: Interner::new(),
@@ -215,7 +215,7 @@ impl Parser {
                                 path.display(),
                             )
                         })?;
-                    self.process_list.insert(fsm.name.to_owned(), fsm);
+                    self.processes.insert(fsm.name.to_owned(), fsm);
                 }
                 "xml" => {
                     info!("creating reader from file '{}'", path.display());
@@ -345,7 +345,7 @@ impl Parser {
                                 bail!("unknown moc {moc}");
                             }
                             let process_id = attrs.get(ATTR_ID).unwrap().clone();
-                            if self.process_list.contains_key(&process_id) {
+                            if self.processes.contains_key(&process_id) {
                                 bail!("process '{process_id}' declared multiple times");
                             }
                             let mut path = parent.to_owned();
@@ -364,7 +364,7 @@ impl Parser {
                                     )
                                 })?;
                             // Add process to list and check that no process was already in the list under the same name
-                            if self.process_list.insert(process_id.clone(), fsm).is_some() {
+                            if self.processes.insert(process_id.clone(), fsm).is_some() {
                                 panic!("process added to list multiple times");
                             }
                         }

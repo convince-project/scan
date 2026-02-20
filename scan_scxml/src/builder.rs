@@ -103,7 +103,7 @@ impl ModelBuilder {
         model_builder.prebuild_processes(&mut parser)?;
 
         info!(target: "build", "Visit process list");
-        for (id, fsm) in parser.process_list.iter() {
+        for (id, fsm) in parser.processes.iter() {
             model_builder
                 .build_fsm(fsm, &mut parser.interner, &parser.types)
                 .with_context(|| format!("failed building FSM '{id}'"))?;
@@ -164,7 +164,7 @@ impl ModelBuilder {
     }
 
     fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
-        for (id, fsm) in parser.process_list.iter_mut() {
+        for (id, fsm) in parser.processes.iter_mut() {
             let pg_id = self.fsm_builder(id).pg_id;
             self.prebuild_fsm(pg_id, fsm, &parser.interner, &parser.types)
                 .with_context(|| {
@@ -333,7 +333,7 @@ impl ModelBuilder {
                             .context("failed pre-processing executable content in <if> element")?;
                     }
                 }
-                for executable in r#else {
+                for executable in r#else.iter_mut().flatten() {
                     self.prebuild_exec(pg_id, executable, vars, interner, omg_types)
                         .context("failed pre-processing executable content in <else> element")?;
                 }
@@ -1328,9 +1328,11 @@ impl ModelBuilder {
                         .unwrap();
                 }
                 // Add executables for `else` (if any)
-                for exec in r#else {
+                for executable in r#else.iter().flatten() {
                     curr_loc = self
-                        .add_executable(exec, pg_id, int_queue, curr_loc, vars, interner, omg_types)
+                        .add_executable(
+                            executable, pg_id, int_queue, curr_loc, vars, interner, omg_types,
+                        )
                         .context("failed building executable content in <else> element")?;
                 }
                 self.cs

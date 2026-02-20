@@ -198,8 +198,8 @@ impl Executable {
                 execs.push(self);
             }
             ScxmlTag::If(r#if) => {
-                if r#if.else_flag {
-                    r#if.r#else.push(self);
+                if let Some(r#else) = r#if.r#else.as_mut() {
+                    r#else.push(self);
                 } else {
                     r#if.r#elif
                         .last_mut()
@@ -257,8 +257,7 @@ impl Send {
 #[derive(Debug, Clone)]
 pub struct If {
     pub(crate) r#elif: Vec<(boa_ast::Expression, Vec<Executable>)>,
-    pub(crate) r#else: Vec<Executable>,
-    else_flag: bool,
+    pub(crate) r#else: Option<Vec<Executable>>,
 }
 
 impl If {
@@ -359,10 +358,7 @@ pub(super) fn parse<R: BufRead>(
             Event::End(tag) => {
                 let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
                 if let Some(tag) = stack.pop() {
-                    if <&str>::from(&tag) != tag_name {
-                        error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
-                        bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
-                    } else {
+                    if <&str>::from(&tag) == tag_name {
                         trace!(target: "parser", "end tag '{tag_name}'");
                         match tag {
                             ScxmlTag::Scxml(fsm) if stack.is_empty() => {
@@ -428,6 +424,9 @@ pub(super) fn parse<R: BufRead>(
                                 unreachable!("All tags should be considered");
                             }
                         }
+                    } else {
+                        error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
+                        bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
                     }
                 } else {
                     // WARN TODO FIXME: actually tag missing from stack?
@@ -559,10 +558,10 @@ fn parse_empty_tag(
                 .is_some_and(|tag| matches!(tag, ScxmlTag::If(_))) =>
         {
             if let Some(ScxmlTag::If(r#if)) = stack.last_mut() {
-                if r#if.else_flag {
+                if r#if.r#else.is_some() {
                     bail!("multiple `else` inside `if` tag");
                 } else {
-                    r#if.else_flag = true;
+                    r#if.r#else = Some(Vec::new());
                 }
             } else {
                 unreachable!()
@@ -623,8 +622,7 @@ fn parse_start_tag(
         TAG_IF if stack.iter().rev().any(|tag| tag.is_executable()) => If::parse(tag, interner)
             .map(|cond| If {
                 elif: vec![(cond, Vec::new())],
-                r#else: Vec::new(),
-                else_flag: false,
+                r#else: None,
             })
             .map(ScxmlTag::If),
         TAG_ONENTRY
