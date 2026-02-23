@@ -147,8 +147,10 @@ impl ModelBuilder {
         })
     }
 
-    fn fsm_builder(&mut self, id: &str) -> &FsmBuilder {
-        if !self.fsm_builders.contains_key(id) {
+    fn add_fsm_builder(&mut self, id: &str) -> anyhow::Result<&FsmBuilder> {
+        if self.fsm_builders.contains_key(id) {
+            bail!("FSM {id} aready exists");
+        } else {
             let pg_id = self.cs.new_program_graph();
             let ext_queue = self
                 .cs
@@ -157,21 +159,17 @@ impl ModelBuilder {
             self.fsm_builders.insert(id.to_string(), fsm);
             self.fsm_names.insert(pg_id.into(), id.to_string());
         }
-        self.fsm_builders.get(id).expect("just inserted")
+        Ok(self.fsm_builders.get(id).expect("just inserted"))
     }
 
     fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
+        for (id, _fsm) in parser.processes.iter_mut() {
+            let _ = self.add_fsm_builder(id).expect("add FSM builder");
+        }
         for (id, fsm) in parser.processes.iter_mut() {
-            let pg_id = self.fsm_builder(id).pg_id;
+            let pg_id = self.fsm_builders.get(id).expect("just inserted").pg_id;
             self.prebuild_fsm(pg_id, fsm, &parser.interner, &parser.types)
-                .with_context(|| {
-                    format!(
-                        "failed pre-processing of fsm {}",
-                        self.fsm_names
-                            .get(&pg_id.into())
-                            .unwrap_or(&String::from("unknown")),
-                    )
-                })?;
+                .with_context(|| format!("failed pre-processing of fsm {id}",))?;
         }
         for eb in &self.events {
             for (param, t) in &eb.params {
@@ -276,7 +274,23 @@ impl ModelBuilder {
                 // If target is given by Id, add it to event's receivers
                 // This is not possible with dynamic targets
                 if let Some(Target::Id(target)) = target {
-                    let target_id = self.fsm_builder(target).pg_id;
+                    let target_id = if let Some(fsm) = self.fsm_builders.get(target) {
+                        fsm.pg_id
+                    } else {
+                        // WARN: If target FSM does not exist, we create a new one (which will only receive events)
+                        // as this might be the intended behavior for the model specification,
+                        // but we also raise a warning because the missing FSM might also be due to a mispelling of the target.
+                        let fsm_name = self
+                            .fsm_names
+                            .get(&pg_id.into())
+                            .ok_or_else(|| anyhow!("FSM {pg_id:?} not found"))?;
+                        warn!(
+                            "target FSM '{target}' for sent event '{event}' in FSM '{fsm_name}' does not exist; creating a new one",
+                        );
+                        self.add_fsm_builder(target)
+                            .expect("add new fsm builder")
+                            .pg_id
+                    };
                     self.events
                         .get_mut(event_index)
                         .expect("index must exist")
@@ -1327,24 +1341,34 @@ impl ModelBuilder {
         interner: &Interner,
         omg_types: &OmgTypes,
     ) -> Result<Location, anyhow::Error> {
-        assert!(!params.is_empty());
-        // Check that no param is missing
-        for p in self.events[event_idx].params.keys() {
-            if !params.iter().any(|param| param.name == *p) {
-                bail!("missing param {p}");
-            }
-        }
+        // assert!(!params.is_empty());
         let mut exprs = Vec::new();
-        for param in params {
-            // Build expression from ECMAScript expression.
-            let expr = self.expression(
-                &param.expr,
-                interner,
-                vars,
-                param.omg_type.as_ref(),
-                omg_types,
-            )?;
-            exprs.extend_from_slice(&expr);
+        for (p, param_type) in self.events[event_idx].params.clone().iter() {
+            // Check that param is not missing
+            if let Some(param) = params.iter().find(|param| param.name == *p) {
+                assert_eq!(&param.omg_type, param_type);
+                // Build expression from ECMAScript expression.
+                let expr = self.expression(
+                    &param.expr,
+                    interner,
+                    vars,
+                    param.omg_type.as_ref(),
+                    omg_types,
+                )?;
+                exprs.extend_from_slice(&expr);
+            } else {
+                warn!("missing param {p}, sending default value");
+                // bail!("missing param {p}");
+                let expr = param_type
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("unknown type for param {p}"))?
+                    .to_scan_types(omg_types)
+                    .with_context(|| format!("failed converting param '{p}' type to Scan types"))?;
+                exprs.extend(
+                    expr.iter()
+                        .map(|scan_type| Expression::Const(scan_type.default_value())),
+                );
+            }
         }
         // Retreive or create channel for parameter passing.
         let scan_types = exprs
