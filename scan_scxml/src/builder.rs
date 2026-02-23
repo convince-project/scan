@@ -89,8 +89,12 @@ impl ModelBuilder {
         all_properties: bool,
     ) -> anyhow::Result<(CsModel, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
-        model_builder.build_types(&parser.types)?;
-        model_builder.prebuild_processes(&mut parser)?;
+        model_builder
+            .build_types(&parser.types)
+            .context("failed building types")?;
+        model_builder
+            .prebuild_processes(&mut parser)
+            .context("failed prebuilding processes")?;
 
         info!(target: "build", "Visit process list");
         for (id, fsm) in parser.processes.iter() {
@@ -99,8 +103,12 @@ impl ModelBuilder {
                 .with_context(|| format!("failed building FSM '{id}'"))?;
         }
 
-        model_builder.build_ports(&parser)?;
-        model_builder.build_properties(&parser, properties, all_properties)?;
+        model_builder
+            .build_ports(&parser)
+            .context("failed building ports")?;
+        model_builder
+            .build_properties(&parser, properties, all_properties)
+            .context("failed building properties")?;
 
         let model = model_builder.build_model();
 
@@ -551,7 +559,7 @@ impl ModelBuilder {
                     .collect::<anyhow::Result<Vec<(Var, Type)>>>()?
             } else {
                 omg_type
-                    .to_scan_types(omg_types).with_context(|| anyhow!("failed converting type {omg_type:?} of location {} to Scan native types", data.id))?
+                    .to_scan_types(omg_types).with_context(|| format!("failed converting type {omg_type:?} of location {} to Scan native types", data.id))?
                     .into_iter()
                     .map(|t| {
                         (
@@ -634,7 +642,7 @@ impl ModelBuilder {
                     .ok_or_else(|| anyhow!("type of param {param_name} not found"))?;
                 // Variables where to store parameter.
                 let param_vars_types = param_omg_type
-                    .to_scan_types(omg_types).with_context(|| anyhow!("failed converting type {param_omg_type:?} of param {param_name} to Scan native types"))?
+                    .to_scan_types(omg_types).with_context(|| format!("failed converting type {param_omg_type:?} of param {param_name} to Scan native types"))?
                     .into_iter()
                     .map(|t| {
                         (
@@ -699,7 +707,7 @@ impl ModelBuilder {
                         &omg_types,
                     )
                     .with_context(|| {
-                        anyhow!(
+                        format!(
                             "failed building executable content on entry of state {}",
                             state.id
                         )
@@ -906,7 +914,7 @@ impl ModelBuilder {
                             &vars,
                             Some(&OmgBaseType::Boolean.into()),
                             &omg_types,
-                        ).with_context(|| anyhow!("failed building conditional expression for transition #{transition_index} in state {}", state.id))
+                        ).with_context(|| format!("failed building conditional expression for transition #{transition_index} in state {}", state.id))
                     })
                     .transpose()?;
                 if cond.as_ref().is_some_and(|cond| cond.len() != 1) {
@@ -976,7 +984,7 @@ impl ModelBuilder {
                             &omg_types,
                         )
                         .with_context(|| {
-                            anyhow!(
+                            format!(
                                 "failed building executable content on exit of state {}",
                                 state.id
                             )
@@ -994,7 +1002,7 @@ impl ModelBuilder {
                             &omg_types,
                         )
                         .with_context(|| {
-                            anyhow!(
+                            format!(
                                 "failed building executable content of transition #{transition_index} of state {}",
                                 state.id
                             )
@@ -1120,7 +1128,7 @@ impl ModelBuilder {
                                 vars,
                                 Some(&OmgBaseType::Uri.into()),
                                 omg_types,
-                            ).with_context(|| anyhow!("failed building target expression of <send event=\"{event}\"> element"))?;
+                            ).with_context(|| format!("failed building target expression of <send event=\"{event}\"> element"))?;
                             if target_exprs.len() != 1 {
                                 bail!("epression is not a target");
                             }
@@ -1177,7 +1185,7 @@ impl ModelBuilder {
                                     omg_types,
                                 )
                                 .with_context(|| {
-                                    anyhow!("failed sending params for event '{event}'")
+                                    format!("failed sending params for event '{event}'")
                                 })?;
                         }
                         // Once sending event and args done, get to exit-point
@@ -1223,7 +1231,7 @@ impl ModelBuilder {
                 let expr = self
                     .expression(expr, interner, vars, Some(omg_type), omg_types)
                     .with_context(|| {
-                        anyhow!(
+                        format!(
                             "failed building expression in <assign> element for location {location}"
                         )
                     })?;
@@ -1239,7 +1247,7 @@ impl ModelBuilder {
                         }
                     })
                     .with_context(|| {
-                        anyhow!("failed building assignments for location '{location}'")
+                        format!("failed building assignments for location '{location}'")
                     })?;
                 let next_loc = self.cs.new_location(pg_id).unwrap();
                 self.cs.add_transition(pg_id, loc, assign, next_loc, None)?;
@@ -1473,7 +1481,7 @@ impl ModelBuilder {
                                     let mut target = target.as_slice();
                                     for (next_field_name, next_field_type) in fields {
                                         let field_size = next_field_type.size(omg_types).with_context(|| {
-                                            anyhow!(
+                                            format!(
                                                 "failed computing field '{next_field_name}' type '{next_field_type:?}' size"
                                             )
                                         })?;
@@ -1807,8 +1815,6 @@ impl ModelBuilder {
                                     .iter()
                                     .map(|(atom, val)| (atom.clone(), val.r#type()))
                                     .collect(),
-                                // vec![(atom.clone(),)],
-                                // parser.properties.ports.get(name).unwrap().r#type.clone(),
                             ),
                         )
                     })
