@@ -1,11 +1,13 @@
 //! Model builder for SCAN's XML specification format.
 
+mod expression;
+
+use self::expression::{expression, infer_type};
 use crate::parser::{
     Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send, Target,
 };
 use anyhow::{Context, anyhow, bail};
-use boa_ast::expression::access::{PropertyAccess, PropertyAccessField};
-use boa_interner::{Interner, ToInternedString};
+use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
 use std::{
@@ -16,6 +18,9 @@ use std::{
 // TODO:
 //
 // -[ ] WARN FIXME System is fragile if name/id/path do not coincide
+// -[ ] WARN FIXME TODO: simplistic implementation of enums
+// The same label can belong to multiple enums,
+// and given a label it is not possible to recover the originating enum.
 
 #[derive(Debug, Clone)]
 pub struct ScxmlModel {
@@ -50,11 +55,8 @@ struct EventBuilder {
 #[derive(Default)]
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder,
-    // Associates an enum's label with a **globally unique** index.
-    // The same label can belong to multiple enums,
-    // and given a label it is not possible to recover the originating enum.
-    // WARN FIXME TODO: simplistic implementation of enums
-    enums: HashMap<String, Integer>,
+    // Associates a string with a **globally unique** index.
+    strings: HashMap<String, Integer>,
     // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
     // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
     // QUESTION: Is there a better way?
@@ -123,9 +125,9 @@ impl ModelBuilder {
                 // and the same label can appear in different enums.
                 // This makes it so that SUCCESS and FAILURE from ActionResponse are the same as those in ConditionResponse.
                 for label in labels.iter() {
-                    if !self.enums.contains_key(label) {
-                        let idx = self.enums.len();
-                        self.enums.insert(label.to_owned(), idx as Integer);
+                    if !self.strings.contains_key(label) {
+                        let idx = self.strings.len();
+                        self.strings.insert(label.to_owned(), idx as Integer);
                     }
                 }
             }
@@ -196,7 +198,7 @@ impl ModelBuilder {
             {
                 vars.insert(data.id.to_owned(), r#type.clone());
             } else if let Some(expr) = data.expression.as_ref() {
-                let r#type = self.infer_type(expr, &vars, interner, omg_types)?;
+                let r#type = infer_type(expr, &vars, interner, omg_types)?;
                 vars.insert(data.id.to_owned(), r#type);
             }
         }
@@ -320,7 +322,7 @@ impl ModelBuilder {
                     {
                         let builder = self.events.get_mut(event_index).expect("index must exist");
                         builder.params.insert(param.name.clone(), Some(t.clone()));
-                    } else if let Ok(t) = self.infer_type(&param.expr, vars, interner, omg_types) {
+                    } else if let Ok(t) = infer_type(&param.expr, vars, interner, omg_types) {
                         let _ = param.omg_type.insert(t.clone());
                         let builder = self.events.get_mut(event_index).expect("index must exist");
                         builder.params.insert(param.name.clone(), Some(t));
@@ -353,189 +355,6 @@ impl ModelBuilder {
         }
     }
 
-    fn infer_type(
-        &self,
-        expr: &boa_ast::Expression,
-        vars: &HashMap<String, OmgType>,
-        interner: &Interner,
-        omg_types: &OmgTypes,
-    ) -> anyhow::Result<OmgType> {
-        match expr {
-            boa_ast::Expression::Identifier(ident) => {
-                let ident = ident.to_interned_string(interner);
-                vars.get(&ident)
-                    .cloned()
-                    .or_else(|| {
-                        if self.enums.contains_key(&ident) {
-                            Some(OmgBaseType::Int32.into())
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or(anyhow!("type cannot be inferred"))
-            }
-            boa_ast::Expression::ArrayLiteral(lit) => {
-                let omg_type = self.infer_type(
-                    lit.as_ref()
-                        .first()
-                        .ok_or(anyhow!("array literal missing expression"))?
-                        .as_ref()
-                        .ok_or(anyhow!("cannot infer type of this array"))?,
-                    vars,
-                    interner,
-                    omg_types,
-                )?;
-                let len = lit.as_ref().len();
-                if let OmgType::Base(omg_base_type) = omg_type {
-                    Ok(OmgType::Array(omg_base_type, Some(len)))
-                } else {
-                    Err(anyhow!("only arrays of base types are currently supported"))
-                }
-            }
-            boa_ast::Expression::Literal(lit) => {
-                use boa_ast::expression::literal::LiteralKind;
-                match lit.kind() {
-                    LiteralKind::String(_) => Ok(OmgBaseType::String.into()),
-                    LiteralKind::Num(_) => Ok(OmgBaseType::F64.into()),
-                    LiteralKind::Int(_) => Ok(OmgBaseType::Int32.into()),
-                    // Literal::BigInt(_) => todo!(),
-                    LiteralKind::Bool(_) => Ok(OmgBaseType::Boolean.into()),
-                    _ => Err(anyhow!(
-                        "unable to infer type for literal expression '{lit:?}'"
-                    )),
-                }
-            }
-            boa_ast::Expression::Unary(unary) => {
-                let type_name = self.infer_type(unary.target(), vars, interner, omg_types)?;
-                match unary.op() {
-                    boa_ast::expression::operator::unary::UnaryOp::Minus
-                    | boa_ast::expression::operator::unary::UnaryOp::Plus => Ok(type_name),
-                    boa_ast::expression::operator::unary::UnaryOp::Not => {
-                        Ok(OmgBaseType::Boolean.into())
-                    }
-                    _ => Err(anyhow!(
-                        "unable to infer type for operator '{:?}'",
-                        unary.op()
-                    )),
-                }
-            }
-            boa_ast::Expression::Binary(bin) => {
-                let lhs = self.infer_type(bin.lhs(), vars, interner, omg_types)?;
-                let rhs = self.infer_type(bin.rhs(), vars, interner, omg_types)?;
-                match bin.op() {
-                    boa_ast::expression::operator::binary::BinaryOp::Arithmetic(op) => {
-                        if let (OmgType::Base(lhs_type), OmgType::Base(rhs_type)) = (lhs, rhs) {
-                            if lhs_type == rhs_type {
-                                Ok(OmgType::Base(lhs_type))
-                            } else {
-                                Err(anyhow!(
-                                    "unable to infer type for operator '{op:?}' arithmetic expression"
-                                ))
-                            }
-                        } else {
-                            Err(anyhow!(
-                                "unable to infer type for operator '{op:?}' arithmetic expression"
-                            ))
-                        }
-                    }
-                    boa_ast::expression::operator::binary::BinaryOp::Bitwise(_) => {
-                        Err(anyhow!("bitwise operations not supported"))
-                    }
-                    boa_ast::expression::operator::binary::BinaryOp::Relational(_)
-                    | boa_ast::expression::operator::binary::BinaryOp::Logical(_) => {
-                        Ok(OmgBaseType::Boolean.into())
-                    }
-                    boa_ast::expression::operator::binary::BinaryOp::Comma => Err(anyhow!(
-                        "unknown binary operator 'comma', unable to infer type"
-                    )),
-                }
-            }
-            boa_ast::Expression::Call(call) => {
-                // TODO FIXME: fix name of args
-                let mut vars_args = vars.clone();
-                let args = call
-                    .args()
-                    .iter()
-                    .map(|arg| {
-                        self.infer_type(arg, vars, interner, omg_types)
-                            .map(|omg_type| (String::from("name of arg???"), omg_type))
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                vars_args.extend(args);
-                self.infer_type(call.function(), &vars_args, interner, omg_types)
-            }
-            boa_ast::Expression::PropertyAccess(property_access) => match property_access {
-                boa_ast::expression::access::PropertyAccess::Simple(simple_property_access) => {
-                    if let &boa_ast::Expression::Identifier(ident) = simple_property_access.target()
-                        && ident.to_interned_string(interner) == "Math"
-                    {
-                        match simple_property_access.field() {
-                            boa_ast::expression::access::PropertyAccessField::Const(identifier) => {
-                                if identifier.sym() == interner.get("floor").unwrap() {
-                                    Ok(OmgBaseType::Int32.into())
-                                } else if identifier.sym() == interner.get("random").unwrap() {
-                                    Ok(OmgBaseType::F64.into())
-                                } else {
-                                    Err(anyhow!(
-                                        "unknown expression '{expr:?}', unable to infer type"
-                                    ))
-                                }
-                            }
-                            boa_ast::expression::access::PropertyAccessField::Expr(expression) => {
-                                Err(anyhow!(
-                                    "unknown expression '{expression:?}', unable to infer type"
-                                ))
-                            }
-                        }
-                    } else {
-                        match self.infer_type(
-                            simple_property_access.target(),
-                            vars,
-                            interner,
-                            omg_types,
-                        )? {
-                            OmgType::Base(omg_base_type) => {
-                                bail!("trying to access property of base type {omg_base_type:?}")
-                            }
-                            OmgType::Array(omg_base_type, _) => {
-                                bail!("trying to access property of array [{omg_base_type:?}]")
-                            }
-                            OmgType::Custom(omg_type_name) => {
-                                match simple_property_access.field() {
-                                    PropertyAccessField::Const(identifier) => {
-                                        let field = identifier.to_interned_string(interner);
-                                        match omg_types.type_defs.get(&omg_type_name).ok_or_else(
-                                            || anyhow!("type {omg_type_name} undefined"),
-                                        )? {
-                                            OmgTypeDef::Enumeration(_items) => bail!(
-                                                "trying to access property of enumeration {omg_type_name}"
-                                            ),
-                                            OmgTypeDef::Structure(btree_map) => {
-                                                btree_map.get(&field).cloned().ok_or_else(|| anyhow!("field {field} of type {omg_type_name} undefined"))
-                                            }
-                                        }
-                                    }
-                                    PropertyAccessField::Expr(expression) => Err(anyhow!(
-                                        "unknown field expression '{expression:?}', unable to infer type"
-                                    )),
-                                }
-                            }
-                        }
-                    }
-                }
-                boa_ast::expression::access::PropertyAccess::Private(_private_property_access) => {
-                    todo!()
-                }
-                boa_ast::expression::access::PropertyAccess::Super(_super_property_access) => {
-                    todo!()
-                }
-            },
-            _ => Err(anyhow!(
-                "unknown expression '{expr:?}', unable to infer type"
-            )),
-        }
-    }
-
     fn build_fsm(
         &mut self,
         scxml: &Scxml,
@@ -564,13 +383,20 @@ impl ModelBuilder {
                     .expression
                     .as_ref()
                     .ok_or_else(|| anyhow!("expression for data '{}' required", data.id))
-                    .and_then(|expr| self.infer_type(expr, &HashMap::new(), interner, omg_types))?;
+                    .and_then(|expr| infer_type(expr, &HashMap::new(), interner, omg_types))?;
             }
             let vars_types = if let Some(expr) = data.expression.as_ref() {
-                self.expression(expr, interner, &vars, Some(&omg_type), omg_types)?
-                    .iter()
-                    .map(|expr| Ok((self.cs.new_var(pg_id, expr.clone())?, expr.r#type()?)))
-                    .collect::<anyhow::Result<Vec<(Var, Type)>>>()?
+                expression(
+                    expr,
+                    interner,
+                    &vars,
+                    &mut self.strings,
+                    Some(&omg_type),
+                    omg_types,
+                )?
+                .iter()
+                .map(|expr| Ok((self.cs.new_var(pg_id, expr.clone())?, expr.r#type()?)))
+                .collect::<anyhow::Result<Vec<(Var, Type)>>>()?
             } else {
                 omg_type
                     .to_scan_types(omg_types).with_context(|| format!("failed converting type {omg_type:?} of location {} to Scan native types", data.id))?
@@ -922,10 +748,11 @@ impl ModelBuilder {
                     .cond
                     .as_ref()
                     .map(|cond| {
-                        self.expression(
+                        expression(
                             cond,
                             interner,
                             &vars,
+                            &mut self.strings,
                             Some(&OmgBaseType::Boolean.into()),
                             &omg_types,
                         ).with_context(|| format!("failed building conditional expression for transition #{transition_index} in state {}", state.id))
@@ -1136,10 +963,10 @@ impl ModelBuilder {
                             ));
                         }
                         Target::Expr(targetexpr) => {
-                            let target_exprs = self.expression(
+                            let target_exprs = expression(
                                 targetexpr,
                                 interner,
-                                vars,
+                                vars, &mut self.strings,
                                 Some(&OmgBaseType::Uri.into()),
                                 omg_types,
                             ).with_context(|| format!("failed building target expression of <send event=\"{event}\"> element"))?;
@@ -1242,13 +1069,19 @@ impl ModelBuilder {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
                 let (omg_type, scan_vars) =
                     vars.get(location).ok_or(anyhow!("undefined variable"))?;
-                let expr = self
-                    .expression(expr, interner, vars, Some(omg_type), omg_types)
-                    .with_context(|| {
-                        format!(
-                            "failed building expression in <assign> element for location {location}"
-                        )
-                    })?;
+                let expr = expression(
+                    expr,
+                    interner,
+                    vars,
+                    &mut self.strings,
+                    Some(omg_type),
+                    omg_types,
+                )
+                .with_context(|| {
+                    format!(
+                        "failed building expression in <assign> element for location {location}"
+                    )
+                })?;
                 let assign = self.cs.new_action(pg_id).expect("PG exists");
                 scan_vars
                     .iter()
@@ -1273,15 +1106,15 @@ impl ModelBuilder {
                 let mut curr_loc = loc;
                 for (cond, execs) in r#elif {
                     let mut next_loc = self.cs.new_location(pg_id).unwrap();
-                    let cond = self
-                        .expression(
-                            cond,
-                            interner,
-                            vars,
-                            Some(&OmgBaseType::Boolean.into()),
-                            omg_types,
-                        )
-                        .context("failed building condition expression in <if> element")?;
+                    let cond = expression(
+                        cond,
+                        interner,
+                        vars,
+                        &mut self.strings,
+                        Some(&OmgBaseType::Boolean.into()),
+                        omg_types,
+                    )
+                    .context("failed building condition expression in <if> element")?;
                     if cond.len() != 1 {
                         bail!("<cond> is not a boolean expression");
                     }
@@ -1334,7 +1167,7 @@ impl ModelBuilder {
         &mut self,
         pg_id: PgId,
         target_id: PgId,
-        params: &Vec<Param>,
+        params: &[Param],
         event_idx: usize,
         param_loc: Location,
         vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
@@ -1348,10 +1181,11 @@ impl ModelBuilder {
             if let Some(param) = params.iter().find(|param| param.name == *p) {
                 assert_eq!(&param.omg_type, param_type);
                 // Build expression from ECMAScript expression.
-                let expr = self.expression(
+                let expr = expression(
                     &param.expr,
                     interner,
                     vars,
+                    &mut self.strings,
                     param.omg_type.as_ref(),
                     omg_types,
                 )?;
@@ -1386,333 +1220,6 @@ impl ModelBuilder {
             .add_transition(pg_id, param_loc, pass_param, next_loc, None)
             .expect("hand-made params are correct");
         Ok(next_loc)
-    }
-
-    // WARN: vars and params have the same type so they could be easily swapped by mistake when calling the function.
-    fn expression<V: Clone>(
-        &mut self,
-        expr: &boa_ast::Expression,
-        interner: &Interner,
-        vars: &HashMap<String, (OmgType, Vec<(V, Type)>)>,
-        expr_type: Option<&OmgType>,
-        omg_types: &OmgTypes,
-    ) -> anyhow::Result<Vec<Expression<V>>> {
-        let expr = match expr {
-            boa_ast::Expression::This(_this) => todo!(),
-            boa_ast::Expression::Identifier(ident) => {
-                let ident = ident.to_interned_string(interner);
-                self.enums
-                    .get(&ident)
-                    .map(|i| vec![Expression::from(*i)])
-                    .or_else(|| {
-                        vars.get(&ident).map(|(_, vars)| {
-                            vars.iter()
-                                .map(|(var, t)| Expression::Var(var.clone(), t.to_owned()))
-                                .collect::<Vec<Expression<V>>>()
-                            // .ok_or(anyhow!("missing type {t}"))
-                        })
-                    })
-                    .ok_or(anyhow!("unknown identifier: {ident}"))?
-            }
-            boa_ast::Expression::Literal(lit) => {
-                use boa_ast::expression::literal::LiteralKind;
-                vec![match lit.kind() {
-                    LiteralKind::String(s) => {
-                        let len = self.enums.len() as Integer;
-                        Expression::from(
-                            *self
-                                .enums
-                                .entry(interner.resolve_expect(*s).to_string())
-                                .or_insert(len),
-                        )
-                    }
-                    LiteralKind::Num(f) => Expression::from(*f),
-                    LiteralKind::Int(i)
-                        if expr_type
-                            .is_some_and(|t| matches!(t, OmgType::Base(OmgBaseType::F64))) =>
-                    {
-                        Expression::from(*i as f64)
-                    }
-                    LiteralKind::Int(i) => Expression::from(*i),
-                    LiteralKind::BigInt(_) => todo!(),
-                    LiteralKind::Bool(b) => Expression::from(*b),
-                    LiteralKind::Null => todo!(),
-                    LiteralKind::Undefined => todo!(),
-                }]
-            }
-            boa_ast::Expression::ArrayLiteral(arr) => {
-                let expr_type = expr_type.ok_or(anyhow!("unknown array type"))?;
-                if let OmgType::Array(omg_base_type, len) = expr_type {
-                    let default = Expression::Const(Type::from(*omg_base_type).default_value());
-                    if len.is_some_and(|len| len != arr.as_ref().len()) {
-                        bail!("array literal of length incompatible with declared type len");
-                    }
-                    arr.as_ref()
-                        .iter()
-                        .map(|entry| {
-                            entry.as_ref().map_or(Ok(vec![default.clone()]), |entry| {
-                                self.expression(
-                                    entry,
-                                    interner,
-                                    vars,
-                                    Some((*omg_base_type).into()).as_ref(),
-                                    omg_types,
-                                )
-                            })
-                        })
-                        .collect::<anyhow::Result<Vec<_>>>()?
-                        .into_iter()
-                        .flatten()
-                        .collect()
-                } else {
-                    bail!("expression not matching its type {expr_type:?}");
-                }
-            }
-            boa_ast::Expression::PropertyAccess(prop_acc) => match prop_acc {
-                PropertyAccess::Simple(simple_property_access) => {
-                    let target = simple_property_access.target();
-                    let target_type = self.infer_type(
-                        target,
-                        &vars
-                            .iter()
-                            .map(|(var, (omg_type, _))| (var.clone(), omg_type.clone()))
-                            .collect(),
-                        interner,
-                        omg_types,
-                    )?;
-                    let target =
-                        self.expression(target, interner, vars, Some(&target_type), omg_types)?;
-                    let target_type_def = match target_type {
-                        OmgType::Base(omg_base_type) => {
-                            bail!("property access on base type {omg_base_type:?}")
-                        }
-                        OmgType::Array(omg_base_type, _) => {
-                            bail!("property access on array [{omg_base_type:?}]")
-                        }
-                        OmgType::Custom(omg_name) => omg_types
-                            .type_defs
-                            .get(&omg_name)
-                            .ok_or(anyhow!("type '{omg_name}' undefined"))?,
-                    };
-                    match simple_property_access.field() {
-                        PropertyAccessField::Const(identifier) => {
-                            let field_name = identifier.to_interned_string(interner);
-                            match target_type_def {
-                                OmgTypeDef::Enumeration(_items) => {
-                                    bail!("property access on enumeration")
-                                }
-                                OmgTypeDef::Structure(fields) => {
-                                    let mut target = target.as_slice();
-                                    for (next_field_name, next_field_type) in fields {
-                                        let field_size = next_field_type.size(omg_types).with_context(|| {
-                                            format!(
-                                                "failed computing field '{next_field_name}' type '{next_field_type:?}' size"
-                                            )
-                                        })?;
-                                        if *next_field_name == field_name {
-                                            return Ok(target[..field_size].to_vec());
-                                        } else {
-                                            // Skip field-size-many expressions
-                                            target = &target[field_size..];
-                                        }
-                                    }
-                                    bail!("unknown field {field_name}");
-                                }
-                            }
-                        }
-                        PropertyAccessField::Expr(_expression) => todo!(),
-                    }
-                }
-                PropertyAccess::Private(_private_property_access) => todo!(),
-                PropertyAccess::Super(_super_property_access) => todo!(),
-            },
-            boa_ast::Expression::Unary(unary) => {
-                use boa_ast::expression::operator::unary::UnaryOp;
-                let expr = self.expression(unary.target(), interner, vars, expr_type, omg_types)?;
-                if expr.len() != 1 {
-                    bail!("expression does not support unary operator");
-                }
-                let expr = expr[0].clone();
-                let new_expr = match unary.op() {
-                    UnaryOp::Minus => -expr,
-                    UnaryOp::Plus => expr,
-                    UnaryOp::Not => Expression::not(expr)?,
-                    _ => return Err(anyhow!("unimplemented operator")),
-                };
-                vec![new_expr]
-            }
-            boa_ast::Expression::Binary(bin) => {
-                use boa_ast::expression::operator::binary::{
-                    ArithmeticOp, BinaryOp, LogicalOp, RelationalOp,
-                };
-                match bin.op() {
-                    BinaryOp::Arithmetic(ar_bin) => {
-                        let lhs_hint;
-                        let rhs_hint;
-                        match ar_bin {
-                            ArithmeticOp::Add
-                            | ArithmeticOp::Sub
-                            | ArithmeticOp::Mul
-                            | ArithmeticOp::Exp => {
-                                lhs_hint = expr_type;
-                                rhs_hint = expr_type;
-                            }
-                            ArithmeticOp::Div => {
-                                // WARN: Type inference is tricky: integer division could produce a float
-                                lhs_hint = None;
-                                rhs_hint = None;
-                            }
-                            ArithmeticOp::Mod => {
-                                lhs_hint = Some(&OmgType::Base(OmgBaseType::Int32));
-                                rhs_hint = Some(&OmgType::Base(OmgBaseType::Int32));
-                            }
-                        }
-                        let lhs =
-                            self.expression(bin.lhs(), interner, vars, lhs_hint, omg_types)?;
-                        if lhs.len() != 1 {
-                            bail!("expression lhs does not support arithmetic binary operator");
-                        }
-                        let lhs = lhs[0].clone();
-                        let rhs =
-                            self.expression(bin.rhs(), interner, vars, rhs_hint, omg_types)?;
-                        if rhs.len() != 1 {
-                            bail!("expression rhs does not support arithmetic binary operator");
-                        }
-                        let rhs = rhs[0].clone();
-                        let new_expr = match ar_bin {
-                            ArithmeticOp::Add => lhs + rhs,
-                            ArithmeticOp::Sub => lhs + (-rhs),
-                            ArithmeticOp::Div => Expression::Div(Box::new((lhs, rhs))),
-                            ArithmeticOp::Mul => lhs * rhs,
-                            ArithmeticOp::Exp => todo!(),
-                            ArithmeticOp::Mod => Expression::Mod(Box::new((lhs, rhs))),
-                        };
-                        vec![new_expr]
-                    }
-                    BinaryOp::Relational(rel_bin) => {
-                        // Type inference is not possible as multiple types are possible
-                        let lhs = self.expression(bin.lhs(), interner, vars, None, omg_types)?;
-                        if lhs.len() != 1 {
-                            bail!("expression lhs does not support binary relational operator");
-                        }
-                        let lhs = lhs[0].clone();
-                        let rhs = self.expression(bin.rhs(), interner, vars, None, omg_types)?;
-                        if rhs.len() != 1 {
-                            bail!("expression rhs does not support binary relational operator");
-                        }
-                        let rhs = rhs[0].clone();
-                        let new_expr = match rel_bin {
-                            RelationalOp::Equal => Expression::Equal(Box::new((lhs, rhs))),
-                            RelationalOp::NotEqual => {
-                                Expression::Equal(Box::new((lhs, rhs))).not()?
-                            }
-                            RelationalOp::GreaterThan => Expression::Greater(Box::new((lhs, rhs))),
-                            RelationalOp::GreaterThanOrEqual => {
-                                Expression::GreaterEq(Box::new((lhs, rhs)))
-                            }
-                            RelationalOp::LessThan => Expression::Less(Box::new((lhs, rhs))),
-                            RelationalOp::LessThanOrEqual => {
-                                Expression::LessEq(Box::new((lhs, rhs)))
-                            }
-                            _ => return Err(anyhow!("unimplemented operator")),
-                        };
-                        vec![new_expr]
-                    }
-                    BinaryOp::Logical(op) => {
-                        let lhs = self.expression(
-                            bin.lhs(),
-                            interner,
-                            vars,
-                            Some(&OmgType::Base(OmgBaseType::Boolean)),
-                            omg_types,
-                        )?;
-                        if lhs.len() != 1 {
-                            bail!("expression lhs does not support binary logical operator");
-                        }
-                        let lhs = lhs[0].clone();
-                        let rhs = self.expression(
-                            bin.rhs(),
-                            interner,
-                            vars,
-                            Some(&OmgType::Base(OmgBaseType::Boolean)),
-                            omg_types,
-                        )?;
-                        if rhs.len() != 1 {
-                            bail!("expression rhs does not support binary logical operator");
-                        }
-                        let rhs = rhs[0].clone();
-                        let new_expr = match op {
-                            LogicalOp::And => Expression::and(vec![lhs, rhs])?,
-                            LogicalOp::Or => Expression::or(vec![lhs, rhs])?,
-                            _ => return Err(anyhow!("unimplemented operator")),
-                        };
-                        vec![new_expr]
-                    }
-                    BinaryOp::Comma => todo!(),
-                    _ => return Err(anyhow!("unimplemented operator")),
-                }
-            }
-            boa_ast::Expression::Conditional(_) => todo!(),
-            boa_ast::Expression::Parenthesized(par) => {
-                self.expression(par.expression(), interner, vars, expr_type, omg_types)?
-            }
-            boa_ast::Expression::Call(call) => {
-                let fun = call.function();
-                let args = call.args();
-                if let boa_ast::Expression::PropertyAccess(
-                    boa_ast::expression::access::PropertyAccess::Simple(property_access),
-                ) = fun
-                {
-                    if let boa_ast::Expression::Identifier(target_id) = property_access.target() {
-                        let target = target_id.to_interned_string(interner);
-                        match property_access.field() {
-                            boa_ast::expression::access::PropertyAccessField::Const(field_id) => {
-                                let field = field_id.to_interned_string(interner);
-                                if target == "Math" {
-                                    match field.as_str() {
-                                        "random" => vec![Expression::RandFloat(0., 1.)],
-                                        "floor" => {
-                                            if let [arg] = args {
-                                                let arg = self.expression(
-                                                    arg,
-                                                    interner,
-                                                    vars,
-                                                    Some(&OmgType::Base(OmgBaseType::F64)),
-                                                    omg_types,
-                                                )?;
-                                                if arg.len() != 1 {
-                                                    bail!(
-                                                        "expression does not support floor operator"
-                                                    );
-                                                }
-                                                let arg = arg[0].clone();
-                                                vec![Expression::Floor(Box::new(arg))]
-                                            } else {
-                                                bail!(
-                                                    "Math.floor() called with wrong number of arguments"
-                                                );
-                                            }
-                                        }
-                                        _ => bail!("unknown call"),
-                                    }
-                                } else {
-                                    bail!("unknown call");
-                                }
-                            }
-                            boa_ast::expression::access::PropertyAccessField::Expr(expression) => {
-                                return Err(anyhow!("unimplemented expression {expression:?}"));
-                            }
-                        }
-                    } else {
-                        return Err(anyhow!("unknown target"));
-                    }
-                } else {
-                    return Err(anyhow!("unknown call"));
-                }
-            }
-            _ => return Err(anyhow!("unimplemented expression")),
-        };
-        Ok(expr)
     }
 
     fn build_ports(&mut self, parser: &Parser) -> anyhow::Result<()> {
@@ -1755,23 +1262,21 @@ impl ModelBuilder {
                         )
                     })?
                     .clone();
-                let init = self
-                    .expression::<Var>(
-                        init,
-                        &parser.interner,
-                        &HashMap::new(),
-                        param_type.as_ref(),
-                        &parser.types,
-                    )
-                    .with_context(|| {
-                        format!("failed building default value expression for port {port_id}")
-                    })?
-                    .iter()
-                    .map(|expr| expr.eval_constant())
-                    .collect::<Result<Vec<_>, _>>()
-                    .with_context(|| {
-                        format!("failed evaluating default value for port {port_id}")
-                    })?;
+                let init = expression::<Var>(
+                    init,
+                    &parser.interner,
+                    &HashMap::new(),
+                    &mut self.strings,
+                    param_type.as_ref(),
+                    &parser.types,
+                )
+                .with_context(|| {
+                    format!("failed building default value expression for port {port_id}")
+                })?
+                .iter()
+                .map(|expr| expr.eval_constant())
+                .collect::<Result<Vec<_>, _>>()
+                .with_context(|| format!("failed evaluating default value for port {port_id}"))?;
                 let channel = self
                     .parameter_channels
                     .get(&(origin, target, event_id))
@@ -1824,7 +1329,7 @@ impl ModelBuilder {
         all_properties: bool,
     ) -> anyhow::Result<()> {
         for predicate in parser.properties.predicates.iter() {
-            let predicate = self.expression(
+            let predicate = expression(
                 predicate,
                 &parser.interner,
                 &self
@@ -1843,6 +1348,7 @@ impl ModelBuilder {
                         )
                     })
                     .collect(),
+                &mut self.strings,
                 Some(&OmgType::Base(OmgBaseType::Boolean)),
                 &parser.types,
             )?;
