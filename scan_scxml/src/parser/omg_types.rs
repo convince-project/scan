@@ -125,7 +125,7 @@ impl From<OmgBaseType> for OmgType {
 
 #[derive(Debug, Clone)]
 pub struct OmgTypes {
-    pub(crate) type_defs: HashMap<String, OmgTypeDef>,
+    pub type_defs: HashMap<String, OmgTypeDef>,
 }
 
 impl OmgTypes {

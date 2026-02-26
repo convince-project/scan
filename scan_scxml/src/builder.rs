@@ -30,10 +30,11 @@ pub struct ScxmlModel {
     pub parameters: HashMap<Channel, (PgId, PgId, usize)>,
     pub int_queues: HashSet<Channel>,
     pub ext_queues: HashMap<Channel, PgId>,
-    pub events: Vec<String>,
-    pub ports: Vec<(String, Type)>,
+    pub events: Vec<(String, Option<OmgTypeDef>)>,
+    pub ports: Vec<(String, OmgType, Vec<Type>)>,
     pub assumes: Vec<String>,
     pub guarantees: Vec<String>,
+    pub omg_types: OmgTypes,
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +113,7 @@ impl ModelBuilder {
             .build_properties(&parser, properties, all_properties)
             .context("failed building properties")?;
 
-        let model = model_builder.build_model();
+        let model = model_builder.build_model(parser);
 
         Ok(model)
     }
@@ -730,14 +731,13 @@ impl ModelBuilder {
                         String::from("_event"),
                         (
                             OmgType::Custom(String::from("_EventType")),
-                            Vec::from_iter(
-                                param_vars
-                                    .iter()
-                                    .filter(|((ev_ix, _), _)| *ev_ix == event_index)
-                                    .flat_map(|(_, (_, vars))| vars)
-                                    .cloned()
-                                    .chain([(origin_var, Type::Integer)]),
-                            ),
+                            param_vars
+                                .iter()
+                                .filter(|((ev_ix, _), _)| *ev_ix == event_index)
+                                .flat_map(|(_, (_, vars))| vars)
+                                .cloned()
+                                .chain([(origin_var, Type::Integer)])
+                                .collect(),
                         ),
                     );
                 }
@@ -1227,17 +1227,17 @@ impl ModelBuilder {
             let origin_builder = self
                 .fsm_builders
                 .get(&port.origin)
-                .ok_or(anyhow!("missing origin fsm {}", port.origin))?;
+                .ok_or_else(|| anyhow!("missing origin fsm {} for port {port_id}", port.origin))?;
             let origin = origin_builder.pg_id;
             let target_builder = self
                 .fsm_builders
                 .get(&port.target)
-                .ok_or(anyhow!("missing target fsm {}", port.target))?;
+                .ok_or_else(|| anyhow!("missing target fsm {} for port {port_id}", port.target))?;
             let target = target_builder.pg_id;
             let event_id = *self
                 .event_indexes
                 .get(&port.event)
-                .ok_or(anyhow!("missing event {}", port.event))?;
+                .ok_or_else(|| anyhow!("missing event {} for port {port_id}", port.event))?;
             let event_builder = &self.events[event_id];
             if let Some((param, init)) = &port.param {
                 let param_start_idx = event_builder
@@ -1247,7 +1247,7 @@ impl ModelBuilder {
                         omg_type
                             .as_ref()
                             .ok_or_else(|| {
-                                anyhow!("type of param {param} of event {} not found", port.event)
+                                anyhow!("type of param {param} for port {port_id} not found")
                             })
                             .and_then(|omg_type| omg_type.size(&parser.types))
                     })
@@ -1257,7 +1257,7 @@ impl ModelBuilder {
                     .get(param)
                     .ok_or_else(|| {
                         anyhow!(
-                            "param {param} in event {} in port {port_id} not found",
+                            "param {param} of event {} in port {port_id} not found",
                             port.event
                         )
                     })?
@@ -1280,7 +1280,7 @@ impl ModelBuilder {
                 let channel = self
                     .parameter_channels
                     .get(&(origin, target, event_id))
-                    .ok_or(anyhow!("parameters' channel for {} not found", port.event))?;
+                    .expect("parameters' channel for event in port");
                 self.ports.insert(
                     port_id.to_owned(),
                     (
@@ -1369,26 +1369,34 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(self) -> (CsModel, PmtlOracle, ScxmlModel) {
+    fn build_model(self, parser: Parser) -> (CsModel, PmtlOracle, ScxmlModel) {
         let mut model = CsModel::new(self.cs);
         let mut ports = Vec::new();
         for (port_name, (_omg_type, atoms)) in self.ports {
             // TODO FIXME handle error.
-            for (atom, init) in atoms {
-                if let Atom::State(channel, param_idx) = atom {
-                    model.add_port(channel, param_idx, init);
-                    ports.push((
-                        channel,
-                        param_idx,
-                        port_name.clone() + &param_idx.to_string(),
-                        init.r#type(),
-                    ));
-                }
+            // NOTE: all atoms in the same port must have the same channel
+            if let Some((Atom::State(channel, _), _)) = atoms.first().cloned() {
+                let (param_idxs, types): (Vec<usize>, _) = atoms
+                    .into_iter()
+                    .map(|(atom, init)| {
+                        if let Atom::State(c, param_idx) = atom {
+                            assert_eq!(channel, c);
+                            model.add_port(channel, param_idx, init);
+                            (param_idx, init.r#type())
+                        } else {
+                            panic!("all atoms are of state type")
+                        }
+                    })
+                    .unzip();
+                ports.push((channel, param_idxs, port_name, _omg_type, types));
             }
         }
         // Ports need to be sorted by channel or will not match state iterator
-        ports.sort_by_key(|(c, param_idx, _, _)| (*c, *param_idx));
-        let ports = ports.into_iter().map(|(_, _, n, t)| (n, t)).collect();
+        ports.sort_by_key(|(c, idxs, ..)| (*c, *idxs.first().expect("at least a value")));
+        let ports = ports
+            .into_iter()
+            .map(|(_, _, name, omg_type, types)| (name, omg_type, types))
+            .collect();
         for pred_expr in self.predicates {
             // TODO FIXME handle error.
             let _id = model.add_predicate(pred_expr);
@@ -1403,7 +1411,14 @@ impl ModelBuilder {
             .enumerate()
             .map(|(enum_i, (name, idx))| {
                 assert_eq!(enum_i, idx);
-                name
+                let params = &self.events[idx].params;
+                let params_types =
+                    (!params.is_empty()).then_some(OmgTypeDef::Structure(BTreeMap::from_iter(
+                        params
+                            .into_iter()
+                            .map(|(name, t)| (name.clone(), t.as_ref().unwrap().clone())),
+                    )));
+                (name, params_types)
             })
             .collect();
 
@@ -1427,6 +1442,7 @@ impl ModelBuilder {
                 ports,
                 assumes: assume_names,
                 guarantees: guarantee_names,
+                omg_types: parser.types,
             },
         )
     }
