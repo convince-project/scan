@@ -314,7 +314,7 @@ pub enum EventType {
 pub struct ChannelSystem {
     channels: Vec<(Vec<Type>, Option<usize>)>,
     communications: Vec<(PgAction, Channel, Message)>,
-    communications_pg_idxs: Vec<u16>,
+    communications_pg_idxs: Vec<usize>,
     program_graphs: Vec<ProgramGraph>,
 }
 
@@ -351,10 +351,10 @@ impl ChannelSystem {
             .then(|| {
                 let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
                 let lower = self.communications_pg_idxs[pg_id.0 as usize];
-                let idx = (self.communications[lower as usize..higher as usize])
+                let idx = (self.communications[lower..higher])
                     .binary_search_by_key(&pg_action, |(a, _, _)| *a)
                     .expect("communication");
-                let (_, c, m) = self.communications[lower as usize + idx];
+                let (_, c, m) = self.communications[lower + idx];
                 (c, m)
             })
     }

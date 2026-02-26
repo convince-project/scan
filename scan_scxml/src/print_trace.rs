@@ -1,3 +1,5 @@
+use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
+
 use super::ScxmlModel;
 use scan_core::channel_system::{Event, EventType};
 use scan_core::{RunOutcome, Time, Tracer, Val};
@@ -21,8 +23,7 @@ impl<'a> TracePrinter<'a> {
     const TEMP: &'static str = ".temp";
     const SUCCESSES: &'static str = "successes";
     const FAILURES: &'static str = "failures";
-    const HEADER: [&'static str; 6] =
-        ["Time", "Send/Receive", "Origin", "Target", "Event", "Value"];
+    const HEADER: [&'static str; 5] = ["Time", "Origin", "Target", "Event", "Values"];
 
     pub fn new(model: &'a ScxmlModel) -> Self {
         let mut path = current_dir().expect("current dir");
@@ -51,6 +52,24 @@ impl<'a> TracePrinter<'a> {
             model,
         }
     }
+
+    fn format_state<I: IntoIterator<Item = Val>>(&self, ports: I) -> Vec<String> {
+        let mut iter = ports.into_iter();
+        self.model
+            .ports
+            .iter()
+            .map(move |(_, omg_type, types)| {
+                format_val(
+                    iter.by_ref()
+                        .take(types.len())
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    omg_type,
+                    &self.model.omg_types,
+                )
+            })
+            .collect()
+    }
 }
 
 impl<'a> Clone for TracePrinter<'a> {
@@ -74,21 +93,22 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
         let idx = self
             .index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let filename = format!("{idx:04}.csv.gz");
+        let filename = format!("{idx:04}");
         self.path.push(Self::TEMP);
         self.path.push(&filename);
+        self.path.add_extension("gz");
         let file = File::create_new(&self.path).expect("create file");
         let enc = flate2::GzBuilder::new()
-            .filename(filename)
+            .filename(filename + ".csv")
+            .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
         let mut writer = csv::WriterBuilder::new().from_writer(enc);
         writer
             .write_record(
                 Self::HEADER.into_iter().map(String::from).chain(
-                    self.model
-                        .ports
-                        .iter()
-                        .map(|(name, t)| format!("{name}: {t:?}")),
+                    self.model.ports.iter().map(|(name, omg_type, _)| {
+                        format!("{name}: {}", format_omg_type(omg_type))
+                    }),
                 ),
             )
             .expect("write header");
@@ -98,116 +118,81 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
     fn trace<I: IntoIterator<Item = Val>>(&mut self, event: &Event, time: Time, ports: I) {
         let mut fields = Vec::new();
         let time = time.to_string();
-        let action;
         let origin_name;
         let target_name;
         let event_name;
+        let param_types;
         let mut params = String::new();
         fields.push(time.as_str());
 
         if let Some((src, trg, event_idx)) = self.model.parameters.get(&event.channel) {
-            origin_name = self.model.fsm_names.get(src).unwrap().to_owned();
-            target_name = self.model.fsm_names.get(trg).unwrap().to_owned();
-            event_name = self.model.events.get(*event_idx).unwrap().clone();
-            match event.event_type {
-                EventType::Send(ref val) => {
-                    action = "S".to_string();
-                    params = format!("{val:?}");
-                }
-                EventType::Receive(ref val) => {
-                    action = "R".to_string();
-                    params = format!("{val:?}");
-                }
-                EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
+            origin_name = self.model.fsm_names.get(&(*src).into()).unwrap().to_owned();
+            target_name = self.model.fsm_names.get(&(*trg).into()).unwrap().to_owned();
+            (event_name, param_types) = self.model.events.get(*event_idx).unwrap().clone();
+            if let EventType::Send(ref vals) = event.event_type {
+                params = format_val_from_def(
+                    vals,
+                    param_types.as_ref().unwrap(),
+                    &self.model.omg_types,
+                    true,
+                );
+            } else {
+                return;
             }
         } else if let Some(trg) = self.model.ext_queues.get(&event.channel) {
-            target_name = self.model.fsm_names.get(trg).unwrap().to_owned();
-            match event.event_type {
-                EventType::Send(ref vals) => {
-                    action = "S".to_string();
-                    if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
-                        origin_name = self
-                            .model
-                            .fsm_indexes
-                            .get(&(origin as usize))
-                            .unwrap()
-                            .to_owned();
-                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
-                    } else {
-                        panic!("events should be pairs");
+            target_name = self.model.fsm_names.get(&(*trg).into()).unwrap().to_owned();
+            if let EventType::Send(ref vals) = event.event_type {
+                if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
+                    origin_name = self
+                        .model
+                        .fsm_names
+                        .get(&(origin as u16))
+                        .unwrap()
+                        .to_owned();
+                    (event_name, param_types) = self.model.events[sent_event as usize].clone();
+                    if param_types.is_some() {
+                        // No need to trace this as parameters event already traced
+                        return;
                     }
+                } else {
+                    panic!("events should be pairs");
                 }
-                EventType::Receive(ref vals) => {
-                    action = "R".to_string();
-                    if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
-                        origin_name = self
-                            .model
-                            .fsm_indexes
-                            .get(&(origin as usize))
-                            .unwrap()
-                            .to_owned();
-                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
-                    } else {
-                        panic!("events should be pairs");
-                    }
-                }
-                EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
+            } else {
+                return;
             }
         } else if self.model.int_queues.contains(&event.channel) {
-            origin_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
+            origin_name = self
+                .model
+                .fsm_names
+                .get(&event.pg_id.into())
+                .unwrap()
+                .to_owned();
             target_name = origin_name.clone();
-            match event.event_type {
-                EventType::Send(ref vals) => {
-                    action = "S".to_string();
-                    if let Val::Integer(sent_event) = vals[0] {
-                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
-                    } else {
-                        panic!("events should be indexed by integer");
+            if let EventType::Send(ref vals) = event.event_type {
+                if let Val::Integer(sent_event) = vals[0] {
+                    (event_name, param_types) = self.model.events[sent_event as usize].clone();
+                    if param_types.is_some() {
+                        // No need to trace this as parameters event already traced
+                        return;
                     }
+                } else {
+                    panic!("events should be indexed by integer");
                 }
-                EventType::Receive(ref vals) => {
-                    action = "R".to_string();
-                    if let Val::Integer(sent_event) = vals[0] {
-                        event_name = self.model.events.get(sent_event as usize).unwrap().clone();
-                    } else {
-                        panic!("events should be indexed by integer");
-                    }
-                }
-                EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
+            } else {
+                return;
             }
         } else {
-            event_name = String::from("?");
-            match event.event_type {
-                EventType::Send(ref val) => {
-                    action = "S".to_string();
-                    origin_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
-                    target_name = format!("{:?}", event.channel);
-                    params = format!("{val:?}");
-                }
-                EventType::Receive(ref val) => {
-                    action = "R".to_string();
-                    origin_name = format!("{:?}", event.channel);
-                    target_name = self.model.fsm_names.get(&event.pg_id).unwrap().to_owned();
-                    params = format!("{val:?}");
-                }
-                EventType::ProbeEmptyQueue | EventType::ProbeFullQueue => return,
-            }
+            panic!("Events should all be either internal or external events");
         }
 
+        let state = self.format_state(ports);
         self.writer
             .as_mut()
             .unwrap()
             .write_record(
-                [
-                    time,
-                    action.to_owned(),
-                    origin_name,
-                    target_name,
-                    event_name,
-                    params,
-                ]
-                .into_iter()
-                .chain(ports.into_iter().map(format_val)),
+                [time, origin_name, target_name, event_name, params]
+                    .into_iter()
+                    .chain(state),
             )
             .expect("write record");
     }
@@ -249,7 +234,87 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
     }
 }
 
-fn format_val(val: Val) -> String {
+fn format_omg_type(omg_type: &OmgType) -> String {
+    match omg_type {
+        OmgType::Base(omg_base_type) => format_omg_base_type(*omg_base_type).to_string(),
+        OmgType::Array(omg_base_type, _) => {
+            format!("[{}]", format_omg_base_type(*omg_base_type))
+        }
+        OmgType::Custom(name) => name.clone(),
+    }
+}
+
+fn format_omg_base_type(omg_base_type: OmgBaseType) -> &'static str {
+    match omg_base_type {
+        OmgBaseType::Boolean => "bool",
+        OmgBaseType::Int32 => "int32",
+        OmgBaseType::F64 => "float64",
+        OmgBaseType::Uri => "uri",
+        OmgBaseType::String => "string",
+    }
+}
+
+fn format_val(vals: &[Val], omg_type: &OmgType, omg_types: &OmgTypes) -> String {
+    match omg_type {
+        OmgType::Base(_omg_base_type) => format_base_val(vals[0]),
+        OmgType::Array(_omg_base_type, _len) => format!(
+            "{:?}",
+            vals.iter()
+                .map(|val: &Val| format_base_val(*val))
+                .collect::<Vec<String>>()
+        )
+        .replace("\"", ""),
+        OmgType::Custom(omg_name) => format!(
+            "{omg_name}: {}",
+            format_val_from_def(
+                vals,
+                omg_types.type_defs.get(omg_name).expect("type def"),
+                omg_types,
+                false
+            )
+        ),
+    }
+}
+
+fn format_val_from_def(
+    vals: &[Val],
+    omg_type: &OmgTypeDef,
+    omg_types: &OmgTypes,
+    spread_structs: bool,
+) -> String {
+    match omg_type {
+        OmgTypeDef::Enumeration(items) => {
+            if let Val::Integer(int) = vals[0] {
+                items[int as usize].clone()
+            } else {
+                panic!("enumeration is not represented as Integer")
+            }
+        }
+        OmgTypeDef::Structure(btree_map) => {
+            let mut prev_size_acc = 0;
+            let mut size_acc = 0;
+            let fields = btree_map
+                .iter()
+                .map(|(name, omg_type)| {
+                    let size = omg_type.size(omg_types).unwrap();
+                    prev_size_acc = size_acc;
+                    size_acc += size;
+                    let field = format_val(&vals[prev_size_acc..size_acc], omg_type, omg_types);
+                    format!("{name}: {field}")
+                })
+                .collect::<Vec<_>>();
+            if spread_structs {
+                // print on multiple lines
+                format!("{fields:#?}")
+            } else {
+                format!("{fields:?}")
+            }
+            .replace("\"", "")
+        }
+    }
+}
+
+fn format_base_val(val: Val) -> String {
     match val {
         Val::Boolean(true) => "true".to_string(),
         Val::Boolean(false) => "false".to_string(),

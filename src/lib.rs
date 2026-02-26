@@ -25,6 +25,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
+use log::info;
 use progress::Bar;
 use report::Report;
 use scan_core::{CsModel, MtlOracle, Oracle, PgModel, PmtlOracle, Scan, TransitionSystemGenerator};
@@ -191,9 +192,9 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
-                eprintln!(" done");
+                info!("processing model '{model}' completed");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
@@ -201,24 +202,23 @@ impl Cli {
                     .print(json);
             }
             Commands::Validate => {
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let (_scan, _scxml_model) = load(&self.model, &[], true)?;
                 // At this point the model has been validated
-                eprintln!(" done");
-                println!("Model {model} successfully validated");
+                info!("model '{model}' successfully validated");
             }
             Commands::Trace(mut args) => {
-                eprint!("Processing {model}...");
-                let (scan_def, scxml_model) = load(&self.model, &[], args.all)?;
-                eprintln!(" done");
+                info!("processing model '{model}' started");
+                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
+                info!("processing model '{model}' completed");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(&scxml_model);
-                eprint!("Trace computation in progress...");
+                info!("trace computation started");
                 args.trace::<CsModel, PmtlOracle, _>(&scan_def, tracer);
-                eprintln!(" done");
+                info!("trace computation completed");
             }
         }
         Ok(())
@@ -234,31 +234,30 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let properties = args.properties.clone();
                 let (scan, jani_model) = load(&self.model, &properties)?;
-                eprintln!(" done");
+                info!("processing model '{model}' completed");
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
                 run_verification::<PgModel, MtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let (_scan, _jani_model) = load(&self.model, &[])?;
-                eprintln!(" done");
-                println!("Model {model} successfully validated");
+                info!("model '{model}' successfully validated");
             }
             Commands::Trace(args) => {
                 args.validate()?;
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let (scan, jani_model) = load(&self.model, &[])?;
-                eprintln!(" done");
+                info!("processing model '{model}' completed");
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
-                eprint!("Trace computation in progress...");
+                info!("trace computation started");
                 args.trace::<PgModel, MtlOracle, _>(&scan, tracer);
-                eprintln!(" done");
+                info!("trace computation completed");
             }
         }
         Ok(())
@@ -274,32 +273,22 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let properties = args.properties.clone();
                 let (scan, _promela_model) = load(&self.model, &properties, args.all)?;
-                eprintln!(" done");
-                // validate_properties(&args.properties, &jani_model.guarantees)?;
-                // // Reorder properties as they appear in the model
-                // args.properties = _promela_model.guarantees.clone();
+                info!("processing model '{model}' completed");
                 run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let (_scan, _jani_model) = load(&self.model, &[], true)?;
-                eprintln!(" done");
-                println!("Model {model} successfully validated");
+                info!("model '{model}' successfully validated");
             }
             Commands::Trace(args) => {
                 args.validate()?;
-                eprint!("Processing {model}...");
+                info!("processing model '{model}' started");
                 let (_scan, _promela_model) = load(&self.model, &[], args.all)?;
-                eprintln!(" done");
-                // let jani_model = Arc::new(jani_model);
-                todo!()
-                // let tracer = TracePrinter::new(jani_model);
-                // eprint!("Trace computation in progress...");
-                // args.trace(&scan, tracer);
-                // eprintln!(" done");
+                info!("processing model '{model}' completed");
             }
         }
         Ok(())
@@ -327,11 +316,11 @@ where
     O: 'a + Oracle + Clone + Sync,
     Ts::Ts<'a>: Clone + Sync,
 {
+    println!(
+        "Verifying {model} (-p {} -c {} -d {}) {:?}",
+        args.precision, args.confidence, args.duration, args.properties
+    );
     if let Some(bar) = progress {
-        eprintln!(
-            "Verifying {model} (-p {} -c {} -d {}) {:?}",
-            args.precision, args.confidence, args.duration, args.properties
-        );
         std::thread::scope(|s| {
             s.spawn(|| {
                 bar.print_progress_bar::<Ts, O>(
@@ -344,13 +333,7 @@ where
             args.verify::<Ts, O>(model.to_owned(), scan)
         })
     } else {
-        eprint!(
-            "Verifying {model} (-p {} -c {} -d {}) {:?}...",
-            args.precision, args.confidence, args.duration, args.properties
-        );
-        let report = args.verify::<Ts, O>(model.to_owned(), scan);
-        eprintln!(" done");
-        report
+        args.verify::<Ts, O>(model.to_owned(), scan)
     }
 }
 

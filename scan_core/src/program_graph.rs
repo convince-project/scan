@@ -64,7 +64,7 @@
 //! // Perform a transition
 //! # use rand::{Rng, SeedableRng};
 //! # use rand::rngs::SmallRng;
-//! let mut rng = SmallRng::from_os_rng();
+//! let mut rng: SmallRng = rand::make_rng();
 //! let result = instance .transition(action, &[post_loc], &mut rng);
 //!
 //! // Performing a transition can fail, in particular, if the transition was not allowed
@@ -229,7 +229,7 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// let (e, mut post_locs) = pg.possible_transitions().last().expect("autonomous transition");
 /// let post_loc = post_locs.last().expect("post location").last().expect("post location");
 /// assert_eq!(post_loc, initial);
-/// let mut rng = SmallRng::from_os_rng();
+/// let mut rng: SmallRng = rand::make_rng();
 /// pg.transition(e, &[initial], &mut rng).expect("transition is active");
 /// ```
 #[derive(Debug, Clone)]
@@ -264,7 +264,7 @@ impl ProgramGraph {
         } else {
             self.effects
                 .get(action.0 as usize)
-                .map(|e| !matches!(e, Effect::Effects(_, _)))
+                .map(|e| matches!(e, Effect::Send(_) | Effect::Receive(_)))
                 .ok_or(PgError::MissingAction(action))
         }
     }
@@ -344,10 +344,23 @@ impl<'def> ProgramGraphRun<'def> {
     pub fn possible_transitions(
         &self,
     ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
-        self.def.locations[self.current_states[0].0 as usize]
-            .0
-            .iter()
-            .map(|&(action, ..)| (action, self.possible_transitions_action(action)))
+        self.current_states
+            .first()
+            .into_iter()
+            .flat_map(|loc| {
+                self.def.locations[loc.0 as usize]
+                    .0
+                    .iter()
+                    .map(|&(action, ..)| action)
+            })
+            .chain(
+                self.current_states
+                    .is_empty()
+                    .then_some((0..self.def.effects.len() as ActionIdx).map(Action))
+                    .into_iter()
+                    .flatten(),
+            )
+            .map(|action| (action, self.possible_transitions_action(action)))
     }
 
     #[inline(always)]

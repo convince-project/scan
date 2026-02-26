@@ -1,5 +1,5 @@
 use super::{ecmascript, vocabulary::*};
-use crate::parser::{ParserError, attrs};
+use crate::parser::{OmgType, OmgTypes, ParserError, attrs};
 use anyhow::{Context, anyhow, bail};
 use boa_ast::Expression as BoaExpression;
 use boa_ast::scope::Scope;
@@ -53,22 +53,23 @@ impl ScxmlTag {
 pub struct Data {
     pub(crate) id: String,
     pub(crate) expression: Option<boa_ast::Expression>,
-    pub(crate) omg_type: String,
+    pub(crate) omg_type: Option<OmgType>,
 }
 
 impl Data {
     fn parse(
         tag: events::BytesStart<'_>,
-        omg_type: Option<String>,
+        omg_type: Option<OmgType>,
         interner: &mut Interner,
+        omg_types: &OmgTypes,
     ) -> anyhow::Result<Data> {
         let attrs = attrs(tag, &[ATTR_ID], &[ATTR_EXPR, ATTR_TYPE])?;
         let id = attrs[ATTR_ID].to_string();
         let omg_type = attrs
             .get(ATTR_TYPE)
-            .cloned()
-            .or(omg_type)
-            .ok_or(anyhow!(ParserError::NoTypeAnnotation))?;
+            .map(|omg_name| omg_types.find_type(omg_name))
+            .transpose()?
+            .or(omg_type);
         let expression = attrs
             .get(ATTR_EXPR)
             .map(|expression| ecmascript(expression, &Scope::new_global(), interner))
@@ -197,8 +198,8 @@ impl Executable {
                 execs.push(self);
             }
             ScxmlTag::If(r#if) => {
-                if r#if.else_flag {
-                    r#if.r#else.push(self);
+                if let Some(r#else) = r#if.r#else.as_mut() {
+                    r#else.push(self);
                 } else {
                     r#if.r#elif
                         .last_mut()
@@ -256,8 +257,7 @@ impl Send {
 #[derive(Debug, Clone)]
 pub struct If {
     pub(crate) r#elif: Vec<(boa_ast::Expression, Vec<Executable>)>,
-    pub(crate) r#else: Vec<Executable>,
-    else_flag: bool,
+    pub(crate) r#else: Option<Vec<Executable>>,
 }
 
 impl If {
@@ -273,19 +273,24 @@ impl If {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub(crate) name: String,
-    pub(crate) omg_type: Option<String>,
+    pub(crate) omg_type: Option<OmgType>,
     pub(crate) expr: BoaExpression,
 }
 
 impl Param {
     fn parse(
         tag: events::BytesStart<'_>,
-        omg_type: Option<String>,
+        omg_type: Option<OmgType>,
         interner: &mut Interner,
+        omg_types: &OmgTypes,
     ) -> anyhow::Result<Param> {
         let attrs = attrs(tag, &[ATTR_NAME], &[ATTR_TYPE, ATTR_LOCATION, ATTR_EXPR])?;
         let name = attrs[ATTR_NAME].clone();
-        let omg_type = omg_type.or(attrs.get(ATTR_TYPE).cloned());
+        let omg_type = omg_type.or_else(|| {
+            attrs
+                .get(ATTR_TYPE)
+                .and_then(|name| omg_types.find_type(name).ok())
+        });
         let expr = attrs
             .get(ATTR_LOCATION)
             .or_else(|| attrs.get(ATTR_EXPR))
@@ -329,10 +334,11 @@ impl Scxml {
 pub(super) fn parse<R: BufRead>(
     reader: &mut Reader<R>,
     interner: &mut Interner,
+    omg_types: &OmgTypes,
 ) -> anyhow::Result<Scxml> {
     let mut buf = Vec::new();
     let mut stack: Vec<ScxmlTag> = Vec::new();
-    let mut type_annotation: Option<String> = None;
+    let mut type_annotation: Option<OmgType> = None;
     info!(target: "parser", "parsing fsm");
     loop {
         match reader
@@ -352,10 +358,7 @@ pub(super) fn parse<R: BufRead>(
             Event::End(tag) => {
                 let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
                 if let Some(tag) = stack.pop() {
-                    if <&str>::from(&tag) != tag_name {
-                        error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
-                        bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
-                    } else {
+                    if <&str>::from(&tag) == tag_name {
                         trace!(target: "parser", "end tag '{tag_name}'");
                         match tag {
                             ScxmlTag::Scxml(fsm) if stack.is_empty() => {
@@ -421,6 +424,9 @@ pub(super) fn parse<R: BufRead>(
                                 unreachable!("All tags should be considered");
                             }
                         }
+                    } else {
+                        error!(target: "parser", "unknown or unexpected end tag '{tag_name}'");
+                        bail!(ParserError::UnexpectedEndTag(tag_name.to_string()));
                     }
                 } else {
                     // WARN TODO FIXME: actually tag missing from stack?
@@ -440,6 +446,7 @@ pub(super) fn parse<R: BufRead>(
                     tag,
                     &mut type_annotation.take(),
                     interner,
+                    omg_types,
                 )?;
             }
             Event::Text(text) => {
@@ -456,7 +463,7 @@ pub(super) fn parse<R: BufRead>(
                     .bytes()
                     .collect::<Result<Vec<u8>, std::io::Error>>()?;
                 let comment = String::from_utf8(comment)?;
-                type_annotation = parse_comment(comment)?;
+                type_annotation = parse_comment(comment, omg_types)?;
             }
             Event::CData(_) => {
                 bail!("CData not supported");
@@ -485,8 +492,9 @@ fn parse_empty_tag(
     tag_name: String,
     stack: &mut [ScxmlTag],
     tag: events::BytesStart<'_>,
-    type_annotation: &mut Option<String>,
+    type_annotation: &mut Option<OmgType>,
     interner: &mut Interner,
+    omg_types: &OmgTypes,
 ) -> Result<(), anyhow::Error> {
     trace!(target: "parser", "'{tag_name}' empty tag");
     match tag_name.as_str() {
@@ -495,7 +503,7 @@ fn parse_empty_tag(
                 .last()
                 .is_some_and(|tag| matches!(*tag, ScxmlTag::Datamodel(_))) =>
         {
-            let data = Data::parse(tag, type_annotation.take(), interner)
+            let data = Data::parse(tag, type_annotation.take(), interner, omg_types)
                 .with_context(|| ParserError::Tag(tag_name))?;
             Data::push(data, stack)?;
         }
@@ -535,7 +543,7 @@ fn parse_empty_tag(
                 .last()
                 .is_some_and(|tag| matches!(*tag, ScxmlTag::Send(_))) =>
         {
-            let param = Param::parse(tag, type_annotation.take(), interner)
+            let param = Param::parse(tag, type_annotation.take(), interner, omg_types)
                 .with_context(|| ParserError::Tag(tag_name))?;
             if let ScxmlTag::Send(send) = stack.last_mut().expect("param must be inside other tag")
             {
@@ -550,10 +558,10 @@ fn parse_empty_tag(
                 .is_some_and(|tag| matches!(tag, ScxmlTag::If(_))) =>
         {
             if let Some(ScxmlTag::If(r#if)) = stack.last_mut() {
-                if r#if.else_flag {
+                if r#if.r#else.is_some() {
                     bail!("multiple `else` inside `if` tag");
                 } else {
-                    r#if.else_flag = true;
+                    r#if.r#else = Some(Vec::new());
                 }
             } else {
                 unreachable!()
@@ -614,8 +622,7 @@ fn parse_start_tag(
         TAG_IF if stack.iter().rev().any(|tag| tag.is_executable()) => If::parse(tag, interner)
             .map(|cond| If {
                 elif: vec![(cond, Vec::new())],
-                r#else: Vec::new(),
-                else_flag: false,
+                r#else: None,
             })
             .map(ScxmlTag::If),
         TAG_ONENTRY
@@ -640,7 +647,7 @@ fn parse_start_tag(
     .with_context(|| ParserError::Tag(tag_name.to_string()))
 }
 
-fn parse_comment(comment: String) -> anyhow::Result<Option<String>> {
+fn parse_comment(comment: String, omg_types: &OmgTypes) -> anyhow::Result<Option<OmgType>> {
     let mut iter = comment.split_whitespace();
     let keyword = iter.next().ok_or(anyhow!("no keyword"))?;
     if keyword == "TYPE" {
@@ -650,7 +657,7 @@ fn parse_comment(comment: String) -> anyhow::Result<Option<String>> {
             .split_once(':')
             .ok_or(anyhow!("badly formatted type declaration"))?;
         trace!(target: "parser", "found ident: {ident}, type: {omg_type}");
-        Ok(Some(omg_type.to_string()))
+        omg_types.find_type(omg_type).map(Some)
     } else {
         Ok(None)
     }
