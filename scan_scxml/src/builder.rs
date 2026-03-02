@@ -10,10 +10,7 @@ use anyhow::{Context, anyhow, bail};
 use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    ops::Not,
-};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // TODO:
 //
@@ -57,7 +54,7 @@ struct EventBuilder {
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder,
     // Associates a string with a **globally unique** index.
-    strings: HashMap<String, Integer>,
+    strings: HashMap<String, Natural>,
     // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
     // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
     // QUESTION: Is there a better way?
@@ -128,7 +125,7 @@ impl ModelBuilder {
                 for label in labels.iter() {
                     if !self.strings.contains_key(label) {
                         let idx = self.strings.len();
-                        self.strings.insert(label.to_owned(), idx as Integer);
+                        self.strings.insert(label.to_owned(), idx as Natural);
                     }
                 }
             }
@@ -157,7 +154,7 @@ impl ModelBuilder {
             let pg_id = self.cs.new_program_graph();
             let ext_queue = self
                 .cs
-                .new_channel(vec![Type::Integer, Type::Integer], None);
+                .new_channel(vec![Type::Natural, Type::Natural], None);
             let fsm = FsmBuilder { pg_id, ext_queue };
             self.fsm_builders.insert(id.to_string(), fsm);
             self.fsm_names.insert(pg_id.into(), id.to_string());
@@ -199,7 +196,7 @@ impl ModelBuilder {
             {
                 vars.insert(data.id.to_owned(), r#type.clone());
             } else if let Some(expr) = data.expression.as_ref() {
-                let r#type = infer_type(expr, &vars, interner, omg_types)?;
+                let r#type = infer_type(expr, &vars, interner, data.omg_type.as_ref(), omg_types)?;
                 vars.insert(data.id.to_owned(), r#type);
             }
         }
@@ -323,7 +320,13 @@ impl ModelBuilder {
                     {
                         let builder = self.events.get_mut(event_index).expect("index must exist");
                         builder.params.insert(param.name.clone(), Some(t.clone()));
-                    } else if let Ok(t) = infer_type(&param.expr, vars, interner, omg_types) {
+                    } else if let Ok(t) = infer_type(
+                        &param.expr,
+                        vars,
+                        interner,
+                        param.omg_type.as_ref(),
+                        omg_types,
+                    ) {
                         let _ = param.omg_type.insert(t.clone());
                         let builder = self.events.get_mut(event_index).expect("index must exist");
                         builder.params.insert(param.name.clone(), Some(t));
@@ -384,7 +387,9 @@ impl ModelBuilder {
                     .expression
                     .as_ref()
                     .ok_or_else(|| anyhow!("expression for data '{}' required", data.id))
-                    .and_then(|expr| infer_type(expr, &HashMap::new(), interner, omg_types))?;
+                    .and_then(|expr| {
+                        infer_type(expr, &HashMap::new(), interner, Some(&omg_type), omg_types)
+                    })?;
             }
             let vars_types = if let Some(expr) = data.expression.as_ref() {
                 expression(
@@ -396,8 +401,12 @@ impl ModelBuilder {
                     omg_types,
                 )?
                 .iter()
-                .map(|expr| Ok((self.cs.new_var(pg_id, expr.clone())?, expr.r#type()?)))
-                .collect::<anyhow::Result<Vec<(Var, Type)>>>()?
+                .map(|expr| {
+                    self.cs
+                        .new_var(pg_id, expr.clone())
+                        .map(|var| (var, expr.r#type()))
+                })
+                .collect::<Result<Vec<(Var, Type)>, _>>()?
             } else {
                 omg_type
                     .to_scan_types(omg_types).with_context(|| format!("failed converting type {omg_type:?} of location {} to Scan native types", data.id))?
@@ -405,7 +414,7 @@ impl ModelBuilder {
                     .map(|t| {
                         (
                             self.cs
-                                .new_var(pg_id, Expression::Const(t.default_value()))
+                                .new_var(pg_id, Expression::from(t.default_value()))
                                 .expect("new var"),
                             t,
                         )
@@ -428,15 +437,15 @@ impl ModelBuilder {
         // Var representing the current event
         let current_event_var = self
             .cs
-            .new_var(pg_id, CsExpression::from(0))
+            .new_var(pg_id, CsExpression::from(0u64))
             .expect("program graph exists!");
         // Variable that will store origin of last processed event.
         let origin_var = self
             .cs
-            .new_var(pg_id, CsExpression::from(0))
+            .new_var(pg_id, CsExpression::from(0u64))
             .expect("program graph exists!");
         // Implement internal queue
-        let int_queue = self.cs.new_channel(vec![Type::Integer], None);
+        let int_queue = self.cs.new_channel(vec![Type::Natural], None);
         // This we only need for backtracking.
         let _ = self.int_queues.insert(int_queue);
         let dequeue_int = self
@@ -450,7 +459,7 @@ impl ModelBuilder {
                 pg_id,
                 set_int_origin,
                 origin_var,
-                CsExpression::from(u16::from(pg_id) as Integer),
+                CsExpression::from(u16::from(pg_id) as Natural),
             )
             .expect("hand-coded args");
         // Implement external queue
@@ -488,7 +497,7 @@ impl ModelBuilder {
                     .map(|t| {
                         (
                             self.cs
-                                .new_var(pg_id, Expression::Const(t.default_value()))
+                                .new_var(pg_id, Expression::from(t.default_value()))
                                 .expect("new var"),
                             t,
                         )
@@ -619,16 +628,13 @@ impl ModelBuilder {
             {
                 for &sender_id in &event_builder.senders {
                     // Expression checking event and sender correspond to the given ones.
-                    let is_event_sender = CsExpression::And(vec![
-                        CsExpression::Equal(Box::new((
-                            CsExpression::from(event_index as Integer),
-                            CsExpression::Var(current_event_var, Type::Integer),
-                        ))),
-                        CsExpression::Equal(Box::new((
-                            CsExpression::from(u16::from(sender_id) as Integer),
-                            CsExpression::Var(origin_var, Type::Integer),
-                        ))),
-                    ]);
+                    let is_event_sender = BooleanExpr::NatEqual(
+                        NaturalExpr::from(event_index as Natural),
+                        NaturalExpr::Var(current_event_var),
+                    ) & BooleanExpr::NatEqual(
+                        NaturalExpr::from(u16::from(sender_id) as Natural),
+                        NaturalExpr::Var(origin_var),
+                    );
                     // Add event (and sender) to list of known events.
                     known_events.push(is_event_sender.to_owned());
                     if let Some(&read_params) = param_actions.get(&(sender_id, event_index)) {
@@ -657,7 +663,7 @@ impl ModelBuilder {
             let unknown_event = if known_events.is_empty() {
                 None
             } else {
-                Some(CsExpression::not(CsExpression::or(known_events)?)?)
+                Some(!(BooleanExpr::Or(known_events)))
             };
             self.cs
                 .add_autonomous_transition(
@@ -736,7 +742,7 @@ impl ModelBuilder {
                                 .filter(|((ev_ix, _), _)| *ev_ix == event_index)
                                 .flat_map(|(_, (_, vars))| vars)
                                 .cloned()
-                                .chain([(origin_var, Type::Integer)])
+                                .chain([(origin_var, Type::Natural)])
                                 .collect(),
                         ),
                     );
@@ -762,6 +768,15 @@ impl ModelBuilder {
                     bail!("condition is not a boolean expression");
                 }
                 let cond = cond.map(|cond| cond.first().expect("length 1").clone());
+                let cond = cond
+                    .map(|cond| {
+                        if let Expression::Boolean(bool_expr) = cond {
+                            Ok(bool_expr)
+                        } else {
+                            bail!("condition is not a boolean expression")
+                        }
+                    })
+                    .transpose()?;
 
                 // Location corresponding to checking if the transition is active.
                 // Has to be defined depending on the type of transition.
@@ -779,15 +794,12 @@ impl ModelBuilder {
                         .get(event_name)
                         .expect("event must be registered");
                     // Check if the current event (internal or external) corresponds to the event activating the transition.
-                    let event_match = CsExpression::Equal(Box::new((
-                        CsExpression::Var(current_event_var, Type::Integer),
-                        CsExpression::from(event_index as Integer),
-                    )));
+                    let event_match = BooleanExpr::NatEqual(
+                        NaturalExpr::Var(current_event_var),
+                        NaturalExpr::from(event_index as Natural),
+                    );
                     // TODO FIXME: optimize And/Or expressions
-                    guard = cond
-                        .map(|cond| CsExpression::and(vec![event_match.clone(), cond]))
-                        .transpose()?
-                        .or(Some(event_match));
+                    guard = Some(cond.map_or(event_match.clone(), |cond| event_match & cond));
                     // Check this transition after the other eventful transitions.
                     check_trans_loc = eventful_trans;
                     // Move location of next eventful transitions to a new location.
@@ -858,9 +870,8 @@ impl ModelBuilder {
                 // NOTE: an autonomous transition without cond is always active so there is no point processing further transitions.
                 // This happens in State Charts already, so we model it faithfully without optimizations.
                 let not_guard = guard
-                    .map(CsExpression::not)
-                    .transpose()?
-                    .unwrap_or(CsExpression::from(false));
+                    .map(|guard| !guard)
+                    .unwrap_or(BooleanExpr::from(false));
                 self.cs
                     .add_autonomous_transition(
                         pg_id,
@@ -900,7 +911,7 @@ impl ModelBuilder {
                 let raise = self.cs.new_send(
                     pg_id,
                     int_queue,
-                    vec![CsExpression::from(event_idx as Integer)],
+                    vec![CsExpression::from(event_idx as Natural)],
                 )?;
                 let next_loc = self.cs.new_location(pg_id)?;
                 // queue the internal event
@@ -958,9 +969,8 @@ impl ModelBuilder {
                                 .get(target)
                                 .ok_or(anyhow!(format!("target {target} not found")))?;
                             targets = vec![target_builder.pg_id];
-                            target_expr = Some(CsExpression::from(
-                                u16::from(target_builder.pg_id) as Integer
-                            ));
+                            target_expr =
+                                Some(NaturalExpr::from(u16::from(target_builder.pg_id) as Natural));
                         }
                         Target::Expr(targetexpr) => {
                             let target_exprs = expression(
@@ -973,7 +983,13 @@ impl ModelBuilder {
                             if target_exprs.len() != 1 {
                                 bail!("epression is not a target");
                             }
-                            target_expr = target_exprs.first().cloned();
+                            target_expr = if let Some(Expression::Natural(nat_expr)) =
+                                target_exprs.first().cloned()
+                            {
+                                Some(nat_expr)
+                            } else {
+                                bail!("targetexpr not a target expression")
+                            };
                             targets = self.events[event_idx].receivers.iter().cloned().collect();
                         }
                     }
@@ -988,8 +1004,8 @@ impl ModelBuilder {
                                 pg_id,
                                 target_ext_queue,
                                 vec![
-                                    CsExpression::from(event_idx as Integer),
-                                    CsExpression::from(u16::from(pg_id) as Integer),
+                                    CsExpression::from(event_idx as Natural),
+                                    CsExpression::from(u16::from(pg_id) as Natural),
                                 ],
                             )
                             .expect("params are hard-coded");
@@ -1003,10 +1019,10 @@ impl ModelBuilder {
                                 send_event,
                                 next_loc,
                                 target_expr.as_ref().map(|target_expr| {
-                                    CsExpression::Equal(Box::new((
-                                        CsExpression::from(u16::from(target_id) as Integer),
+                                    BooleanExpr::NatEqual(
+                                        NaturalExpr::from(u16::from(target_id) as Natural),
                                         target_expr.to_owned(),
-                                    )))
+                                    )
                                 }),
                             )
                             .expect("params are right");
@@ -1087,7 +1103,7 @@ impl ModelBuilder {
                     .iter()
                     .zip(expr)
                     .try_for_each(|((var, scan_type), expr)| {
-                        if expr.r#type().map_err(CsError::Type)? == *scan_type {
+                        if expr.r#type() == *scan_type {
                             self.cs.add_effect(pg_id, assign, *var, expr)
                         } else {
                             Err(CsError::Type(TypeError::TypeMismatch))
@@ -1118,7 +1134,13 @@ impl ModelBuilder {
                     if cond.len() != 1 {
                         bail!("<cond> is not a boolean expression");
                     }
-                    let cond = cond.first().expect("len equals 1").clone();
+                    let cond = if let Expression::Boolean(bool_expr) =
+                        cond.first().expect("len equals 1").clone()
+                    {
+                        bool_expr
+                    } else {
+                        bail!("targetexpr not a target expression")
+                    };
                     self.cs.add_autonomous_transition(
                         pg_id,
                         curr_loc,
@@ -1139,12 +1161,7 @@ impl ModelBuilder {
                     let old_loc = curr_loc;
                     curr_loc = self.cs.new_location(pg_id).unwrap();
                     self.cs
-                        .add_autonomous_transition(
-                            pg_id,
-                            old_loc,
-                            curr_loc,
-                            Some(Expression::not(cond)?),
-                        )
+                        .add_autonomous_transition(pg_id, old_loc, curr_loc, Some(!cond))
                         .unwrap();
                 }
                 // Add executables for `else` (if any)
@@ -1180,15 +1197,24 @@ impl ModelBuilder {
             // Check that param is not missing
             if let Some(param) = params.iter().find(|param| param.name == *p) {
                 assert_eq!(&param.omg_type, param_type);
+                let param_type = param_type
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("unknown type for param {p}"))?;
                 // Build expression from ECMAScript expression.
                 let expr = expression(
                     &param.expr,
                     interner,
                     vars,
                     &mut self.strings,
-                    param.omg_type.as_ref(),
+                    Some(param_type),
                     omg_types,
-                )?;
+                )
+                .with_context(|| {
+                    format!(
+                        "failed building expr for param '{}' of type {param_type:?}",
+                        param.name
+                    )
+                })?;
                 exprs.extend_from_slice(&expr);
             } else {
                 warn!("missing param {p}, sending default value");
@@ -1200,15 +1226,12 @@ impl ModelBuilder {
                     .with_context(|| format!("failed converting param '{p}' type to Scan types"))?;
                 exprs.extend(
                     expr.iter()
-                        .map(|scan_type| Expression::Const(scan_type.default_value())),
+                        .map(|scan_type| Expression::from(scan_type.default_value())),
                 );
             }
         }
         // Retreive or create channel for parameter passing.
-        let scan_types = exprs
-            .iter()
-            .map(|expr| expr.r#type())
-            .collect::<Result<Vec<_>, _>>()?;
+        let scan_types = exprs.iter().map(|expr| expr.r#type()).collect::<Vec<_>>();
         let param_chn = *self
             .parameter_channels
             .entry((pg_id, target_id, event_idx))
@@ -1307,8 +1330,8 @@ impl ModelBuilder {
                                 channel,
                                 event_type: EventType::Send(
                                     vec![
-                                        Val::Integer(event_id as Integer),
-                                        Val::Integer(u16::from(origin) as Integer),
+                                        Val::Natural(event_id as Natural),
+                                        Val::Natural(u16::from(origin) as Natural),
                                     ]
                                     .into(),
                                 ),
@@ -1351,7 +1374,8 @@ impl ModelBuilder {
                 &mut self.strings,
                 Some(&OmgType::Base(OmgBaseType::Boolean)),
                 &parser.types,
-            )?;
+            )
+            .with_context(|| format!("failed building predicate {predicate:?}"))?;
             if predicate.len() != 1 {
                 bail!("predicate must be a boolean expression");
             }
@@ -1415,7 +1439,7 @@ impl ModelBuilder {
                 let params_types =
                     (!params.is_empty()).then_some(OmgTypeDef::Structure(BTreeMap::from_iter(
                         params
-                            .into_iter()
+                            .iter()
                             .map(|(name, t)| (name.clone(), t.as_ref().unwrap().clone())),
                     )));
                 (name, params_types)

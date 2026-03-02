@@ -42,7 +42,7 @@ fn condition_pg() -> ProgramGraphBuilder {
         pre,
         action,
         post,
-        Some(Expression::Implies(Box::new((
+        Some(BooleanExpr::Implies(Box::new((
             Expression::LessEq(Box::new((
                 Expression::Sum(vec![
                     Expression::Const(Val::Integer(1)),

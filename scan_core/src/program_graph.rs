@@ -130,6 +130,8 @@ pub type TimeConstraint = (Clock, Option<Time>, Option<Time>);
 /// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
 
+pub type PgGuard = BooleanExpr<Var>;
+
 /// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
 #[derive(Debug, Clone, Copy, Error)]
 pub enum PgError {
@@ -277,7 +279,7 @@ impl ProgramGraph {
         pre_state: Location,
         action: Action,
         post_state: Location,
-    ) -> impl Iterator<Item = (Option<&Expression<Var>>, &[TimeConstraint])> {
+    ) -> impl Iterator<Item = (Option<&PgGuard>, &[TimeConstraint])> {
         let a_transitions = self.locations[pre_state.0 as usize].0.as_slice();
         a_transitions
             .binary_search_by_key(&action, |&(a, ..)| a)
@@ -422,19 +424,14 @@ impl<'def> ProgramGraphRun<'def> {
 
     fn active_transition(
         &self,
-        guard: Option<&Expression<Var>>,
+        guard: Option<&PgGuard>,
         constraints: &[TimeConstraint],
         invariants: &[TimeConstraint],
         resets: &[Clock],
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
-            {
-                pass
-            } else {
-                panic!("guard is not a boolean");
-            }
+            guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
         }) && constraints.iter().all(|(c, l, u)| {
             let time = self.clocks[c.0 as usize];
             l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
@@ -450,18 +447,13 @@ impl<'def> ProgramGraphRun<'def> {
 
     fn active_autonomous_transition(
         &self,
-        guard: Option<&Expression<Var>>,
+        guard: Option<&PgGuard>,
         constraints: &[TimeConstraint],
         invariants: &[TimeConstraint],
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            if let Val::Boolean(pass) = guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
-            {
-                pass
-            } else {
-                panic!("guard is not a boolean");
-            }
+            guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
         }) && constraints.iter().chain(invariants).all(|(c, l, u)| {
             let time = self.clocks[c.0 as usize];
             l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
@@ -641,7 +633,7 @@ impl<'def> ProgramGraphRun<'def> {
 
     pub(crate) fn eval(&self, expr: &Expression<Var>) -> Val {
         expr.eval(
-            &|v: Var| *self.vars.get(v.0 as usize).unwrap(),
+            &|v: &Var| *self.vars.get(v.0 as usize).unwrap(),
             &mut DummyRng,
         )
     }
@@ -723,7 +715,7 @@ mod tests {
         let mut builder = ProgramGraphBuilder::new();
         // Variables
         let mut rng = SmallRng::from_seed([0; 32]);
-        let battery = builder.new_var(Expression::Const(Val::Integer(0)))?;
+        let battery = builder.new_var(Expression::from(0i64))?;
         // Locations
         let initial = builder.new_initial_location();
         let left = builder.new_location();
@@ -731,20 +723,15 @@ mod tests {
         let right = builder.new_location();
         // Actions
         let initialize = builder.new_action();
-        builder.add_effect(initialize, battery, PgExpression::Const(Val::Integer(3)))?;
+        builder.add_effect(initialize, battery, PgExpression::from(3i64))?;
         let move_left = builder.new_action();
-        let discharge = PgExpression::Sum(vec![
-            PgExpression::Var(battery, Type::Integer),
-            PgExpression::Const(Val::Integer(-1)),
-        ]);
+        let discharge = PgExpression::Integer(IntegerExpr::Var(battery) + (-IntegerExpr::from(-1)));
         builder.add_effect(move_left, battery, discharge.clone())?;
         let move_right = builder.new_action();
         builder.add_effect(move_right, battery, discharge)?;
         // Guards
-        let out_of_charge = PgExpression::Greater(Box::new((
-            PgExpression::Var(battery, Type::Integer),
-            PgExpression::Const(Val::Integer(0)),
-        )));
+        let out_of_charge =
+            BooleanExpr::IntGreater(IntegerExpr::Var(battery), IntegerExpr::from(0i64));
         // Program graph definition
         builder.add_transition(initial, initialize, center, None)?;
         builder.add_transition(left, move_right, center, Some(out_of_charge.clone()))?;
