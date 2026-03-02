@@ -1,7 +1,7 @@
 use crate::spinv4_y::*;
 use scan_core::channel_system::CsError;
 use scan_core::channel_system::{Channel, ChannelSystemBuilder, Location, PgId, Var};
-use scan_core::{Expression, Type, Val};
+use scan_core::{BooleanExpr, Expression, Integer, Type, Val};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -352,7 +352,7 @@ impl Builder {
                                 "channel init not yet handled".into(),
                             ));
                         }
-                        None => Expression::Const(Val::Integer(0)),
+                        None => Expression::from(Val::Integer(0)),
                     };
 
                     if ivar.array_dims.is_some() {
@@ -360,9 +360,7 @@ impl Builder {
                             "arrays not yet supported".into(),
                         ));
                     }
-                    let ty = init_expr
-                        .r#type()
-                        .map_err(|_| BuilderError::TypeError("type".into()))?;
+                    let ty = init_expr.r#type();
                     let v = ctx
                         .cs
                         .new_var(ctx.pg, init_expr)
@@ -387,94 +385,84 @@ impl Builder {
 
         Ok(match e {
             Const(inner) => match inner.as_ref() {
-                crate::spinv4_y::Const::Number(i) => Expression::Const(Val::Integer(*i)),
-                crate::spinv4_y::Const::True => Expression::Const(Val::Boolean(true)),
-                crate::spinv4_y::Const::False => Expression::Const(Val::Boolean(false)),
-                crate::spinv4_y::Const::Skip => Expression::Const(Val::Boolean(true)),
+                crate::spinv4_y::Const::Number(i) => Expression::from(Val::Integer(*i as Integer)),
+                crate::spinv4_y::Const::True => Expression::from(Val::Boolean(true)),
+                crate::spinv4_y::Const::False => Expression::from(Val::Boolean(false)),
+                crate::spinv4_y::Const::Skip => Expression::from(Val::Boolean(true)),
             },
 
             // TODO: da gestire
-            Timeout => Expression::Const(Val::Boolean(false)), // placeholder
+            Timeout => Expression::from(Val::Boolean(false)), // placeholder
             Np => return Err(BuilderError::UnsupportedExpression("const ::np".into())),
 
             Varref(vr) => {
                 if let Some(var) = ctx.vars.get(&vr.name.to_string()) {
                     let ty = ctx.type_vars.get(var).cloned().unwrap_or(Type::Integer);
-                    Expression::Var(*var, ty)
+                    Expression::from_var(*var, ty)
                 } else {
                     let var = gctx.vars.get(&vr.name.to_string()).ok_or_else(|| {
                         BuilderError::UnsupportedExpression(format!("undefined {}", vr.name))
                     })?;
                     let ty = gctx.types.get(var).cloned().unwrap_or(Type::Integer);
-                    Expression::Var(*var, ty)
+                    Expression::from_var(*var, ty)
                 }
             }
 
-            Unary(Unarop::Not, sub) => {
-                Expression::Not(Box::new(Self::translate_expr(sub, ctx, gctx)?))
-            }
-            Negate(sub) => Expression::Opposite(Box::new(Self::translate_expr(sub, ctx, gctx)?)),
+            Unary(Unarop::Not, sub) => (!(Self::translate_expr(sub, ctx, gctx)?))
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            Negate(sub) => (-(Self::translate_expr(sub, ctx, gctx)?))
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
 
-            Add(l, r) => Expression::Sum(vec![
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ]),
-            Subtract(l, r) => Expression::Sum(vec![
-                Self::translate_expr(l, ctx, gctx)?,
-                Expression::Opposite(Box::new(Self::translate_expr(r, ctx, gctx)?)),
-            ]),
-            Multiply(l, r) => Expression::Mult(vec![
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ]),
-            Divide(l, r) => Expression::Div(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))),
-            Modulo(l, r) => Expression::Mod(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))),
+            Add(l, r) => (Self::translate_expr(l, ctx, gctx)?
+                + Self::translate_expr(r, ctx, gctx)?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            Subtract(l, r) => (Self::translate_expr(l, ctx, gctx)?
+                + (-(Self::translate_expr(r, ctx, gctx)?))
+                    .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            Multiply(l, r) => (Self::translate_expr(l, ctx, gctx)?
+                * Self::translate_expr(r, ctx, gctx)?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            Divide(l, r) => (Self::translate_expr(l, ctx, gctx)?
+                / Self::translate_expr(r, ctx, gctx)?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            Modulo(l, r) => (Self::translate_expr(l, ctx, gctx)?
+                % Self::translate_expr(r, ctx, gctx)?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
 
-            Equal(l, r) => Expression::Equal(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))),
-            NotEqual(l, r) => Expression::Not(Box::new(Expression::Equal(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))))),
-            GreaterThan(l, r) => Expression::Greater(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))),
-            GreaterEqual(l, r) => Expression::GreaterEq(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))),
-            LessThan(l, r) => Expression::Less(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))),
-            LessEqual(l, r) => Expression::LessEq(Box::new((
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ))),
+            Equal(l, r) => Self::translate_expr(l, ctx, gctx)?
+                .equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            NotEqual(l, r) => (!Self::translate_expr(l, ctx, gctx)?
+                .equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            GreaterThan(l, r) => Self::translate_expr(l, ctx, gctx)?
+                .greater_than(Self::translate_expr(r, ctx, gctx)?)
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            GreaterEqual(l, r) => Self::translate_expr(l, ctx, gctx)?
+                .greater_than_or_equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            LessThan(l, r) => Self::translate_expr(l, ctx, gctx)?
+                .less_than(Self::translate_expr(r, ctx, gctx)?)
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            LessEqual(l, r) => Self::translate_expr(l, ctx, gctx)?
+                .less_than_or_equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
 
-            Logical(l, LogicalOp::And, r) | Andor(l, r) => Expression::And(vec![
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ]),
-            Logical(l, LogicalOp::Or, r) => Expression::Or(vec![
-                Self::translate_expr(l, ctx, gctx)?,
-                Self::translate_expr(r, ctx, gctx)?,
-            ]),
+            Logical(l, LogicalOp::And, r) | Andor(l, r) => (Self::translate_expr(l, ctx, gctx)?
+                & Self::translate_expr(r, ctx, gctx)?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            Logical(l, LogicalOp::Or, r) => (Self::translate_expr(l, ctx, gctx)?
+                | Self::translate_expr(r, ctx, gctx)?)
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
 
-            Ternary(c, a, b) => Expression::Ite(Box::new((
-                Self::translate_expr(c, ctx, gctx)?,
-                Self::translate_expr(a, ctx, gctx)?,
-                Self::translate_expr(b, ctx, gctx)?,
-            ))),
+            Ternary(c, a, b) => Self::translate_expr(c, ctx, gctx)?
+                .ite(
+                    Self::translate_expr(a, ctx, gctx)?,
+                    Self::translate_expr(b, ctx, gctx)?,
+                )
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
 
             Len(_) => {
                 return Err(BuilderError::UnsupportedExpression(
@@ -643,10 +631,18 @@ impl Builder {
 
         // 2) G_else = ¬(G1 ∨ ... ∨ Gn)   (solo guardie normali!)
         let g_else = if normal.is_empty() {
-            Expression::Const(Val::Boolean(true))
+            Expression::from(Val::Boolean(true))
         } else {
-            let or = Expression::Or(normal.iter().map(|(g, _)| g.clone()).collect());
-            Expression::Not(Box::new(or))
+            let or = Expression::Boolean(BooleanExpr::Or(
+                normal
+                    .iter()
+                    .map(|(g, _)| {
+                        BooleanExpr::try_from(g.clone())
+                            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))
+                    })
+                    .collect::<Result<_, _>>()?,
+            ));
+            (!or).map_err(|err| BuilderError::TypeError(format!("{err:?}")))?
         };
 
         let exit = fresh_loc(ctx)?;
@@ -655,8 +651,10 @@ impl Builder {
         for (g, body) in &normal {
             let body_entry = fresh_loc(ctx)?;
             let choose = ctx.cs.new_action(ctx.pg)?;
+            let g = BooleanExpr::try_from(g.clone())
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?;
             ctx.cs
-                .add_transition(ctx.pg, entry, choose, body_entry, Some(g.clone()))?;
+                .add_transition(ctx.pg, entry, choose, body_entry, Some(g))?;
 
             let mut cur = body_entry;
             for st in *body {
@@ -674,8 +672,10 @@ impl Builder {
             // do: entry --(G_else)--> body ; body --> exit (termina il ciclo)
             let body_entry = fresh_loc(ctx)?;
             let choose = ctx.cs.new_action(ctx.pg)?;
+            let g_else = BooleanExpr::try_from(g_else.clone())
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?;
             ctx.cs
-                .add_transition(ctx.pg, entry, choose, body_entry, Some(g_else.clone()))?;
+                .add_transition(ctx.pg, entry, choose, body_entry, Some(g_else))?;
 
             let mut cur = body_entry;
             for st in body {
@@ -687,6 +687,8 @@ impl Builder {
         } else if looped {
             // 5) do senza else: uscita silente con G_else
             let eps = ctx.cs.new_action(ctx.pg)?;
+            let g_else = BooleanExpr::try_from(g_else.clone())
+                .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?;
             ctx.cs
                 .add_transition(ctx.pg, entry, eps, exit, Some(g_else))?;
         }
@@ -706,14 +708,12 @@ impl Builder {
         let var = lookup_var(lhs, ctx, gctx)?;
         let rhs_expr = match op {
             AssignOp::Eq => Self::translate_expr(rhs.expect("= needs expr"), ctx, gctx)?,
-            AssignOp::Inc => Expression::Sum(vec![
-                Expression::Var(var, Type::Integer),
-                Expression::Const(Val::Integer(1)),
-            ]),
-            AssignOp::Dec => Expression::Sum(vec![
-                Expression::Var(var, Type::Integer),
-                Expression::Const(Val::Integer(-1)),
-            ]),
+            AssignOp::Inc => (Expression::from_var(var, Type::Integer)
+                + Expression::from(Val::Integer(1)))
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
+            AssignOp::Dec => (Expression::from_var(var, Type::Integer)
+                + Expression::from(Val::Integer(-1)))
+            .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
         };
 
         let out = fresh_loc(ctx)?;
@@ -741,6 +741,8 @@ impl Builder {
         gctx: &GlobalCtx,
     ) -> Result<Location, BuilderError> {
         let guard = Self::translate_expr(cond, ctx, gctx)?;
+        let guard = BooleanExpr::try_from(guard)
+            .map_err(|_| BuilderError::TypeError("boolean guard".into()))?;
         let out = fresh_loc(ctx)?;
         let act = ctx
             .cs

@@ -151,5 +151,6 @@ fn format_val(val: Val) -> String {
         Val::Boolean(false) => "false".to_string(),
         Val::Integer(i) => i.to_string(),
         Val::Float(ordered_float) => ordered_float.to_string(),
+        Val::Natural(n) => n.to_string(),
     }
 }
