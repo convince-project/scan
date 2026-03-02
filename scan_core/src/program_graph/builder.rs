@@ -3,14 +3,15 @@ use super::{
     PgExpression, ProgramGraph, TimeConstraint, Var,
 };
 use crate::{
-    DummyRng, Expression,
-    grammar::{Type, Val},
+    DummyRng,
+    grammar::{BooleanExpr, Type, Val},
+    program_graph::PgGuard,
 };
 use log::info;
 use smallvec::SmallVec;
 
 // type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
-pub(crate) type Transition = (Location, Option<Expression<Var>>, Vec<TimeConstraint>);
+pub(crate) type Transition = (Location, Option<BooleanExpr<Var>>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
@@ -73,10 +74,8 @@ impl ProgramGraphBuilder {
     /// ```
     pub fn new_var(&mut self, init: PgExpression) -> Result<Var, PgError> {
         let idx = self.vars.len();
-        // We check the type to make sure the expression is well-formed
-        let _ = init.r#type().map_err(PgError::Type)?;
-        init.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-            .map_err(PgError::Type)?;
+        // init.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+        //     .map_err(PgError::Type)?;
         let val = init.eval(&|var| self.vars[var.0 as usize], &mut DummyRng);
         self.vars.push(val);
         Ok(Var(idx as u16))
@@ -204,15 +203,15 @@ impl ProgramGraphBuilder {
         if action == EPSILON {
             return Err(PgError::NoEffects);
         }
-        effect
-            .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-            .map_err(PgError::Type)?;
+        // effect
+        //     .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+        //     .map_err(PgError::Type)?;
         let var_type = self
             .vars
             .get(var.0 as usize)
             .map(|val| Val::r#type(*val))
             .ok_or_else(|| PgError::MissingVar(var.to_owned()))?;
-        if var_type == effect.r#type().map_err(PgError::Type)? {
+        if var_type == effect.r#type() {
             match self
                 .effects
                 .get_mut(action.0 as usize)
@@ -232,13 +231,11 @@ impl ProgramGraphBuilder {
 
     pub(crate) fn new_send(&mut self, msgs: Vec<PgExpression>) -> Result<Action, PgError> {
         // Check message is well-typed
-        msgs.iter()
-            .try_for_each(|msg| {
-                msg.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-            })
-            .map_err(PgError::Type)?;
-        msgs.iter()
-            .try_for_each(|msg| msg.r#type().map_err(PgError::Type).map(|_| ()))?;
+        // msgs.iter()
+        //     .try_for_each(|msg| {
+        //         msg.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+        //     })
+        //     .map_err(PgError::Type)?;
         // Actions are indexed progressively
         let idx = self.effects.len();
         self.effects.push(Effect::Send(msgs.into()));
@@ -345,7 +342,7 @@ impl ProgramGraphBuilder {
         pre: Location,
         action: Action,
         post: Location,
-        guard: Option<PgExpression>,
+        guard: Option<PgGuard>,
     ) -> Result<(), PgError> {
         self.add_timed_transition(pre, action, post, guard, Vec::new())
     }
@@ -381,7 +378,7 @@ impl ProgramGraphBuilder {
         pre: Location,
         action: Action,
         post: Location,
-        guard: Option<PgExpression>,
+        guard: Option<PgGuard>,
         constraints: Vec<TimeConstraint>,
     ) -> Result<(), PgError> {
         // Check 'pre' and 'post' locations exists
@@ -392,19 +389,14 @@ impl ProgramGraphBuilder {
         } else if action != EPSILON && self.effects.len() as ActionIdx <= action.0 {
             // Check 'action' exists
             Err(PgError::MissingAction(action))
-        } else if guard
-            .as_ref()
-            .is_some_and(|guard| !matches!(guard.r#type(), Ok(Type::Boolean)))
-        {
-            Err(PgError::TypeMismatch)
         } else if let Some((clock, _, _)) = constraints.iter().find(|(c, _, _)| c.0 >= self.clocks)
         {
             Err(PgError::MissingClock(*clock))
         } else {
             if let Some(ref guard) = guard {
-                guard
-                    .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-                    .map_err(PgError::Type)?;
+                // guard
+                //     .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+                //     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
             let transition = (post, guard, constraints);
@@ -444,7 +436,7 @@ impl ProgramGraphBuilder {
         &mut self,
         pre: Location,
         post: Location,
-        guard: Option<PgExpression>,
+        guard: Option<PgGuard>,
     ) -> Result<(), PgError> {
         self.add_transition(pre, EPSILON, post, guard)
     }
@@ -477,7 +469,7 @@ impl ProgramGraphBuilder {
         &mut self,
         pre: Location,
         post: Location,
-        guard: Option<PgExpression>,
+        guard: Option<PgGuard>,
         constraints: Vec<TimeConstraint>,
     ) -> Result<(), PgError> {
         self.add_timed_transition(pre, EPSILON, post, guard, constraints)

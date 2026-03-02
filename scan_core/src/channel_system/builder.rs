@@ -3,7 +3,7 @@ use super::{
     ProgramGraphBuilder, TimeConstraint, Var,
 };
 use crate::Expression;
-use crate::grammar::Type;
+use crate::grammar::{BooleanExpr, Type};
 use crate::program_graph::ProgramGraph;
 use log::info;
 use std::collections::HashMap;
@@ -11,89 +11,95 @@ use std::collections::HashMap;
 /// An expression using CS's [`Var`] as variables.
 pub type CsExpression = Expression<Var>;
 
+pub type CsGuard = BooleanExpr<Var>;
+
 // WARN: This method should probably not be exposed to the public API.
 // TODO: Turn into a private method.
 impl TryFrom<(PgId, CsExpression)> for PgExpression {
     type Error = CsError;
 
     fn try_from((pg_id, expr): (PgId, CsExpression)) -> Result<Self, Self::Error> {
-        match expr {
-            Expression::Const(val) => Ok(Expression::Const(val)),
-            Expression::Var(cs_var, t) if cs_var.0 == pg_id => Ok(Expression::Var(cs_var.1, t)),
-            Expression::Var(cs_var, _t) => Err(CsError::VarNotInPg(cs_var, pg_id)),
-            Expression::And(comps) => Ok(Expression::And(
-                comps
-                    .into_iter()
-                    .map(|comp| (pg_id, comp).try_into())
-                    .collect::<Result<Vec<PgExpression>, CsError>>()?,
-            )),
-            Expression::Or(comps) => Ok(Expression::Or(
-                comps
-                    .into_iter()
-                    .map(|comp| (pg_id, comp).try_into())
-                    .collect::<Result<Vec<PgExpression>, CsError>>()?,
-            )),
-            Expression::Implies(comps) => Ok(Expression::Implies(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::Not(expr) => (pg_id, *expr).try_into().map(Box::new).map(Expression::Not),
-            Expression::Opposite(expr) => (pg_id, *expr)
-                .try_into()
-                .map(Box::new)
-                .map(Expression::Opposite),
-            Expression::Sum(comps) => Ok(Expression::Sum(
-                comps
-                    .into_iter()
-                    .map(|comp| (pg_id, comp).try_into())
-                    .collect::<Result<Vec<PgExpression>, CsError>>()?,
-            )),
-            Expression::Mult(comps) => Ok(Expression::Mult(
-                comps
-                    .into_iter()
-                    .map(|comp| (pg_id, comp).try_into())
-                    .collect::<Result<Vec<PgExpression>, CsError>>()?,
-            )),
-            Expression::Equal(comps) => Ok(Expression::Equal(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::Greater(comps) => Ok(Expression::Greater(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::GreaterEq(comps) => Ok(Expression::GreaterEq(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::Less(comps) => Ok(Expression::Less(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::LessEq(comps) => Ok(Expression::LessEq(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::Mod(comps) => Ok(Expression::Mod(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::Div(comps) => Ok(Expression::Div(Box::new((
-                (pg_id, comps.0).try_into()?,
-                (pg_id, comps.1).try_into()?,
-            )))),
-            Expression::RandBool(p) => Ok(Expression::RandBool(p)),
-            Expression::RandInt(l, u) => Ok(Expression::RandInt(l, u)),
-            Expression::RandFloat(l, u) => Ok(Expression::RandFloat(l, u)),
-            Expression::Ite(exprs) => Ok(Expression::Ite(Box::new((
-                (pg_id, exprs.0).try_into()?,
-                (pg_id, exprs.1).try_into()?,
-                (pg_id, exprs.2).try_into()?,
-            )))),
-            Expression::Floor(expression) => Ok(Expression::Floor(Box::new(
-                (pg_id, *expression).try_into()?,
-            ))),
-        }
+        Ok(expr.map(&|cs_var: Var| {
+            assert_eq!(cs_var.0, pg_id);
+            cs_var.1
+        }))
+        // match expr {
+        //     Expression::Const(val) => Ok(Expression::Const(val)),
+        //     Expression::Var(cs_var, t) if cs_var.0 == pg_id => Ok(Expression::Var(cs_var.1, t)),
+        //     Expression::Var(cs_var, _t) => Err(CsError::VarNotInPg(cs_var, pg_id)),
+        //     Expression::And(comps) => Ok(Expression::And(
+        //         comps
+        //             .into_iter()
+        //             .map(|comp| (pg_id, comp).try_into())
+        //             .collect::<Result<Vec<PgExpression>, CsError>>()?,
+        //     )),
+        //     Expression::Or(comps) => Ok(Expression::Or(
+        //         comps
+        //             .into_iter()
+        //             .map(|comp| (pg_id, comp).try_into())
+        //             .collect::<Result<Vec<PgExpression>, CsError>>()?,
+        //     )),
+        //     Expression::Implies(comps) => Ok(Expression::Implies(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::Not(expr) => (pg_id, *expr).try_into().map(Box::new).map(Expression::Not),
+        //     Expression::Opposite(expr) => (pg_id, *expr)
+        //         .try_into()
+        //         .map(Box::new)
+        //         .map(Expression::Opposite),
+        //     Expression::Sum(comps) => Ok(Expression::Sum(
+        //         comps
+        //             .into_iter()
+        //             .map(|comp| (pg_id, comp).try_into())
+        //             .collect::<Result<Vec<PgExpression>, CsError>>()?,
+        //     )),
+        //     Expression::Mult(comps) => Ok(Expression::Mult(
+        //         comps
+        //             .into_iter()
+        //             .map(|comp| (pg_id, comp).try_into())
+        //             .collect::<Result<Vec<PgExpression>, CsError>>()?,
+        //     )),
+        //     Expression::Equal(comps) => Ok(Expression::Equal(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::Greater(comps) => Ok(Expression::Greater(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::GreaterEq(comps) => Ok(Expression::GreaterEq(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::Less(comps) => Ok(Expression::Less(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::LessEq(comps) => Ok(Expression::LessEq(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::Mod(comps) => Ok(Expression::Mod(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::Div(comps) => Ok(Expression::Div(Box::new((
+        //         (pg_id, comps.0).try_into()?,
+        //         (pg_id, comps.1).try_into()?,
+        //     )))),
+        //     Expression::RandBool(p) => Ok(Expression::RandBool(p)),
+        //     Expression::RandInt(l, u) => Ok(Expression::RandInt(l, u)),
+        //     Expression::RandFloat(l, u) => Ok(Expression::RandFloat(l, u)),
+        //     Expression::Ite(exprs) => Ok(Expression::Ite(Box::new((
+        //         (pg_id, exprs.0).try_into()?,
+        //         (pg_id, exprs.1).try_into()?,
+        //         (pg_id, exprs.2).try_into()?,
+        //     )))),
+        //     Expression::Floor(expression) => Ok(Expression::Floor(Box::new(
+        //         (pg_id, *expression).try_into()?,
+        //     ))),
+        // }
     }
 }
 
@@ -367,7 +373,7 @@ impl ChannelSystemBuilder {
         pre: Location,
         action: Action,
         post: Location,
-        guard: Option<CsExpression>,
+        guard: Option<CsGuard>,
     ) -> Result<(), CsError> {
         if action.0 != pg_id {
             Err(CsError::ActionNotInPg(action, pg_id))
@@ -377,9 +383,12 @@ impl ChannelSystemBuilder {
             Err(CsError::LocationNotInPg(post, pg_id))
         } else {
             // Turn CsExpression into a PgExpression for Program Graph pg_id
-            let guard = guard
-                .map(|guard| PgExpression::try_from((pg_id, guard)))
-                .transpose()?;
+            let guard = guard.map(|guard| {
+                guard.map(&|cs_var: Var| {
+                    assert_eq!(cs_var.0, pg_id);
+                    cs_var.1
+                })
+            });
             self.program_graphs
                 .get_mut(pg_id.0 as usize)
                 .ok_or(CsError::MissingPg(pg_id))
@@ -401,7 +410,7 @@ impl ChannelSystemBuilder {
         pre: Location,
         action: Action,
         post: Location,
-        guard: Option<CsExpression>,
+        guard: Option<CsGuard>,
         constraints: &[TimeConstraint],
     ) -> Result<(), CsError> {
         if action.0 != pg_id {
@@ -412,9 +421,12 @@ impl ChannelSystemBuilder {
             Err(CsError::LocationNotInPg(post, pg_id))
         } else {
             // Turn CsExpression into a PgExpression for Program Graph pg_id
-            let guard = guard
-                .map(|guard| PgExpression::try_from((pg_id, guard)))
-                .transpose()?;
+            let guard = guard.map(|guard| {
+                guard.map(&|cs_var: Var| {
+                    assert_eq!(cs_var.0, pg_id);
+                    cs_var.1
+                })
+            });
             let constraints = constraints
                 .iter()
                 .map(|(c, l, u)| {
@@ -445,7 +457,7 @@ impl ChannelSystemBuilder {
         pg_id: PgId,
         pre: Location,
         post: Location,
-        guard: Option<CsExpression>,
+        guard: Option<CsGuard>,
     ) -> Result<(), CsError> {
         if pre.0 != pg_id {
             Err(CsError::LocationNotInPg(pre, pg_id))
@@ -453,9 +465,12 @@ impl ChannelSystemBuilder {
             Err(CsError::LocationNotInPg(post, pg_id))
         } else {
             // Turn CsExpression into a PgExpression for Program Graph pg_id
-            let guard = guard
-                .map(|guard| PgExpression::try_from((pg_id, guard)))
-                .transpose()?;
+            let guard = guard.map(|guard| {
+                guard.map(&|cs_var: Var| {
+                    assert_eq!(cs_var.0, pg_id);
+                    cs_var.1
+                })
+            });
             self.program_graphs
                 .get_mut(pg_id.0 as usize)
                 .ok_or(CsError::MissingPg(pg_id))
@@ -476,7 +491,7 @@ impl ChannelSystemBuilder {
         pg_id: PgId,
         pre: Location,
         post: Location,
-        guard: Option<CsExpression>,
+        guard: Option<CsGuard>,
         constraints: &[TimeConstraint],
     ) -> Result<(), CsError> {
         if pre.0 != pg_id {
@@ -485,9 +500,12 @@ impl ChannelSystemBuilder {
             Err(CsError::LocationNotInPg(post, pg_id))
         } else {
             // Turn CsExpression into a PgExpression for Program Graph pg_id
-            let guard = guard
-                .map(|guard| PgExpression::try_from((pg_id, guard)))
-                .transpose()?;
+            let guard = guard.map(|guard| {
+                guard.map(&|cs_var: Var| {
+                    assert_eq!(cs_var.0, pg_id);
+                    cs_var.1
+                })
+            });
             let constraints = constraints
                 .iter()
                 .map(|(c, l, u)| {
@@ -533,10 +551,7 @@ impl ChannelSystemBuilder {
             .ok_or(CsError::MissingChannel(channel))?
             .0
             .to_owned();
-        let message_type = msgs
-            .iter()
-            .map(|msg| msg.r#type().map_err(CsError::Type))
-            .collect::<Result<Vec<_>, _>>()?;
+        let message_type = msgs.iter().map(|msg| msg.r#type()).collect::<Vec<_>>();
         let msg = msgs
             .into_iter()
             .map(|msg| PgExpression::try_from((pg_id, msg)))

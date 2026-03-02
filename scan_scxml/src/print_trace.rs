@@ -247,10 +247,11 @@ fn format_omg_type(omg_type: &OmgType) -> String {
 fn format_omg_base_type(omg_base_type: OmgBaseType) -> &'static str {
     match omg_base_type {
         OmgBaseType::Boolean => "bool",
-        OmgBaseType::Int32 => "int32",
+        OmgBaseType::Int64 => "int32",
         OmgBaseType::F64 => "float64",
         OmgBaseType::Uri => "uri",
         OmgBaseType::String => "string",
+        OmgBaseType::Uint64 => "uint64",
     }
 }
 
@@ -320,5 +321,6 @@ fn format_base_val(val: Val) -> String {
         Val::Boolean(false) => "false".to_string(),
         Val::Integer(i) => i.to_string(),
         Val::Float(ordered_float) => ordered_float.to_string(),
+        Val::Natural(n) => n.to_string(),
     }
 }

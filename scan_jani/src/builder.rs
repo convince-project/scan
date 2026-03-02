@@ -6,7 +6,7 @@ use crate::parser::{
 use anyhow::{Context, anyhow, bail};
 use either::Either;
 use scan_core::{
-    Mtl, MtlOracle, PgModel, Type, TypeError, Val,
+    BooleanExpr, FloatExpr, Mtl, MtlOracle, PgModel, Type, TypeError, Val,
     program_graph::{self, Action, PgExpression, ProgramGraphBuilder, Var},
 };
 use std::{
@@ -379,7 +379,7 @@ impl JaniBuilder {
             .as_ref()
             .and_then(|expr| self.build_expression(expr, &HashMap::new(), None).ok())
             .unwrap_or_else(|| {
-                PgExpression::Const(match &var.r#type {
+                PgExpression::from(match &var.r#type {
                     parser::Type::Basic(basic_type) => match basic_type {
                         parser::BasicType::Bool => scan_core::Val::Boolean(false),
                         parser::BasicType::Int => scan_core::Val::Integer(0),
@@ -425,7 +425,7 @@ impl JaniBuilder {
             .and_then(|expr| self.build_expression(expr, local_vars, None).ok())
             // .ok_or_else(|| anyhow!("missing initial value"))?;
             .unwrap_or_else(|| {
-                PgExpression::Const(match &var.r#type {
+                PgExpression::from(match &var.r#type {
                     parser::Type::Basic(basic_type) => match basic_type {
                         parser::BasicType::Bool => scan_core::Val::Boolean(false),
                         parser::BasicType::Int => scan_core::Val::Integer(0),
@@ -493,8 +493,15 @@ impl JaniBuilder {
                     .as_ref()
                     .expect("no silent result");
                 let init_action = *self.system_actions.get(system_action).expect("exist");
-                pgb.add_effect(init_action, rng, PgExpression::RandFloat(0., 1.))
-                    .expect("add effect");
+                pgb.add_effect(
+                    init_action,
+                    rng,
+                    PgExpression::Float(FloatExpr::Rand(Box::new((
+                        FloatExpr::from(0.),
+                        FloatExpr::from(1.),
+                    )))),
+                )
+                .expect("add effect");
             });
 
         // Add locations
@@ -593,6 +600,15 @@ impl JaniBuilder {
                     edge.guard.as_ref().map(|g| &g.exp)
                 )
             })?;
+        let guard = guard
+            .map(|guard| {
+                if let PgExpression::Boolean(bool_expr) = guard {
+                    Ok(bool_expr)
+                } else {
+                    bail!("guard is not a boolean expression")
+                }
+            })
+            .transpose()?;
         // There must be only one destination per edge!
         if let [dest] = edge.destinations.as_slice() {
             let post = locations.get(&dest.location).ok_or(anyhow!(
@@ -613,8 +629,15 @@ impl JaniBuilder {
                     let action = self.system_actions.get(result).unwrap();
                     // checks to do this only once per action
                     if dest.probability.is_some() && !rng_actions.contains(action) {
-                        pgb.add_effect(*action, rng, PgExpression::RandFloat(0., 1.))
-                            .expect("effect");
+                        pgb.add_effect(
+                            *action,
+                            rng,
+                            PgExpression::Float(FloatExpr::Rand(Box::new((
+                                FloatExpr::from(0.),
+                                FloatExpr::from(1.),
+                            )))),
+                        )
+                        .expect("effect");
                         rng_actions.insert(*action);
                     }
                     // Set transient variables' values as their initial values before transition from pre location
@@ -633,7 +656,7 @@ impl JaniBuilder {
                             .get(r#ref)
                             .or_else(|| self.global_vars.get(r#ref))
                             .ok_or(anyhow!("variable {} not found", r#ref))?;
-                        let expr = scan_core::Expression::Const(*val);
+                        let expr = scan_core::Expression::from(*val);
                         pgb.add_effect(*action, *var, expr).context(
                             "failed setting transient variable {r#ref} to initial value",
                         )?;
@@ -700,16 +723,21 @@ impl JaniBuilder {
             },
             Expression::Identifier(id) if id == Self::RNG => rng
                 .ok_or_else(|| anyhow!("rng not available"))
-                .map(|rng| PgExpression::Var(rng, Type::Float)),
+                .map(|rng| PgExpression::Float(FloatExpr::Var(rng))),
             Expression::Identifier(id) => local_vars
                 .get(id)
                 .or_else(|| self.global_vars.get(id))
-                .map(|(var, _, t)| PgExpression::Var(*var, *t))
+                .map(|(var, _, t)| match t {
+                    Type::Boolean => PgExpression::Boolean(scan_core::BooleanExpr::Var(*var)),
+                    Type::Natural => PgExpression::Natural(scan_core::NaturalExpr::Var(*var)),
+                    Type::Integer => PgExpression::Integer(scan_core::IntegerExpr::Var(*var)),
+                    Type::Float => PgExpression::Float(scan_core::FloatExpr::Var(*var)),
+                })
                 .or_else(|| {
                     self.global_constants
                         .get(id)
                         .cloned()
-                        .map(PgExpression::Const)
+                        .map(PgExpression::from)
                 })
                 .ok_or_else(|| anyhow!("unknown id `{id}`")),
             Expression::IfThenElse {
@@ -722,18 +750,21 @@ impl JaniBuilder {
                 let then = self.build_expression(then, local_vars, rng)?;
                 let r#else = self.build_expression(r#else, local_vars, rng)?;
                 match op {
-                    parser::IteOp::Ite => Ok(PgExpression::Ite(Box::new((r#if, then, r#else)))),
+                    parser::IteOp::Ite => r#if.ite(then, r#else).map_err(anyhow::Error::from),
                 }
             }
             Expression::Bool { op, left, right } => {
                 let left = self.build_expression(left, local_vars, rng)?;
                 let right = self.build_expression(right, local_vars, rng)?;
                 match op {
-                    BoolOp::And => PgExpression::and(vec![left, right]),
-                    BoolOp::Or => PgExpression::or(vec![left, right]),
-                    BoolOp::Implies => Ok(PgExpression::Implies(Box::new((left, right)))),
+                    BoolOp::And => left & right,
+                    BoolOp::Or => left | right,
+                    BoolOp::Implies => Ok(PgExpression::Boolean(BooleanExpr::Implies(Box::new((
+                        BooleanExpr::try_from(left)?,
+                        BooleanExpr::try_from(right)?,
+                    ))))),
                 }
-                .map_err(|err| err.into())
+                .map_err(anyhow::Error::from)
             }
             Expression::Neg { op, exp } => {
                 let exp = self.build_expression(exp, local_vars, rng)?;
@@ -744,75 +775,48 @@ impl JaniBuilder {
             Expression::EqComp { op, left, right } => {
                 let left = self.build_expression(left, local_vars, rng)?;
                 let right = self.build_expression(right, local_vars, rng)?;
-                if left.r#type()? == right.r#type()?
-                    || (matches!(left.r#type()?, Type::Integer | Type::Float)
-                        && matches!(right.r#type()?, Type::Integer | Type::Float))
-                {
-                    match op {
-                        parser::EqCompOp::Eq => Ok(PgExpression::Equal(Box::new((left, right)))),
-                        parser::EqCompOp::Neq => PgExpression::Equal(Box::new((left, right)))
-                            .not()
-                            .map_err(|err| err.into()),
-                    }
-                } else {
-                    bail!(TypeError::TypeMismatch)
+                match op {
+                    parser::EqCompOp::Eq => Ok(PgExpression::equal_to(left, right)?),
+                    parser::EqCompOp::Neq => !(PgExpression::equal_to(left, right)?),
                 }
+                .map_err(anyhow::Error::from)
             }
             Expression::NumComp { op, left, right } => {
                 let left = self.build_expression(left, local_vars, rng)?;
                 let right = self.build_expression(right, local_vars, rng)?;
-                if matches!(left.r#type()?, Type::Integer | Type::Float)
-                    && matches!(right.r#type()?, Type::Integer | Type::Float)
-                {
-                    Ok(match op {
-                        parser::NumCompOp::Less => PgExpression::Less(Box::new((left, right))),
-                        parser::NumCompOp::Leq => PgExpression::LessEq(Box::new((left, right))),
-                        parser::NumCompOp::Greater => {
-                            PgExpression::Greater(Box::new((left, right)))
-                        }
-                        parser::NumCompOp::Geq => PgExpression::GreaterEq(Box::new((left, right))),
-                    })
-                } else {
-                    bail!(TypeError::TypeMismatch)
+
+                match op {
+                    parser::NumCompOp::Less => PgExpression::less_than(left, right),
+                    parser::NumCompOp::Leq => PgExpression::less_than_or_equal_to(left, right),
+                    parser::NumCompOp::Greater => PgExpression::greater_than(left, right),
+                    parser::NumCompOp::Geq => PgExpression::greater_than_or_equal_to(left, right),
                 }
+                .map_err(anyhow::Error::from)
             }
             Expression::IntOp { op, left, right } => {
                 let left = self.build_expression(left, local_vars, rng)?;
                 let right = self.build_expression(right, local_vars, rng)?;
-                if matches!(left.r#type()?, Type::Integer | Type::Float)
-                    && matches!(right.r#type()?, Type::Integer | Type::Float)
-                {
-                    match op {
-                        parser::IntOp::Plus => Ok(PgExpression::Sum(vec![left, right])),
-                        parser::IntOp::Minus => Ok(PgExpression::Sum(vec![
-                            left,
-                            PgExpression::Opposite(Box::new(right)),
-                        ])),
-                        parser::IntOp::Mult => Ok(PgExpression::Mult(vec![left, right])),
-                        parser::IntOp::IntDiv => Ok(PgExpression::Div(Box::new((left, right)))),
-                    }
-                } else {
-                    bail!(TypeError::TypeMismatch)
+                match op {
+                    parser::IntOp::Plus => left + right,
+                    parser::IntOp::Minus => left + (-right)?,
+                    parser::IntOp::Mult => left * right,
+                    parser::IntOp::IntDiv => left / right,
                 }
+                .map_err(anyhow::Error::from)
             }
             Expression::RealOp { op, left, right } => {
                 let left = self.build_expression(left, local_vars, rng)?;
                 let right = self.build_expression(right, local_vars, rng)?;
-                if matches!(left.r#type()?, Type::Integer | Type::Float)
-                    && matches!(right.r#type()?, Type::Integer | Type::Float)
-                {
-                    match op {
-                        parser::RealOp::Div => Ok(PgExpression::Div(Box::new((left, right)))),
-                        parser::RealOp::Pow => todo!(),
-                        parser::RealOp::Log => todo!(),
-                    }
-                } else {
-                    bail!(TypeError::TypeMismatch)
+                match op {
+                    parser::RealOp::Div => left / right,
+                    parser::RealOp::Pow => todo!(),
+                    parser::RealOp::Log => todo!(),
                 }
+                .map_err(anyhow::Error::from)
             }
             Expression::Real2IntOp { op, exp } => {
                 let _exp = self.build_expression(exp, local_vars, rng)?;
-                if matches!(_exp.r#type()?, Type::Float) {
+                if matches!(_exp.r#type(), Type::Float) {
                     match op {
                         parser::Real2IntOp::Floor => todo!(),
                         parser::Real2IntOp::Ceil => todo!(),
@@ -843,12 +847,17 @@ impl JaniBuilder {
             PropertyExpression::Identifier(id) => self
                 .global_vars
                 .get(id)
-                .map(|(var, _, t)| PgExpression::Var(*var, *t))
+                .map(|(var, _, t)| match t {
+                    Type::Boolean => PgExpression::Boolean(scan_core::BooleanExpr::Var(*var)),
+                    Type::Natural => PgExpression::Natural(scan_core::NaturalExpr::Var(*var)),
+                    Type::Integer => PgExpression::Integer(scan_core::IntegerExpr::Var(*var)),
+                    Type::Float => PgExpression::Float(scan_core::FloatExpr::Var(*var)),
+                })
                 .or_else(|| {
                     self.global_constants
                         .get(id)
                         .cloned()
-                        .map(PgExpression::Const)
+                        .map(PgExpression::from)
                 })
                 .map(Either::Left)
                 .ok_or_else(|| anyhow!("unknown id `{id}`")),
@@ -862,19 +871,24 @@ impl JaniBuilder {
                 let then = self.build_property(then)?.left().expect("expression");
                 let r#else = self.build_property(r#else)?.left().expect("expression");
                 match op {
-                    parser::IteOp::Ite => Ok(PgExpression::Ite(Box::new((r#if, then, r#else)))),
+                    parser::IteOp::Ite => r#if.ite(then, r#else),
                 }
                 .map(Either::Left)
+                .map_err(anyhow::Error::from)
             }
             PropertyExpression::Bool { op, left, right } => {
                 let left = self.build_property(left)?.left().expect("expression");
                 let right = self.build_property(right)?.left().expect("expression");
                 match op {
-                    BoolOp::And => PgExpression::and(vec![left, right]).map_err(|err| err.into()),
-                    BoolOp::Or => PgExpression::or(vec![left, right]).map_err(|err| err.into()),
-                    BoolOp::Implies => Ok(PgExpression::Implies(Box::new((left, right)))),
+                    BoolOp::And => left & right,
+                    BoolOp::Or => left | right,
+                    BoolOp::Implies => Ok(PgExpression::Boolean(BooleanExpr::Implies(Box::new((
+                        BooleanExpr::try_from(left)?,
+                        BooleanExpr::try_from(right)?,
+                    ))))),
                 }
                 .map(Either::Left)
+                .map_err(anyhow::Error::from)
             }
             PropertyExpression::Neg { op, exp } => {
                 let exp = self.build_property(exp)?.left().expect("expression");
@@ -886,17 +900,16 @@ impl JaniBuilder {
             PropertyExpression::EqComp { op, left, right } => {
                 let left = self.build_property(left)?.left().expect("expression");
                 let right = self.build_property(right)?.left().expect("expression");
-                if left.r#type()? == right.r#type()?
-                    || (matches!(left.r#type()?, Type::Integer | Type::Float)
-                        && matches!(right.r#type()?, Type::Integer | Type::Float))
+                if left.r#type() == right.r#type()
+                    || (matches!(left.r#type(), Type::Integer | Type::Float)
+                        && matches!(right.r#type(), Type::Integer | Type::Float))
                 {
                     match op {
-                        parser::EqCompOp::Eq => Ok(PgExpression::Equal(Box::new((left, right)))),
-                        parser::EqCompOp::Neq => PgExpression::Equal(Box::new((left, right)))
-                            .not()
-                            .map_err(|err| err.into()),
+                        parser::EqCompOp::Eq => PgExpression::equal_to(left, right),
+                        parser::EqCompOp::Neq => !(PgExpression::equal_to(left, right)?),
                     }
                     .map(Either::Left)
+                    .map_err(anyhow::Error::from)
                 } else {
                     bail!(TypeError::TypeMismatch)
                 }
@@ -904,56 +917,37 @@ impl JaniBuilder {
             PropertyExpression::NumComp { op, left, right } => {
                 let left = self.build_property(left)?.left().expect("expression");
                 let right = self.build_property(right)?.left().expect("expression");
-                if matches!(left.r#type()?, Type::Integer | Type::Float)
-                    && matches!(right.r#type()?, Type::Integer | Type::Float)
-                {
-                    Ok(Either::Left(match op {
-                        parser::NumCompOp::Less => PgExpression::Less(Box::new((left, right))),
-                        parser::NumCompOp::Leq => PgExpression::LessEq(Box::new((left, right))),
-                        parser::NumCompOp::Greater => {
-                            PgExpression::Greater(Box::new((left, right)))
-                        }
-                        parser::NumCompOp::Geq => PgExpression::GreaterEq(Box::new((left, right))),
-                    }))
-                } else {
-                    bail!(TypeError::TypeMismatch)
+                match op {
+                    parser::NumCompOp::Less => PgExpression::less_than(left, right),
+                    parser::NumCompOp::Leq => PgExpression::less_than_or_equal_to(left, right),
+                    parser::NumCompOp::Greater => PgExpression::greater_than(left, right),
+                    parser::NumCompOp::Geq => PgExpression::greater_than_or_equal_to(left, right),
                 }
+                .map(Either::Left)
+                .map_err(anyhow::Error::from)
             }
             PropertyExpression::IntOp { op, left, right } => {
                 let left = self.build_property(left)?.left().expect("expression");
                 let right = self.build_property(right)?.left().expect("expression");
-                if matches!(left.r#type()?, Type::Integer | Type::Float)
-                    && matches!(right.r#type()?, Type::Integer | Type::Float)
-                {
-                    match op {
-                        parser::IntOp::Plus => Ok(PgExpression::Sum(vec![left, right])),
-                        parser::IntOp::Minus => Ok(PgExpression::Sum(vec![
-                            left,
-                            PgExpression::Opposite(Box::new(right)),
-                        ])),
-                        parser::IntOp::Mult => Ok(PgExpression::Mult(vec![left, right])),
-                        parser::IntOp::IntDiv => todo!(),
-                    }
-                    .map(Either::Left)
-                } else {
-                    bail!(TypeError::TypeMismatch)
+                match op {
+                    parser::IntOp::Plus => left + right,
+                    parser::IntOp::Minus => left + (-right)?,
+                    parser::IntOp::Mult => left * right,
+                    parser::IntOp::IntDiv => left / right,
                 }
+                .map(Either::Left)
+                .map_err(anyhow::Error::from)
             }
             PropertyExpression::RealOp { op, left, right } => {
                 let left = self.build_property(left)?.left().expect("expression");
                 let right = self.build_property(right)?.left().expect("expression");
-                if matches!(left.r#type()?, Type::Integer | Type::Float)
-                    && matches!(right.r#type()?, Type::Integer | Type::Float)
-                {
-                    match op {
-                        parser::RealOp::Div => Ok(PgExpression::Div(Box::new((left, right)))),
-                        parser::RealOp::Pow => todo!(),
-                        parser::RealOp::Log => todo!(),
-                    }
-                    .map(Either::Left)
-                } else {
-                    bail!(TypeError::TypeMismatch)
+                match op {
+                    parser::RealOp::Div => left / right,
+                    parser::RealOp::Pow => todo!(),
+                    parser::RealOp::Log => todo!(),
                 }
+                .map(Either::Left)
+                .map_err(anyhow::Error::from)
             }
             PropertyExpression::Real2IntOp { op: _, exp: _ } => todo!(),
             PropertyExpression::Until {

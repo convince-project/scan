@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Not};
+use std::collections::HashMap;
 
 use anyhow::{Context, anyhow, bail};
 use boa_ast::expression::{
@@ -6,7 +6,8 @@ use boa_ast::expression::{
     operator::binary::BinaryOp,
 };
 use boa_interner::{Interner, ToInternedString};
-use scan_core::{Expression, Integer, Type};
+use log::warn;
+use scan_core::{Expression, FloatExpr, Integer, IntegerExpr, Natural, Type};
 
 use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
 
@@ -14,6 +15,7 @@ pub(super) fn infer_type(
     expr: &boa_ast::Expression,
     vars: &HashMap<String, OmgType>,
     interner: &Interner,
+    type_hint: Option<&OmgType>,
     omg_types: &OmgTypes,
 ) -> anyhow::Result<OmgType> {
     match expr {
@@ -29,7 +31,7 @@ pub(super) fn infer_type(
                             false
                         }
                     }) {
-                        Some(OmgBaseType::Int32.into())
+                        Some(OmgBaseType::Uint64.into())
                     } else {
                         None
                     }
@@ -37,21 +39,26 @@ pub(super) fn infer_type(
                 .ok_or(anyhow!("type cannot be inferred"))
         }
         boa_ast::Expression::ArrayLiteral(lit) => {
-            let omg_type = infer_type(
-                lit.as_ref()
-                    .first()
-                    .ok_or(anyhow!("array literal missing expression"))?
-                    .as_ref()
-                    .ok_or(anyhow!("cannot infer type of this array"))?,
-                vars,
-                interner,
-                omg_types,
-            )?;
-            let len = lit.as_ref().len();
-            if let OmgType::Base(omg_base_type) = omg_type {
-                Ok(OmgType::Array(omg_base_type, Some(len)))
+            if let Some(OmgType::Array(type_hint, _)) = type_hint {
+                Ok(OmgType::Array(*type_hint, Some(lit.as_ref().len())))
             } else {
-                Err(anyhow!("only arrays of base types are currently supported"))
+                let omg_type = infer_type(
+                    lit.as_ref()
+                        .first()
+                        .ok_or(anyhow!("array literal missing expression"))?
+                        .as_ref()
+                        .ok_or(anyhow!("cannot infer type of this array"))?,
+                    vars,
+                    interner,
+                    None,
+                    omg_types,
+                )?;
+                let len = lit.as_ref().len();
+                if let OmgType::Base(omg_base_type) = omg_type {
+                    Ok(OmgType::Array(omg_base_type, Some(len)))
+                } else {
+                    Err(anyhow!("only arrays of base types are currently supported"))
+                }
             }
         }
         boa_ast::Expression::Literal(lit) => {
@@ -59,16 +66,34 @@ pub(super) fn infer_type(
             match lit.kind() {
                 LiteralKind::String(_) => Ok(OmgBaseType::String.into()),
                 LiteralKind::Num(_) => Ok(OmgBaseType::F64.into()),
-                LiteralKind::Int(_) => Ok(OmgBaseType::Int32.into()),
+                LiteralKind::Int(i) if *i < 0 => Ok(OmgBaseType::Int64.into()),
+                LiteralKind::Int(_)
+                    if matches!(type_hint, Some(&OmgType::Base(OmgBaseType::Uint64))) =>
+                {
+                    Ok(OmgBaseType::Uint64.into())
+                }
+                LiteralKind::Int(_)
+                    if matches!(type_hint, Some(&OmgType::Base(OmgBaseType::Int64))) =>
+                {
+                    Ok(OmgBaseType::Int64.into())
+                }
+                LiteralKind::Int(_) => {
+                    warn!(
+                        "unknown numeric type for literal expression '{}', assuming integer",
+                        lit.to_interned_string(interner)
+                    );
+                    Ok(OmgBaseType::Int64.into())
+                }
                 // Literal::BigInt(_) => todo!(),
                 LiteralKind::Bool(_) => Ok(OmgBaseType::Boolean.into()),
                 _ => Err(anyhow!(
-                    "unable to infer type for literal expression '{lit:?}'"
+                    "unable to infer type for literal expression '{}'",
+                    lit.to_interned_string(interner)
                 )),
             }
         }
         boa_ast::Expression::Unary(unary) => {
-            let type_name = infer_type(unary.target(), vars, interner, omg_types)?;
+            let type_name = infer_type(unary.target(), vars, interner, type_hint, omg_types)?;
             match unary.op() {
                 boa_ast::expression::operator::unary::UnaryOp::Minus
                 | boa_ast::expression::operator::unary::UnaryOp::Plus => Ok(type_name),
@@ -82,17 +107,48 @@ pub(super) fn infer_type(
             }
         }
         boa_ast::Expression::Binary(bin) => {
-            let lhs = infer_type(bin.lhs(), vars, interner, omg_types)?;
-            let rhs = infer_type(bin.rhs(), vars, interner, omg_types)?;
+            let lhs = infer_type(bin.lhs(), vars, interner, None, omg_types)?;
+            let rhs = infer_type(bin.rhs(), vars, interner, None, omg_types)?;
             match bin.op() {
                 BinaryOp::Arithmetic(op) => {
                     if let (OmgType::Base(lhs_type), OmgType::Base(rhs_type)) = (lhs, rhs) {
-                        if lhs_type == rhs_type {
-                            Ok(OmgType::Base(lhs_type))
-                        } else {
-                            Err(anyhow!(
-                                "unable to infer type for operator '{op:?}' arithmetic expression"
-                            ))
+                        match lhs_type {
+                            OmgBaseType::Boolean | OmgBaseType::Uri | OmgBaseType::String => {
+                                Err(anyhow!(
+                                    "non-numeric lhs argumend for operator '{op:?}' arithmetic expression"
+                                ))
+                            }
+                            OmgBaseType::Int64 => match rhs_type {
+                                OmgBaseType::Boolean | OmgBaseType::Uri | OmgBaseType::String => {
+                                    Err(anyhow!(
+                                        "non-numeric rhs argumend for operator '{op:?}' arithmetic expression"
+                                    ))
+                                }
+                                OmgBaseType::Int64 | OmgBaseType::Uint64 => {
+                                    Ok(OmgBaseType::Int64.into())
+                                }
+                                OmgBaseType::F64 => Ok(OmgBaseType::F64.into()),
+                            },
+                            OmgBaseType::Uint64 => match rhs_type {
+                                OmgBaseType::Boolean | OmgBaseType::Uri | OmgBaseType::String => {
+                                    Err(anyhow!(
+                                        "non-numeric rhs argumend for operator '{op:?}' arithmetic expression"
+                                    ))
+                                }
+                                OmgBaseType::Uint64 => Ok(OmgBaseType::Uint64.into()),
+                                OmgBaseType::Int64 => Ok(OmgBaseType::Int64.into()),
+                                OmgBaseType::F64 => Ok(OmgBaseType::F64.into()),
+                            },
+                            OmgBaseType::F64 => match rhs_type {
+                                OmgBaseType::Boolean | OmgBaseType::Uri | OmgBaseType::String => {
+                                    Err(anyhow!(
+                                        "non-numeric rhs argumend for operator '{op:?}' arithmetic expression"
+                                    ))
+                                }
+                                OmgBaseType::Int64 | OmgBaseType::Uint64 | OmgBaseType::F64 => {
+                                    Ok(OmgBaseType::F64.into())
+                                }
+                            },
                         }
                     } else {
                         Err(anyhow!(
@@ -114,12 +170,12 @@ pub(super) fn infer_type(
                 .args()
                 .iter()
                 .map(|arg| {
-                    infer_type(arg, vars, interner, omg_types)
+                    infer_type(arg, vars, interner, None, omg_types)
                         .map(|omg_type| (String::from("name of arg???"), omg_type))
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
             vars_args.extend(args);
-            infer_type(call.function(), &vars_args, interner, omg_types)
+            infer_type(call.function(), &vars_args, interner, None, omg_types)
         }
         boa_ast::Expression::PropertyAccess(property_access) => match property_access {
             PropertyAccess::Simple(simple_property_access) => {
@@ -129,7 +185,7 @@ pub(super) fn infer_type(
                     match simple_property_access.field() {
                         PropertyAccessField::Const(identifier) => {
                             if identifier.sym() == interner.get("floor").unwrap() {
-                                Ok(OmgBaseType::Int32.into())
+                                Ok(OmgBaseType::Int64.into())
                             } else if identifier.sym() == interner.get("random").unwrap() {
                                 Ok(OmgBaseType::F64.into())
                             } else {
@@ -143,7 +199,13 @@ pub(super) fn infer_type(
                         )),
                     }
                 } else {
-                    match infer_type(simple_property_access.target(), vars, interner, omg_types)? {
+                    match infer_type(
+                        simple_property_access.target(),
+                        vars,
+                        interner,
+                        None,
+                        omg_types,
+                    )? {
                         OmgType::Base(omg_base_type) => {
                             bail!("trying to access property of base type {omg_base_type:?}")
                         }
@@ -191,7 +253,7 @@ pub(super) fn expression<V: Clone>(
     expr: &boa_ast::Expression,
     interner: &Interner,
     vars: &HashMap<String, (OmgType, Vec<(V, Type)>)>,
-    strings: &mut HashMap<String, Integer>,
+    strings: &mut HashMap<String, Natural>,
     expr_type: Option<&OmgType>,
     omg_types: &OmgTypes,
 ) -> anyhow::Result<Vec<Expression<V>>> {
@@ -202,7 +264,7 @@ pub(super) fn expression<V: Clone>(
             vars.get(&ident)
                 .map(|(_, vars)| {
                     vars.iter()
-                        .map(|(var, t)| Expression::Var(var.clone(), t.to_owned()))
+                        .map(|(var, r#type)| Expression::from_var(var.clone(), *r#type))
                         .collect::<Vec<Expression<V>>>()
                 })
                 .or_else(|| {
@@ -216,7 +278,7 @@ pub(super) fn expression<V: Clone>(
                                 None
                             }
                         })
-                        .map(|val| vec![Expression::from(val as Integer)])
+                        .map(|val| vec![Expression::from(val as Natural)])
                 })
                 .ok_or(anyhow!("unknown identifier: {ident}"))?
         }
@@ -224,7 +286,7 @@ pub(super) fn expression<V: Clone>(
             use boa_ast::expression::literal::LiteralKind;
             vec![match lit.kind() {
                 LiteralKind::String(s) => {
-                    let len = strings.len() as Integer;
+                    let len = strings.len() as Natural;
                     Expression::from(
                         *strings
                             .entry(interner.resolve_expect(*s).to_string())
@@ -237,7 +299,17 @@ pub(super) fn expression<V: Clone>(
                 {
                     Expression::from(*i as f64)
                 }
-                LiteralKind::Int(i) => Expression::from(*i),
+                LiteralKind::Int(i)
+                    if expr_type
+                        .is_some_and(|t| matches!(t, OmgType::Base(OmgBaseType::Uint64))) =>
+                {
+                    if *i < 0 {
+                        bail!("unsigned expression has negative value")
+                    } else {
+                        Expression::from(*i as Natural)
+                    }
+                }
+                LiteralKind::Int(i) => Expression::from(*i as Integer),
                 LiteralKind::BigInt(_) => todo!(),
                 LiteralKind::Bool(b) => Expression::from(*b),
                 LiteralKind::Null => todo!(),
@@ -247,7 +319,7 @@ pub(super) fn expression<V: Clone>(
         boa_ast::Expression::ArrayLiteral(arr) => {
             let expr_type = expr_type.ok_or(anyhow!("unknown array type"))?;
             if let OmgType::Array(omg_base_type, len) = expr_type {
-                let default = Expression::Const(Type::from(*omg_base_type).default_value());
+                let default = Expression::from(Type::from(*omg_base_type).default_value());
                 if len.is_some_and(|len| len != arr.as_ref().len()) {
                     bail!("array literal of length incompatible with declared type len");
                 }
@@ -283,6 +355,7 @@ pub(super) fn expression<V: Clone>(
                         .map(|(var, (omg_type, _))| (var.clone(), omg_type.clone()))
                         .collect(),
                     interner,
+                    None,
                     omg_types,
                 )?;
                 let target = expression(
@@ -352,9 +425,9 @@ pub(super) fn expression<V: Clone>(
             }
             let expr = expr[0].clone();
             let new_expr = match unary.op() {
-                UnaryOp::Minus => -expr,
+                UnaryOp::Minus => (-expr)?,
                 UnaryOp::Plus => expr,
-                UnaryOp::Not => Expression::not(expr)?,
+                UnaryOp::Not => (!expr)?,
                 _ => return Err(anyhow!("unimplemented operator")),
             };
             vec![new_expr]
@@ -381,8 +454,8 @@ pub(super) fn expression<V: Clone>(
                             rhs_hint = None;
                         }
                         ArithmeticOp::Mod => {
-                            lhs_hint = Some(&OmgType::Base(OmgBaseType::Int32));
-                            rhs_hint = Some(&OmgType::Base(OmgBaseType::Int32));
+                            lhs_hint = Some(&OmgType::Base(OmgBaseType::Uint64));
+                            rhs_hint = Some(&OmgType::Base(OmgBaseType::Uint64));
                         }
                     }
                     let lhs = expression(bin.lhs(), interner, vars, strings, lhs_hint, omg_types)?;
@@ -396,12 +469,12 @@ pub(super) fn expression<V: Clone>(
                     }
                     let rhs = rhs[0].clone();
                     let new_expr = match ar_bin {
-                        ArithmeticOp::Add => lhs + rhs,
-                        ArithmeticOp::Sub => lhs + (-rhs),
-                        ArithmeticOp::Div => Expression::Div(Box::new((lhs, rhs))),
-                        ArithmeticOp::Mul => lhs * rhs,
+                        ArithmeticOp::Add => (lhs + rhs)?,
+                        ArithmeticOp::Sub => (lhs + (-rhs)?)?,
+                        ArithmeticOp::Div => (lhs / rhs)?,
+                        ArithmeticOp::Mul => (lhs * rhs)?,
                         ArithmeticOp::Exp => todo!(),
-                        ArithmeticOp::Mod => Expression::Mod(Box::new((lhs, rhs))),
+                        ArithmeticOp::Mod => (lhs % rhs)?,
                     };
                     vec![new_expr]
                 }
@@ -418,14 +491,14 @@ pub(super) fn expression<V: Clone>(
                     }
                     let rhs = rhs[0].clone();
                     let new_expr = match rel_bin {
-                        RelationalOp::Equal => Expression::Equal(Box::new((lhs, rhs))),
-                        RelationalOp::NotEqual => Expression::Equal(Box::new((lhs, rhs))).not()?,
-                        RelationalOp::GreaterThan => Expression::Greater(Box::new((lhs, rhs))),
-                        RelationalOp::GreaterThanOrEqual => {
-                            Expression::GreaterEq(Box::new((lhs, rhs)))
+                        RelationalOp::Equal => lhs.equal_to(rhs)?,
+                        RelationalOp::NotEqual => {
+                            (!(lhs.equal_to(rhs)?)).expect("boolean expression")
                         }
-                        RelationalOp::LessThan => Expression::Less(Box::new((lhs, rhs))),
-                        RelationalOp::LessThanOrEqual => Expression::LessEq(Box::new((lhs, rhs))),
+                        RelationalOp::GreaterThan => lhs.greater_than(rhs)?,
+                        RelationalOp::GreaterThanOrEqual => lhs.greater_than_or_equal_to(rhs)?,
+                        RelationalOp::LessThan => lhs.less_than(rhs)?,
+                        RelationalOp::LessThanOrEqual => lhs.less_than_or_equal_to(rhs)?,
                         _ => return Err(anyhow!("unimplemented operator")),
                     };
                     vec![new_expr]
@@ -456,8 +529,8 @@ pub(super) fn expression<V: Clone>(
                     }
                     let rhs = rhs[0].clone();
                     let new_expr = match op {
-                        LogicalOp::And => Expression::and(vec![lhs, rhs])?,
-                        LogicalOp::Or => Expression::or(vec![lhs, rhs])?,
+                        LogicalOp::And => (lhs & rhs)?,
+                        LogicalOp::Or => (lhs | rhs)?,
                         _ => return Err(anyhow!("unimplemented operator")),
                     };
                     vec![new_expr]
@@ -489,7 +562,9 @@ pub(super) fn expression<V: Clone>(
                             let field = field_id.to_interned_string(interner);
                             if target == "Math" {
                                 match field.as_str() {
-                                    "random" => vec![Expression::RandFloat(0., 1.)],
+                                    "random" => vec![Expression::Float(FloatExpr::Rand(Box::new(
+                                        (FloatExpr::from(0.), FloatExpr::from(1.)),
+                                    )))],
                                     "floor" => {
                                         if let [arg] = args {
                                             let arg = expression(
@@ -504,7 +579,16 @@ pub(super) fn expression<V: Clone>(
                                                 bail!("expression does not support floor operator");
                                             }
                                             let arg = arg[0].clone();
-                                            vec![Expression::Floor(Box::new(arg))]
+                                            let arg = if let Expression::Float(arg) = arg {
+                                                arg
+                                            } else {
+                                                bail!(
+                                                    "floor operation applied on non-float argument"
+                                                );
+                                            };
+                                            vec![Expression::Integer(IntegerExpr::Floor(Box::new(
+                                                arg,
+                                            )))]
                                         } else {
                                             bail!(
                                                 "Math.floor() called with wrong number of arguments"
