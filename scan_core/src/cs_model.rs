@@ -49,7 +49,7 @@ impl CsModel {
     pub fn add_predicate(&mut self, predicate: Expression<Atom>) -> usize {
         let _ = predicate.eval(
             &|port| match port {
-                Atom::State(channel, idx) => self.ports[u16::from(channel) as usize][idx]
+                Atom::State(channel, idx) => self.ports[u16::from(*channel) as usize][*idx]
                     .expect("port must have been initialized"),
                 Atom::Event(_event) => Val::Boolean(false),
             },
@@ -123,10 +123,10 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
         self.predicates.iter().map(|prop| {
             if let Val::Boolean(b) = prop.eval(
                 &|port| match port {
-                    Atom::State(channel, idx) => self.ports[u16::from(channel) as usize][idx]
+                    Atom::State(channel, idx) => self.ports[u16::from(*channel) as usize][*idx]
                         .expect("port must exist and be initialized"),
                     Atom::Event(event) => {
-                        Val::Boolean(self.last_event.as_ref().is_some_and(|e| e == &event))
+                        Val::Boolean(self.last_event.as_ref().is_some_and(|e| e == event))
                     }
                 },
                 &mut DummyRng,

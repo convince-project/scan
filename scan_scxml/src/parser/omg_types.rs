@@ -20,7 +20,8 @@ use crate::parser::{ATTR_TYPE, ConvinceTag, ParserError, TAG_FIELD};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OmgBaseType {
     Boolean,
-    Int32,
+    Int64,
+    Uint64,
     F64,
     Uri,
     String,
@@ -33,17 +34,10 @@ impl TryFrom<&str> for OmgBaseType {
         match value {
             "boolean" => Ok(OmgBaseType::Boolean),
             "bool" => Ok(OmgBaseType::Boolean),
-            "int8" => Ok(OmgBaseType::Int32),
-            "int16" => Ok(OmgBaseType::Int32),
-            "int32" => Ok(OmgBaseType::Int32),
-            "int64" => Ok(OmgBaseType::Int32),
-            "uint8" => Ok(OmgBaseType::Int32),
-            "uint16" => Ok(OmgBaseType::Int32),
-            "uint32" => Ok(OmgBaseType::Int32),
-            "uint64" => Ok(OmgBaseType::Int32),
+            "int8" | "int16" | "int32" | "int64" => Ok(OmgBaseType::Int64),
+            "uint8" | "uint16" | "uint32" | "uint64" => Ok(OmgBaseType::Uint64),
             "string" => Ok(OmgBaseType::String),
-            "float32" => Ok(OmgBaseType::F64),
-            "float64" => Ok(OmgBaseType::F64),
+            "float32" | "float64" => Ok(OmgBaseType::F64),
             "URI" => Ok(OmgBaseType::Uri),
             _ => Err(anyhow!("unknown base type {value}")),
         }
@@ -54,10 +48,9 @@ impl From<OmgBaseType> for Type {
     fn from(value: OmgBaseType) -> Self {
         match value {
             OmgBaseType::Boolean => Type::Boolean,
-            OmgBaseType::Int32 => Type::Integer,
+            OmgBaseType::Int64 => Type::Integer,
             OmgBaseType::F64 => Type::Float,
-            OmgBaseType::Uri => Type::Integer,
-            OmgBaseType::String => Type::Integer,
+            OmgBaseType::Uri | OmgBaseType::String | OmgBaseType::Uint64 => Type::Natural,
         }
     }
 }
