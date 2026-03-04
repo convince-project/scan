@@ -93,13 +93,15 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
         let idx = self
             .index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let filename = format!("{idx:04}");
+        let filename = PathBuf::new()
+            .with_file_name(format!("{idx:04}"))
+            .with_extension("csv");
         self.path.push(Self::TEMP);
         self.path.push(&filename);
         self.path.add_extension("gz");
         let file = File::create_new(&self.path).expect("create file");
         let enc = flate2::GzBuilder::new()
-            .filename(filename + ".csv")
+            .filename(filename.to_str().expect("file name"))
             .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
         let mut writer = csv::WriterBuilder::new().from_writer(enc);
