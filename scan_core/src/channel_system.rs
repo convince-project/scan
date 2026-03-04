@@ -343,16 +343,16 @@ impl ChannelSystem {
 
     #[inline(always)]
     fn communication(&self, action: Action) -> Option<(Channel, Message)> {
-        let pg_id = action.0;
-        let pg_action = action.1;
-        self.program_graphs[pg_id.0 as usize]
+        let Action(PgId(pg_idx), pg_action) = action;
+        let pg_idx = pg_idx as usize;
+        self.program_graphs[pg_idx]
             .is_communication(pg_action)
             .expect("this function should only be called with validated args")
             .then(|| {
-                let higher = self.communications_pg_idxs[pg_id.0 as usize + 1];
-                let lower = self.communications_pg_idxs[pg_id.0 as usize];
+                let higher = self.communications_pg_idxs[pg_idx + 1];
+                let lower = self.communications_pg_idxs[pg_idx];
                 let idx = (self.communications[lower..higher])
-                    .binary_search_by_key(&pg_action, |(a, _, _)| *a)
+                    .binary_search_by_key(&pg_action, |&(a, _, _)| a)
                     .expect("communication");
                 let (_, c, m) = self.communications[lower + idx];
                 (c, m)
@@ -433,12 +433,11 @@ impl<'def> ChannelSystemRun<'def> {
             // or no more transition is possible
             while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
                 .possible_transitions()
-                // .filter(|(_, post_states)| post_states.clone().all(|mut i| i.next().is_some()))
                 .filter(|&(action, _)| {
                     self.def.communication(Action(pg_id, action)).is_none_or(
-                        |(channel, message)| {
-                            let (_, capacity) = self.def.channels[channel.0 as usize];
-                            let queue = &self.message_queue[channel.0 as usize];
+                        |(Channel(channel_idx), message)| {
+                            let (_, capacity) = self.def.channels[channel_idx as usize];
+                            let queue = &self.message_queue[channel_idx as usize];
                             // Channel capacity must never be exceeded!
                             debug_assert!(capacity.is_none_or(|cap| queue.len() <= cap));
                             // NOTE FIXME currently handshake is unsupported
@@ -456,23 +455,11 @@ impl<'def> ChannelSystemRun<'def> {
                 })
                 .filter_map(|(action, post_states)| {
                     post_states
-                        .map(|locs| {
-                            locs.choose(&mut self.rng).map(|loc| Location(pg_id, loc)) //.expect("non-empty"))
-                        })
+                        .map(|locs| locs.choose(&mut self.rng).map(|loc| Location(pg_id, loc)))
                         .collect::<Option<SmallVec<[Location; 4]>>>()
                         .map(|locs| (action, locs))
                 })
                 .choose(&mut rand)
-            // .map(|(action, post_states)| {
-            //     (
-            //         action,
-            //         post_states
-            //             .map(|locs| {
-            //                 Location(pg_id, locs.choose(&mut self.rng).unwrap()) //.expect("non-empty"))
-            //             })
-            //             .collect::<SmallVec<[Location; 4]>>(),
-            //     )
-            // })
             {
                 let event = self
                     .transition(pg_id, Action(pg_id, action), post_states.as_slice())

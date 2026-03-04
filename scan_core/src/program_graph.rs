@@ -271,29 +271,25 @@ impl ProgramGraph {
 
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
-    // Returns error if the transition does not exist.
     #[inline(always)]
     fn guards(
         &self,
         pre_state: Location,
         action: Action,
         post_state: Location,
-    ) -> impl Iterator<Item = (&Option<Expression<Var>>, &Vec<TimeConstraint>)> {
-        let (a_transitions, ..) = &self.locations[pre_state.0 as usize];
+    ) -> impl Iterator<Item = (Option<&Expression<Var>>, &[TimeConstraint])> {
+        let a_transitions = self.locations[pre_state.0 as usize].0.as_slice();
         a_transitions
-            .binary_search_by_key(&action, |(a, ..)| *a)
+            .binary_search_by_key(&action, |&(a, ..)| a)
             .into_iter()
             .flat_map(move |transitions_idx| {
                 let post_idx_lb = a_transitions[transitions_idx]
                     .1
-                    .partition_point(|(p, ..)| *p < post_state);
-                // let post_idx_ub = a_transitions[transitions_idx].1[post_idx_lb..]
-                //     .partition_point(|(p, ..)| *p == post_state)
-                //     + post_idx_lb;
+                    .partition_point(|&(p, ..)| p < post_state);
                 a_transitions[transitions_idx].1[post_idx_lb..]
                     .iter()
-                    .take_while(move |(p, ..)| *p == post_state)
-                    .map(|(_, g, c)| (g, c))
+                    .take_while(move |&&(p, ..)| p == post_state)
+                    .map(|(_, g, c)| (g.as_ref(), c.as_slice()))
             })
     }
 }
@@ -370,7 +366,7 @@ impl<'def> ProgramGraphRun<'def> {
     ) -> impl Iterator<Item = impl Iterator<Item = Location>> {
         self.current_states
             .iter()
-            .map(move |loc| self.possible_transitions_action_loc(action, *loc))
+            .map(move |&loc| self.possible_transitions_action_loc(action, loc))
     }
 
     fn possible_transitions_action_loc(
@@ -381,8 +377,7 @@ impl<'def> ProgramGraphRun<'def> {
         let mut last_post_state: Option<Location> = None;
         self.def.locations[current_state.0 as usize]
             .0
-            .binary_search_by_key(&action, |(a, ..)| *a)
-            .ok()
+            .binary_search_by_key(&action, |&(a, ..)| a)
             .into_iter()
             .flat_map(move |action_idx| {
                 self.def.locations[current_state.0 as usize].0[action_idx]
@@ -487,7 +482,7 @@ impl<'def> ProgramGraphRun<'def> {
                     .guards(*current_state, action, *post_state)
                     .any(|(guard, constraints)| {
                         self.active_transition(
-                            guard.as_ref(),
+                            guard,
                             constraints,
                             &self.def.locations[post_state.0 as usize].1,
                             resets,
@@ -505,7 +500,7 @@ impl<'def> ProgramGraphRun<'def> {
                     .guards(*current_state, EPSILON, *post_state)
                     .any(|(guard, constraints)| {
                         self.active_autonomous_transition(
-                            guard.as_ref(),
+                            guard,
                             constraints,
                             &self.def.locations[post_state.0 as usize].1,
                         )
