@@ -499,47 +499,61 @@ impl ProgramGraphBuilder {
         // Vars are not going to be immutable,
         // but their number will be constant anyway
         self.vars.shrink_to_fit();
-        let mut locations = self
-            .locations
-            .into_iter()
-            .map(|(a_transitions, mut invariants)| {
-                let mut a_transitions = a_transitions
-                    .into_iter()
-                    .map(|(a, mut loc_transitions)| {
-                        loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
-                        (
-                            a,
-                            loc_transitions
-                                .into_iter()
-                                .map(|(p, guard, mut c)| {
-                                    c.sort_unstable();
-                                    (p, guard, c)
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                assert!(a_transitions.is_sorted_by_key(|(a, ..)| *a));
-                a_transitions.shrink_to_fit();
-                invariants.sort_unstable();
-                invariants.shrink_to_fit();
-                (a_transitions, invariants)
-            })
-            .collect::<Vec<_>>();
-        locations.shrink_to_fit();
+        // For each location, the starting index of the associated actions for transitions
+        let mut actions_idxs: Vec<usize> = Vec::new();
+        // For each location, the actions associated to the corresponding transitions
+        let mut actions: Vec<Action> = Vec::new();
+        // For each location, the starting index of the associated location invariant
+        let mut invariants_idxs: Vec<usize> = Vec::new();
+        let mut time_invariants: Vec<TimeConstraint> = Vec::new();
+        // For each location-action, the starting index of the associated transition
+        let mut transition_idxs: Vec<usize> = Vec::new();
+        let mut transitions: Vec<Transition> = Vec::new();
+        for (mut a_transitions, mut invariants) in self.locations {
+            invariants.sort_unstable();
+            invariants_idxs.push(time_invariants.len());
+            time_invariants.extend_from_slice(&invariants);
+            actions_idxs.push(actions.len());
+            a_transitions.sort_unstable_by_key(|&(a, ..)| a);
+            for (a, mut loc_transitions) in a_transitions {
+                actions.push(a);
+                transition_idxs.push(transitions.len());
+                loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
+                transitions.extend(loc_transitions.into_iter().map(|(p, guard, mut c)| {
+                    c.sort_unstable();
+                    (p, guard, c)
+                }));
+            }
+        }
+        actions_idxs.push(actions.len());
+        actions_idxs.shrink_to_fit();
+        invariants_idxs.push(time_invariants.len());
+        invariants_idxs.shrink_to_fit();
+        transition_idxs.push(transitions.len());
+        transition_idxs.shrink_to_fit();
+        actions.shrink_to_fit();
+        transitions.shrink_to_fit();
+        time_invariants.shrink_to_fit();
         // Build program graph
         info!(
             "create Program Graph with:\n{} locations\n{} actions\n{} vars",
-            locations.len(),
+            actions_idxs.len(),
             self.effects.len(),
             self.vars.len()
         );
         self.initial_states.sort_unstable();
         self.initial_states.shrink_to_fit();
         ProgramGraph {
+            // For each location, the starting index of the associated actions for transitions and location invariants
+            actions_idxs,
+            // For each location-action, the starting index of the associated transitions
+            actions,
+            transitions,
+            transition_idxs,
+            invariants_idxs,
+            time_invariants,
             initial_states: self.initial_states,
             effects: self.effects.into_iter().collect(),
-            locations,
             vars: self.vars,
             clocks: self.clocks,
         }

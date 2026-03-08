@@ -236,7 +236,15 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 pub struct ProgramGraph {
     initial_states: SmallVec<[Location; 8]>,
     effects: Vec<Effect>,
-    locations: Vec<LocationData>,
+    // For each location, the starting index of the associated actions for transitions
+    actions_idxs: Vec<usize>,
+    // For each location, the starting index of the associated location invariants
+    invariants_idxs: Vec<usize>,
+    actions: Vec<Action>,
+    // For each location-action, the starting index of the associated transitions
+    transition_idxs: Vec<usize>,
+    transitions: Vec<Transition>,
+    time_invariants: Vec<TimeConstraint>,
     // Time invariants of each location
     vars: Vec<Val>,
     // Number of clocks
@@ -269,27 +277,62 @@ impl ProgramGraph {
         }
     }
 
+    fn actions(&self, location: Location) -> &[Action] {
+        let location_idx = location.0 as usize;
+        let actions_idx_next = self.actions_idxs[location_idx + 1];
+        let actions_idx = self.actions_idxs[location_idx];
+        &self.actions[actions_idx..actions_idx_next]
+    }
+
+    fn invariants(&self, location: Location) -> &[TimeConstraint] {
+        let time_invariants_idx_next = self.invariants_idxs[location.0 as usize + 1];
+        let time_invariants_idx = self.invariants_idxs[location.0 as usize];
+        &self.time_invariants[time_invariants_idx..time_invariants_idx_next]
+    }
+
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
-    #[inline(always)]
+    #[inline]
     fn guards(
         &self,
         pre_state: Location,
         action: Action,
         post_state: Location,
     ) -> impl Iterator<Item = (Option<&Expression<Var>>, &[TimeConstraint])> {
-        let a_transitions = self.locations[pre_state.0 as usize].0.as_slice();
-        a_transitions
-            .binary_search_by_key(&action, |&(a, ..)| a)
-            .into_iter()
-            .flat_map(move |transitions_idx| {
-                let post_idx_lb = a_transitions[transitions_idx]
-                    .1
-                    .partition_point(|&(p, ..)| p < post_state);
-                a_transitions[transitions_idx].1[post_idx_lb..]
+        self.actions(pre_state)
+            .binary_search(&action)
+            .map(move |mut action_idx| {
+                action_idx += self.actions_idxs[pre_state.0 as usize];
+                let transition_idx_next = self.transition_idxs[action_idx + 1];
+                let transition_idx = self.transition_idxs[action_idx];
+                let post_idx_lb = transition_idx
+                    + self.transitions[transition_idx..transition_idx_next]
+                        .partition_point(|&(p, ..)| p < post_state);
+                self.transitions[post_idx_lb..transition_idx_next]
                     .iter()
                     .take_while(move |&&(p, ..)| p == post_state)
                     .map(|(_, g, c)| (g.as_ref(), c.as_slice()))
+            })
+            .into_iter()
+            .flatten()
+    }
+
+    #[inline]
+    fn post_and_guards(
+        &self,
+        pre_state: Location,
+        action: Action,
+    ) -> impl Iterator<Item = (Location, Option<&Expression<Var>>, &[TimeConstraint])> {
+        self.actions(pre_state)
+            .binary_search(&action)
+            .into_iter()
+            .flat_map(move |mut action_idx| {
+                action_idx += self.actions_idxs[pre_state.0 as usize];
+                let transition_idx_next = self.transition_idxs[action_idx + 1];
+                let transition_idx = self.transition_idxs[action_idx];
+                self.transitions[transition_idx..transition_idx_next]
+                    .iter()
+                    .map(|(p, g, c)| (*p, g.as_ref(), c.as_slice()))
             })
     }
 }
@@ -343,12 +386,7 @@ impl<'def> ProgramGraphRun<'def> {
         self.current_states
             .first()
             .into_iter()
-            .flat_map(|loc| {
-                self.def.locations[loc.0 as usize]
-                    .0
-                    .iter()
-                    .map(|&(action, ..)| action)
-            })
+            .flat_map(|&pre_loc| self.def.actions(pre_loc).iter().copied())
             .chain(
                 self.current_states
                     .is_empty()
@@ -375,49 +413,32 @@ impl<'def> ProgramGraphRun<'def> {
         current_state: Location,
     ) -> impl Iterator<Item = Location> {
         let mut last_post_state: Option<Location> = None;
-        self.def.locations[current_state.0 as usize]
-            .0
-            .binary_search_by_key(&action, |&(a, ..)| a)
-            .into_iter()
-            .flat_map(move |action_idx| {
-                self.def.locations[current_state.0 as usize].0[action_idx]
-                    .1
-                    .iter()
-                    .filter_map(move |(post_state, guard, constraints)| {
-                        // prevent post_states to be duplicated wastefully
-                        if last_post_state.is_some_and(|s| s == *post_state) {
-                            return None;
+        self.def.post_and_guards(current_state, action).filter_map(
+            move |(post_state, guard, constraints)| {
+                // prevent post_states to be duplicated wastefully
+                if last_post_state.is_some_and(|s| s == post_state) {
+                    return None;
+                }
+                let invariants = self.def.invariants(post_state);
+                if if action == EPSILON {
+                    self.active_autonomous_transition(guard, constraints, invariants)
+                } else {
+                    match self.def.effects[action.0 as usize] {
+                        Effect::Effects(_, ref resets) => {
+                            self.active_transition(guard, constraints, invariants, resets)
                         }
-                        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-                        if if action == EPSILON {
-                            self.active_autonomous_transition(
-                                guard.as_ref(),
-                                constraints,
-                                invariants,
-                            )
-                        } else {
-                            match self.def.effects[action.0 as usize] {
-                                Effect::Effects(_, ref resets) => self.active_transition(
-                                    guard.as_ref(),
-                                    constraints,
-                                    invariants,
-                                    resets,
-                                ),
-                                Effect::Send(_) | Effect::Receive(_) => self
-                                    .active_autonomous_transition(
-                                        guard.as_ref(),
-                                        constraints,
-                                        invariants,
-                                    ),
-                            }
-                        } {
-                            last_post_state = Some(*post_state);
-                            last_post_state
-                        } else {
-                            None
+                        Effect::Send(_) | Effect::Receive(_) => {
+                            self.active_autonomous_transition(guard, constraints, invariants)
                         }
-                    })
-            })
+                    }
+                } {
+                    last_post_state = Some(post_state);
+                    last_post_state
+                } else {
+                    None
+                }
+            },
+        )
     }
 
     fn active_transition(
@@ -474,36 +495,31 @@ impl<'def> ProgramGraphRun<'def> {
         post_states: &[Location],
         resets: &[Clock],
     ) -> bool {
+        assert_eq!(self.current_states.len(), post_states.len());
         self.current_states
             .iter()
             .zip(post_states)
-            .all(|(current_state, post_state)| {
+            .all(|(&current_state, &post_state)| {
+                let invariants = self.def.invariants(post_state);
                 self.def
-                    .guards(*current_state, action, *post_state)
+                    .guards(current_state, action, post_state)
                     .any(|(guard, constraints)| {
-                        self.active_transition(
-                            guard,
-                            constraints,
-                            &self.def.locations[post_state.0 as usize].1,
-                            resets,
-                        )
+                        self.active_transition(guard, constraints, invariants, resets)
                     })
             })
     }
 
     fn active_autonomous_transitions(&self, post_states: &[Location]) -> bool {
+        assert_eq!(self.current_states.len(), post_states.len());
         self.current_states
             .iter()
             .zip(post_states)
-            .all(|(current_state, post_state)| {
+            .all(|(&current_state, &post_state)| {
+                let invariants = self.def.invariants(post_state);
                 self.def
-                    .guards(*current_state, EPSILON, *post_state)
+                    .guards(current_state, EPSILON, post_state)
                     .any(|(guard, constraints)| {
-                        self.active_autonomous_transition(
-                            guard,
-                            constraints,
-                            &self.def.locations[post_state.0 as usize].1,
-                        )
+                        self.active_autonomous_transition(guard, constraints, invariants)
                     })
             })
     }
@@ -523,7 +539,7 @@ impl<'def> ProgramGraphRun<'def> {
         }
         if let Some(ps) = post_states
             .iter()
-            .find(|ps| ps.0 >= self.def.locations.len() as LocationIdx)
+            .find(|ps| ps.0 >= self.def.actions_idxs.len() as LocationIdx)
         {
             return Err(PgError::MissingLocation(*ps));
         }
@@ -554,15 +570,14 @@ impl<'def> ProgramGraphRun<'def> {
 
     /// Checks if it is possible to wait a given amount of time-units without violating the time invariants.
     pub fn can_wait(&self, delta: Time) -> bool {
-        self.current_states
-            .iter()
-            .flat_map(|current_state| self.def.locations[current_state.0 as usize].1.iter())
-            .all(|(c, l, u)| {
+        self.current_states.iter().all(|&current_state| {
+            self.def.invariants(current_state).iter().all(|(c, l, u)| {
                 // Invariants need to be satisfied during the whole wait.
                 let start_time = self.clocks[c.0 as usize];
                 let end_time = start_time + delta;
                 l.is_none_or(|l| l <= start_time) && u.is_none_or(|u| end_time < u)
             })
+        })
     }
 
     /// Waits a given amount of time-units.
