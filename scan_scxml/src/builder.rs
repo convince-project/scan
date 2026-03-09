@@ -1415,7 +1415,7 @@ impl ModelBuilder {
                 let params_types =
                     (!params.is_empty()).then_some(OmgTypeDef::Structure(BTreeMap::from_iter(
                         params
-                            .into_iter()
+                            .iter()
                             .map(|(name, t)| (name.clone(), t.as_ref().unwrap().clone())),
                     )));
                 (name, params_types)

@@ -195,7 +195,8 @@ enum Effect {
     Receive(SmallVec<[Var; 2]>),
 }
 
-type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
+// type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
+pub(crate) type Transition = (Location, Option<Expression<Var>>, Vec<TimeConstraint>);
 
 /// A definition object for a PG.
 /// It represents the abstract definition of a PG.
@@ -235,15 +236,17 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 #[derive(Debug, Clone)]
 pub struct ProgramGraph {
     initial_states: SmallVec<[Location; 8]>,
+    // Each action has its associated effects
     effects: Vec<Effect>,
     // For each location, the starting index of the associated actions for transitions
     actions_idxs: Vec<usize>,
-    // For each location, the starting index of the associated location invariants
-    invariants_idxs: Vec<usize>,
+    // Actions associated to transitions
     actions: Vec<Action>,
-    // For each location-action, the starting index of the associated transitions
+    // For each action-associated-to-location, the starting index of the associated transitions
     transition_idxs: Vec<usize>,
     transitions: Vec<Transition>,
+    // For each location, the starting index of the associated location invariants
+    time_invariants_idxs: Vec<usize>,
     time_invariants: Vec<TimeConstraint>,
     // Time invariants of each location
     vars: Vec<Val>,
@@ -266,17 +269,14 @@ impl ProgramGraph {
     }
 
     #[inline(always)]
-    pub(crate) fn is_communication(&self, action: Action) -> Result<bool, PgError> {
-        if action == EPSILON {
-            Ok(false)
-        } else {
-            self.effects
-                .get(action.0 as usize)
-                .map(|e| matches!(e, Effect::Send(_) | Effect::Receive(_)))
-                .ok_or(PgError::MissingAction(action))
-        }
+    pub(crate) fn is_communication(&self, action: Action) -> bool {
+        self.effects
+            .get(action.0 as usize)
+            .map(|e| matches!(e, Effect::Send(_) | Effect::Receive(_)))
+            .unwrap_or_default()
     }
 
+    #[inline]
     fn actions(&self, location: Location) -> &[Action] {
         let location_idx = location.0 as usize;
         let actions_idx_next = self.actions_idxs[location_idx + 1];
@@ -284,21 +284,17 @@ impl ProgramGraph {
         &self.actions[actions_idx..actions_idx_next]
     }
 
+    #[inline]
     fn invariants(&self, location: Location) -> &[TimeConstraint] {
-        let time_invariants_idx_next = self.invariants_idxs[location.0 as usize + 1];
-        let time_invariants_idx = self.invariants_idxs[location.0 as usize];
+        let time_invariants_idx_next = self.time_invariants_idxs[location.0 as usize + 1];
+        let time_invariants_idx = self.time_invariants_idxs[location.0 as usize];
         &self.time_invariants[time_invariants_idx..time_invariants_idx_next]
     }
 
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
     #[inline]
-    fn guards(
-        &self,
-        pre_state: Location,
-        action: Action,
-        post_state: Location,
-    ) -> impl Iterator<Item = (Option<&Expression<Var>>, &[TimeConstraint])> {
+    fn guards(&self, pre_state: Location, action: Action, post_state: Location) -> &[Transition] {
         self.actions(pre_state)
             .binary_search(&action)
             .map(move |mut action_idx| {
@@ -308,32 +304,25 @@ impl ProgramGraph {
                 let post_idx_lb = transition_idx
                     + self.transitions[transition_idx..transition_idx_next]
                         .partition_point(|&(p, ..)| p < post_state);
-                self.transitions[post_idx_lb..transition_idx_next]
-                    .iter()
-                    .take_while(move |&&(p, ..)| p == post_state)
-                    .map(|(_, g, c)| (g.as_ref(), c.as_slice()))
+                let post_idx_ub = post_idx_lb
+                    + self.transitions[post_idx_lb..transition_idx_next]
+                        .partition_point(|&(p, ..)| p == post_state);
+                &self.transitions[post_idx_lb..post_idx_ub]
             })
-            .into_iter()
-            .flatten()
+            .unwrap_or_default()
     }
 
     #[inline]
-    fn post_and_guards(
-        &self,
-        pre_state: Location,
-        action: Action,
-    ) -> impl Iterator<Item = (Location, Option<&Expression<Var>>, &[TimeConstraint])> {
+    fn transitions(&self, pre_state: Location, action: Action) -> &[Transition] {
         self.actions(pre_state)
             .binary_search(&action)
-            .into_iter()
-            .flat_map(move |mut action_idx| {
+            .map(move |mut action_idx| {
                 action_idx += self.actions_idxs[pre_state.0 as usize];
                 let transition_idx_next = self.transition_idxs[action_idx + 1];
                 let transition_idx = self.transition_idxs[action_idx];
-                self.transitions[transition_idx..transition_idx_next]
-                    .iter()
-                    .map(|(p, g, c)| (*p, g.as_ref(), c.as_slice()))
+                &self.transitions[transition_idx..transition_idx_next]
             })
+            .unwrap_or_default()
     }
 }
 
@@ -390,7 +379,7 @@ impl<'def> ProgramGraphRun<'def> {
             .chain(
                 self.current_states
                     .is_empty()
-                    .then_some((0..self.def.effects.len() as ActionIdx).map(Action))
+                    .then(|| (0..self.def.effects.len() as ActionIdx).map(Action))
                     .into_iter()
                     .flatten(),
             )
@@ -413,26 +402,28 @@ impl<'def> ProgramGraphRun<'def> {
         current_state: Location,
     ) -> impl Iterator<Item = Location> {
         let mut last_post_state: Option<Location> = None;
-        self.def.post_and_guards(current_state, action).filter_map(
+        self.def.transitions(current_state, action).iter().flat_map(
             move |(post_state, guard, constraints)| {
                 // prevent post_states to be duplicated wastefully
-                if last_post_state.is_some_and(|s| s == post_state) {
+                if last_post_state.is_some_and(|s| s == *post_state) {
                     return None;
                 }
-                let invariants = self.def.invariants(post_state);
+                let invariants = self.def.invariants(*post_state);
                 if if action == EPSILON {
-                    self.active_autonomous_transition(guard, constraints, invariants)
+                    self.active_autonomous_transition(guard.as_ref(), constraints, invariants)
                 } else {
                     match self.def.effects[action.0 as usize] {
                         Effect::Effects(_, ref resets) => {
-                            self.active_transition(guard, constraints, invariants, resets)
+                            self.active_transition(guard.as_ref(), constraints, invariants, resets)
                         }
-                        Effect::Send(_) | Effect::Receive(_) => {
-                            self.active_autonomous_transition(guard, constraints, invariants)
-                        }
+                        Effect::Send(_) | Effect::Receive(_) => self.active_autonomous_transition(
+                            guard.as_ref(),
+                            constraints,
+                            invariants,
+                        ),
                     }
                 } {
-                    last_post_state = Some(post_state);
+                    last_post_state = Some(*post_state);
                     last_post_state
                 } else {
                     None
@@ -503,8 +494,9 @@ impl<'def> ProgramGraphRun<'def> {
                 let invariants = self.def.invariants(post_state);
                 self.def
                     .guards(current_state, action, post_state)
-                    .any(|(guard, constraints)| {
-                        self.active_transition(guard, constraints, invariants, resets)
+                    .iter()
+                    .any(|(_, guard, constraints)| {
+                        self.active_transition(guard.as_ref(), constraints, invariants, resets)
                     })
             })
     }
@@ -518,8 +510,9 @@ impl<'def> ProgramGraphRun<'def> {
                 let invariants = self.def.invariants(post_state);
                 self.def
                     .guards(current_state, EPSILON, post_state)
-                    .any(|(guard, constraints)| {
-                        self.active_autonomous_transition(guard, constraints, invariants)
+                    .iter()
+                    .any(|(_, guard, constraints)| {
+                        self.active_autonomous_transition(guard.as_ref(), constraints, invariants)
                     })
             })
     }

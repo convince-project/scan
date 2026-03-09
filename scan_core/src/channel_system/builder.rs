@@ -6,7 +6,7 @@ use crate::Expression;
 use crate::grammar::Type;
 use crate::program_graph::ProgramGraph;
 use log::info;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// An expression using CS's [`Var`] as variables.
 pub type CsExpression = Expression<Var>;
@@ -101,7 +101,7 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
 pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
     channels: Vec<(Vec<Type>, Option<usize>)>,
-    communications: HashMap<Action, (Channel, Message)>,
+    communications: BTreeMap<Action, (Channel, Message)>,
 }
 
 impl Default for ChannelSystemBuilder {
@@ -117,7 +117,7 @@ impl ChannelSystemBuilder {
         Self {
             program_graphs: Vec::new(),
             channels: Vec::new(),
-            communications: HashMap::new(),
+            communications: BTreeMap::new(),
         }
     }
 
@@ -673,8 +673,8 @@ impl ChannelSystemBuilder {
 
         program_graphs.shrink_to_fit();
         self.channels.shrink_to_fit();
-        let mut communications_map = Vec::from_iter(self.communications);
-        communications_map.sort_unstable_by_key(|(a, _)| *a);
+        let communications_map = Vec::from_iter(self.communications);
+        assert!(communications_map.is_sorted_by_key(|(a, ..)| a));
         let communications = Vec::from_iter(
             communications_map
                 .iter()
@@ -683,15 +683,13 @@ impl ChannelSystemBuilder {
         let mut index = 0;
         let mut communications_pg_idxs = Vec::<usize>::with_capacity(program_graphs.len() + 1);
         communications_pg_idxs.push(index);
-        for pg_id in (0..program_graphs.len() as u16).map(PgId) {
-            index = communications_map[index..]
-                .iter()
-                .position(|(a, ..)| a.0.0 > pg_id.0)
-                .map_or(communications_map.len(), |pos| pos + index);
+        for pg_idx in 0..program_graphs.len() as u16 {
+            index += communications_map[index..].partition_point(|(a, ..)| a.0.0 == pg_idx);
             communications_pg_idxs.push(index);
         }
 
         assert_eq!(communications_pg_idxs.len(), program_graphs.len() + 1);
+        assert!(communications_pg_idxs.is_sorted());
 
         ChannelSystem {
             channels: self.channels,

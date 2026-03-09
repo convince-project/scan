@@ -1,16 +1,16 @@
 use super::{
-    Action, ActionIdx, Clock, EPSILON, Effect, Location, LocationData, LocationIdx, PgError,
-    PgExpression, ProgramGraph, TimeConstraint, Var,
+    Action, ActionIdx, Clock, EPSILON, Effect, Location, LocationIdx, PgError, PgExpression,
+    ProgramGraph, TimeConstraint, Var,
 };
 use crate::{
-    DummyRng, Expression,
+    DummyRng,
     grammar::{Type, Val},
+    program_graph::Transition,
 };
 use log::info;
 use smallvec::SmallVec;
 
-// type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
-pub(crate) type Transition = (Location, Option<Expression<Var>>, Vec<TimeConstraint>);
+type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
@@ -550,7 +550,7 @@ impl ProgramGraphBuilder {
             actions,
             transitions,
             transition_idxs,
-            invariants_idxs,
+            time_invariants_idxs: invariants_idxs,
             time_invariants,
             initial_states: self.initial_states,
             effects: self.effects.into_iter().collect(),

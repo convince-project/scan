@@ -347,11 +347,10 @@ impl ChannelSystem {
         let pg_idx = pg_idx as usize;
         self.program_graphs[pg_idx]
             .is_communication(pg_action)
-            .expect("this function should only be called with validated args")
             .then(|| {
                 let higher = self.communications_pg_idxs[pg_idx + 1];
                 let lower = self.communications_pg_idxs[pg_idx];
-                let idx = (self.communications[lower..higher])
+                let idx = self.communications[lower..higher]
                     .binary_search_by_key(&pg_action, |&(a, _, _)| a)
                     .expect("communication");
                 let (_, c, m) = self.communications[lower + idx];
@@ -362,7 +361,7 @@ impl ChannelSystem {
     /// Returns the list of defined channels, given as the pair of their type and capacity
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
     #[inline(always)]
-    pub fn channels(&self) -> &Vec<(Vec<Type>, Option<usize>)> {
+    pub fn channels(&self) -> &[(Vec<Type>, Option<usize>)] {
         &self.channels
     }
 }
@@ -422,11 +421,9 @@ impl<'def> ChannelSystemRun<'def> {
 
     pub(crate) fn montecarlo_execution(&mut self) -> Option<Event> {
         let pgs = self.program_graphs.len();
-        let pg_vec = Vec::from_iter((0..pgs as u16).map(PgId));
+        let mut pg_list = Vec::from_iter((0..pgs as u16).map(PgId));
         let mut rand = SmallRng::from_rng(&mut self.rng);
-        let mut pg_list;
         // Resets PG queue
-        pg_list = pg_vec.clone();
         while !pg_list.is_empty() {
             let pg_id = pg_list.swap_remove(self.rng.random_range(0..pg_list.len()));
             // Execute randomly chosen transitions on the picked PG until an event is generated,
