@@ -426,14 +426,16 @@ impl ModelBuilder {
         // Conventionally, the entry-point for a state is a location associated to the id of the state.
         states.insert(scxml.initial.to_owned(), initial_loc);
         // Var representing the current event
+        // (use Integer::MAX as no-event flag)
         let current_event_var = self
             .cs
-            .new_var(pg_id, CsExpression::from(0))
+            .new_var(pg_id, CsExpression::from(Integer::MAX))
             .expect("program graph exists!");
         // Variable that will store origin of last processed event.
+        // (use Integer::MAX as no-origin flag)
         let origin_var = self
             .cs
-            .new_var(pg_id, CsExpression::from(0))
+            .new_var(pg_id, CsExpression::from(Integer::MAX))
             .expect("program graph exists!");
         // Implement internal queue
         let int_queue = self.cs.new_channel(vec![Type::Integer], None);
@@ -507,7 +509,7 @@ impl ModelBuilder {
                     let params_channel = *self
                         .parameter_channels
                         .entry((sender_id, pg_id, event_index))
-                        .or_insert(self.cs.new_channel(param_types_vec.clone(), None));
+                        .or_insert_with(|| self.cs.new_channel(param_types_vec.clone(), None));
                     let read = self
                         .cs
                         .new_receive(pg_id, params_channel, param_vars_vec.clone())
@@ -688,9 +690,8 @@ impl ModelBuilder {
                     target: "build",
                     "build {} transition to {}",
                     transition
-                        .event
-                        .as_ref()
-                        .unwrap_or(&"eventless".to_string()),
+                        .event.as_deref()
+                        .unwrap_or("eventless"),
                     transition.target
                 );
                 // Get or create the location corresponding to the target state.
@@ -727,18 +728,21 @@ impl ModelBuilder {
                             ])),
                         ),
                     ]);
+                    let mut event_vars = self.events[event_index]
+                        .params
+                        .keys()
+                        .flat_map(|param_name| {
+                            &param_vars
+                                .get(&(event_index, param_name.clone()))
+                                .expect("param")
+                                .1
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    event_vars.push((origin_var, Type::Integer));
                     vars.insert(
                         String::from("_event"),
-                        (
-                            OmgType::Custom(String::from("_EventType")),
-                            param_vars
-                                .iter()
-                                .filter(|((ev_ix, _), _)| *ev_ix == event_index)
-                                .flat_map(|(_, (_, vars))| vars)
-                                .cloned()
-                                .chain([(origin_var, Type::Integer)])
-                                .collect(),
-                        ),
+                        (OmgType::Custom(String::from("_EventType")), event_vars),
                     );
                 }
                 // Condition activating the transition.
@@ -857,18 +861,18 @@ impl ModelBuilder {
                 // If the current transition is not active, move on to check the next one.
                 // NOTE: an autonomous transition without cond is always active so there is no point processing further transitions.
                 // This happens in State Charts already, so we model it faithfully without optimizations.
-                let not_guard = guard
-                    .map(CsExpression::not)
-                    .transpose()?
-                    .unwrap_or(CsExpression::from(false));
-                self.cs
-                    .add_autonomous_transition(
-                        pg_id,
-                        check_trans_loc,
-                        next_trans_loc,
-                        Some(not_guard),
-                    )
-                    .expect("cannot fail because guard was already checked");
+                if let Some(guard) = guard {
+                    let not_guard =
+                        CsExpression::not(guard).expect("guard is a boolean expression");
+                    self.cs
+                        .add_autonomous_transition(
+                            pg_id,
+                            check_trans_loc,
+                            next_trans_loc,
+                            Some(not_guard),
+                        )
+                        .expect("cannot fail because guard was already checked");
+                }
             }
 
             // Connect NULL events with named events
@@ -1212,7 +1216,7 @@ impl ModelBuilder {
         let param_chn = *self
             .parameter_channels
             .entry((pg_id, target_id, event_idx))
-            .or_insert(self.cs.new_channel(scan_types, None));
+            .or_insert_with(|| self.cs.new_channel(scan_types, None));
         // Can return error if expr is badly typed
         let pass_param = self.cs.new_send(pg_id, param_chn, exprs)?;
         let next_loc = self.cs.new_location(pg_id).expect("PG exists");
