@@ -506,14 +506,21 @@ impl ModelBuilder {
             }
             if !param_vars_vec.is_empty() {
                 for &sender_id in event_builder.senders.iter() {
+                    // params_channel could have already been created by event sender
                     let params_channel = *self
                         .parameter_channels
                         .entry((sender_id, pg_id, event_index))
                         .or_insert_with(|| self.cs.new_channel(param_types_vec.clone(), None));
+                    // this will fail if params_channel has already been created by event sender with inconsistent typing
                     let read = self
                         .cs
                         .new_receive(pg_id, params_channel, param_vars_vec.clone())
-                        .expect("must work");
+                        .with_context(|| {
+                            format!(
+                                "failed building receiver for params of event '{}'",
+                                event_builder.name
+                            )
+                        })?;
                     let old = params_actions.insert((sender_id, event_index), read);
                     assert!(old.is_none());
                 }
