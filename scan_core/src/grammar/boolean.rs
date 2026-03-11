@@ -33,6 +33,7 @@ where
     /// Equality of numerical expressions.
     NatEqual(NaturalExpr<V>, NaturalExpr<V>),
     IntEqual(IntegerExpr<V>, IntegerExpr<V>),
+    FloatEqual(FloatExpr<V>, FloatExpr<V>),
     /// Inequality of numerical expressions: LHS greater than RHS.
     NatGreater(NaturalExpr<V>, NaturalExpr<V>),
     IntGreater(IntegerExpr<V>, IntegerExpr<V>),
@@ -40,6 +41,7 @@ where
     /// Inequality of numerical expressions: LHS greater than, or equal to,  RHS.
     NatGreaterEq(NaturalExpr<V>, NaturalExpr<V>),
     IntGreaterEq(IntegerExpr<V>, IntegerExpr<V>),
+    FloatGreaterEq(FloatExpr<V>, FloatExpr<V>),
     /// Inequality of numerical expressions: LHS less than RHS.
     NatLess(NaturalExpr<V>, NaturalExpr<V>),
     IntLess(IntegerExpr<V>, IntegerExpr<V>),
@@ -47,6 +49,7 @@ where
     /// Inequality of numerical expressions: LHS less than, or equal to, RHS.
     NatLessEq(NaturalExpr<V>, NaturalExpr<V>),
     IntLessEq(IntegerExpr<V>, IntegerExpr<V>),
+    FloatLessEq(FloatExpr<V>, FloatExpr<V>),
     // -----
     // Flow
     // -----
@@ -87,8 +90,11 @@ where
             | BooleanExpr::IntLessEq(integer_expr, integer_expr1) => {
                 integer_expr.is_constant() && integer_expr1.is_constant()
             }
-            BooleanExpr::FloatLess(float_expr, float_expr1)
-            | BooleanExpr::FloatGreater(float_expr, float_expr1) => {
+            BooleanExpr::FloatEqual(float_expr, float_expr1)
+            | BooleanExpr::FloatLess(float_expr, float_expr1)
+            | BooleanExpr::FloatLessEq(float_expr, float_expr1)
+            | BooleanExpr::FloatGreater(float_expr, float_expr1)
+            | BooleanExpr::FloatGreaterEq(float_expr, float_expr1) => {
                 float_expr.is_constant() && float_expr1.is_constant()
             }
             BooleanExpr::Ite(args) => {
@@ -129,6 +135,9 @@ where
             BooleanExpr::IntEqual(integer_expr_lhs, integer_expr_rhs) => {
                 integer_expr_lhs.eval(vars, rng) == integer_expr_rhs.eval(vars, rng)
             }
+            BooleanExpr::FloatEqual(float_expr_lhs, float_expr_rhs) => {
+                float_expr_lhs.eval(vars, rng) == float_expr_rhs.eval(vars, rng)
+            }
             BooleanExpr::NatGreater(natural_expr_lhs, natural_expr_rhs) => {
                 natural_expr_lhs.eval(vars, rng) > natural_expr_rhs.eval(vars, rng)
             }
@@ -144,6 +153,9 @@ where
             BooleanExpr::IntGreaterEq(integer_expr_lhs, integer_expr_rhs) => {
                 integer_expr_lhs.eval(vars, rng) >= integer_expr_rhs.eval(vars, rng)
             }
+            BooleanExpr::FloatGreaterEq(float_expr_lhs, float_expr_rhs) => {
+                float_expr_lhs.eval(vars, rng) >= float_expr_rhs.eval(vars, rng)
+            }
             BooleanExpr::NatLess(natural_expr_lhs, natural_expr_rhs) => {
                 natural_expr_lhs.eval(vars, rng) < natural_expr_rhs.eval(vars, rng)
             }
@@ -158,6 +170,9 @@ where
             }
             BooleanExpr::IntLessEq(integer_expr_lhs, integer_expr_rhs) => {
                 integer_expr_lhs.eval(vars, rng) <= integer_expr_rhs.eval(vars, rng)
+            }
+            BooleanExpr::FloatLessEq(float_expr_lhs, float_expr_rhs) => {
+                float_expr_lhs.eval(vars, rng) <= float_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
@@ -198,6 +213,9 @@ where
             BooleanExpr::IntEqual(integer_expr_lhs, integer_expr_rhs) => {
                 BooleanExpr::IntEqual(integer_expr_lhs.map(map), integer_expr_rhs.map(map))
             }
+            BooleanExpr::FloatEqual(float_expr_lhs, float_expr_rhs) => {
+                BooleanExpr::FloatEqual(float_expr_lhs.map(map), float_expr_rhs.map(map))
+            }
             BooleanExpr::NatGreater(natural_expr_lhs, natural_expr_rhs) => {
                 BooleanExpr::NatEqual(natural_expr_lhs.map(map), natural_expr_rhs.map(map))
             }
@@ -213,6 +231,9 @@ where
             BooleanExpr::IntGreaterEq(integer_expr_lhs, integer_expr_rhs) => {
                 BooleanExpr::IntGreaterEq(integer_expr_lhs.map(map), integer_expr_rhs.map(map))
             }
+            BooleanExpr::FloatGreaterEq(float_expr_lhs, float_expr_rhs) => {
+                BooleanExpr::FloatGreaterEq(float_expr_lhs.map(map), float_expr_rhs.map(map))
+            }
             BooleanExpr::NatLess(natural_expr_lhs, natural_expr_rhs) => {
                 BooleanExpr::NatLess(natural_expr_lhs.map(map), natural_expr_rhs.map(map))
             }
@@ -227,6 +248,9 @@ where
             }
             BooleanExpr::IntLessEq(integer_expr_lhs, integer_expr_rhs) => {
                 BooleanExpr::IntLessEq(integer_expr_lhs.map(map), integer_expr_rhs.map(map))
+            }
+            BooleanExpr::FloatLessEq(float_expr_lhs, float_expr_rhs) => {
+                BooleanExpr::FloatLessEq(float_expr_lhs.map(map), float_expr_rhs.map(map))
             }
             BooleanExpr::Ite(args) => {
                 let (r#if, then, r#else) = *args;
@@ -257,6 +281,9 @@ where
             BooleanExpr::NatLessEq(natural_expr, natural_expr1) => todo!(),
             BooleanExpr::IntLessEq(integer_expr, integer_expr1) => todo!(),
             BooleanExpr::Ite(_) => todo!(),
+            BooleanExpr::FloatEqual(float_expr, float_expr1) => todo!(),
+            BooleanExpr::FloatGreaterEq(float_expr, float_expr1) => todo!(),
+            BooleanExpr::FloatLessEq(float_expr, float_expr1) => todo!(),
         }
     }
 }
