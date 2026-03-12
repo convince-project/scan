@@ -313,7 +313,7 @@ pub enum EventType {
 #[derive(Debug, Clone)]
 pub struct ChannelSystem {
     channels: Vec<(Vec<Type>, Option<usize>)>,
-    communications: Vec<(PgAction, Channel, Message)>,
+    communications: Vec<Option<(Channel, Message)>>,
     communications_pg_idxs: Vec<usize>,
     program_graphs: Vec<ProgramGraph>,
 }
@@ -342,21 +342,13 @@ impl ChannelSystem {
     }
 
     #[inline(always)]
-    fn communication(&self, action: Action) -> Option<(Channel, Message)> {
-        let Action(PgId(pg_idx), pg_action) = action;
-        let pg_idx = pg_idx as usize;
-        self.program_graphs[pg_idx]
-            .is_communication(pg_action)
-            .expect("this function should only be called with validated args")
-            .then(|| {
-                let higher = self.communications_pg_idxs[pg_idx + 1];
-                let lower = self.communications_pg_idxs[pg_idx];
-                let idx = (self.communications[lower..higher])
-                    .binary_search_by_key(&pg_action, |&(a, _, _)| a)
-                    .expect("communication");
-                let (_, c, m) = self.communications[lower + idx];
-                (c, m)
-            })
+    fn communication(&self, pg_id: PgId, pg_action: PgAction) -> Option<(Channel, Message)> {
+        if pg_action == EPSILON {
+            None
+        } else {
+            let start = self.communications_pg_idxs[pg_id.0 as usize];
+            self.communications[start + ActionIdx::from(pg_action) as usize]
+        }
     }
 
     /// Returns the list of defined channels, given as the pair of their type and capacity
@@ -422,19 +414,16 @@ impl<'def> ChannelSystemRun<'def> {
 
     pub(crate) fn montecarlo_execution(&mut self) -> Option<Event> {
         let pgs = self.program_graphs.len();
-        let pg_vec = Vec::from_iter((0..pgs as u16).map(PgId));
+        let mut pg_vec = Vec::from_iter((0..pgs as u16).map(PgId));
         let mut rand = SmallRng::from_rng(&mut self.rng);
-        let mut pg_list;
-        // Resets PG queue
-        pg_list = pg_vec.clone();
-        while !pg_list.is_empty() {
-            let pg_id = pg_list.swap_remove(self.rng.random_range(0..pg_list.len()));
+        while !pg_vec.is_empty() {
+            let pg_id = pg_vec.swap_remove(self.rng.random_range(0..pg_vec.len()));
             // Execute randomly chosen transitions on the picked PG until an event is generated,
             // or no more transition is possible
             while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
                 .possible_transitions()
                 .filter(|&(action, _)| {
-                    self.def.communication(Action(pg_id, action)).is_none_or(
+                    self.def.communication(pg_id, action).is_none_or(
                         |(Channel(channel_idx), message)| {
                             let (_, capacity) = self.def.channels[channel_idx as usize];
                             let queue = &self.message_queue[channel_idx as usize];
@@ -477,7 +466,7 @@ impl<'def> ChannelSystemRun<'def> {
             Err(CsError::MissingPg(pg_id))
         } else if action.0 != pg_id {
             Err(CsError::ActionNotInPg(action, pg_id))
-        } else if let Some((channel, message)) = self.def.communication(action) {
+        } else if let Some((channel, message)) = self.def.communication(pg_id, action.1) {
             let (_, capacity) = self.def.channels[channel.0 as usize];
             let queue = &self.message_queue[channel.0 as usize];
             // Channel capacity must never be exceeded!
@@ -527,7 +516,7 @@ impl<'def> ChannelSystemRun<'def> {
             return Err(CsError::LocationNotInPg(*post, pg_id));
         }
         // If the action is a communication, send/receive the message
-        if let Some((channel, message)) = self.def.communication(action) {
+        if let Some((channel, message)) = self.def.communication(pg_id, action.1) {
             let (_, capacity) = self.def.channels[channel.0 as usize];
             let event_type = match message {
                 Message::Send
