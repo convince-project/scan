@@ -106,9 +106,15 @@ pub type ActionIdx = u32;
 
 pub struct Action(ActionIdx);
 
+impl From<Action> for ActionIdx {
+    fn from(val: Action) -> Self {
+        val.0
+    }
+}
+
 /// Epsilon action to enable autonomous transitions.
 /// It cannot have effects.
-const EPSILON: Action = Action(ActionIdx::MAX);
+pub(crate) const EPSILON: Action = Action(ActionIdx::MAX);
 
 /// An indexing object for typed variables in a PG.
 ///
@@ -259,18 +265,6 @@ impl ProgramGraph {
         }
     }
 
-    #[inline(always)]
-    pub(crate) fn is_communication(&self, action: Action) -> Result<bool, PgError> {
-        if action == EPSILON {
-            Ok(false)
-        } else {
-            self.effects
-                .get(action.0 as usize)
-                .map(|e| matches!(e, Effect::Send(_) | Effect::Receive(_)))
-                .ok_or(PgError::MissingAction(action))
-        }
-    }
-
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
     #[inline(always)]
@@ -354,7 +348,7 @@ impl<'def> ProgramGraphRun<'def> {
             .chain(
                 self.current_states
                     .is_empty()
-                    .then_some((0..self.def.effects.len() as ActionIdx).map(Action))
+                    .then(|| (0..self.def.effects.len() as ActionIdx).map(Action))
                     .into_iter()
                     .flatten(),
             )

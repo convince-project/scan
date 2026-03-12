@@ -6,7 +6,7 @@ use crate::Expression;
 use crate::grammar::{BooleanExpr, Type};
 use crate::program_graph::ProgramGraph;
 use log::info;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// An expression using CS's [`Var`] as variables.
 pub type CsExpression = Expression<Var>;
@@ -107,7 +107,7 @@ impl TryFrom<(PgId, CsExpression)> for PgExpression {
 pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
     channels: Vec<(Vec<Type>, Option<usize>)>,
-    communications: HashMap<Action, (Channel, Message)>,
+    communications: BTreeMap<Action, Option<(Channel, Message)>>,
 }
 
 impl Default for ChannelSystemBuilder {
@@ -123,7 +123,7 @@ impl ChannelSystemBuilder {
         Self {
             program_graphs: Vec::new(),
             channels: Vec::new(),
-            communications: HashMap::new(),
+            communications: BTreeMap::new(),
         }
     }
 
@@ -174,6 +174,9 @@ impl ChannelSystemBuilder {
             .get_mut(pg_id.0 as usize)
             .ok_or(CsError::MissingPg(pg_id))
             .map(|pg| Action(pg_id, pg.new_action()))
+            .inspect(|&action| {
+                self.communications.insert(action, None);
+            })
     }
 
     /// Adds resetting the clock as an effect of the given action.
@@ -245,7 +248,15 @@ impl ChannelSystemBuilder {
             Err(CsError::ActionNotInPg(action, pg_id))
         } else if var.0 != pg_id {
             Err(CsError::VarNotInPg(var, pg_id))
-        } else if self.communications.contains_key(&action) {
+        } else if self
+            .communications
+            .get(&action)
+            .ok_or(CsError::ProgramGraph(
+                action.0,
+                PgError::MissingAction(action.1),
+            ))?
+            .is_some()
+        {
             // Communications cannot have effects
             Err(CsError::ActionIsCommunication(action))
         } else {
@@ -563,7 +574,8 @@ impl ChannelSystemBuilder {
                 .new_send(msg)
                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
-            self.communications.insert(action, (channel, Message::Send));
+            self.communications
+                .insert(action, Some((channel, Message::Send)));
             Ok(action)
         }
     }
@@ -604,7 +616,7 @@ impl ChannelSystemBuilder {
                     .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                 let action = Action(pg_id, action);
                 self.communications
-                    .insert(action, (channel, Message::Receive));
+                    .insert(action, Some((channel, Message::Receive)));
                 Ok(action)
             }
         }
@@ -635,7 +647,7 @@ impl ChannelSystemBuilder {
                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
             self.communications
-                .insert(action, (channel, Message::ProbeEmptyQueue));
+                .insert(action, Some((channel, Message::ProbeEmptyQueue)));
             Ok(action)
         }
     }
@@ -668,7 +680,7 @@ impl ChannelSystemBuilder {
                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
             self.communications
-                .insert(action, (channel, Message::ProbeFullQueue));
+                .insert(action, Some((channel, Message::ProbeFullQueue)));
             Ok(action)
         }
     }
@@ -688,13 +700,8 @@ impl ChannelSystemBuilder {
 
         program_graphs.shrink_to_fit();
         self.channels.shrink_to_fit();
-        let mut communications_map = Vec::from_iter(self.communications);
-        communications_map.sort_unstable_by_key(|(a, _)| *a);
-        let communications = Vec::from_iter(
-            communications_map
-                .iter()
-                .map(|&(action, (c, m))| (action.1, c, m)),
-        );
+        let communications_map = Vec::from_iter(self.communications);
+        let communications = Vec::from_iter(communications_map.iter().map(|&(_, comm)| comm));
         let mut index = 0;
         let mut communications_pg_idxs = Vec::<usize>::with_capacity(program_graphs.len() + 1);
         communications_pg_idxs.push(index);
