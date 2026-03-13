@@ -144,7 +144,7 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
         } else if let Some(trg) = self.model.ext_queues.get(&event.channel) {
             target_name = self.model.fsm_names.get(&(*trg).into()).unwrap().to_owned();
             if let EventType::Send(ref vals) = event.event_type {
-                if let (Val::Integer(sent_event), Val::Integer(origin)) = (vals[0], vals[1]) {
+                if let (Val::Natural(sent_event), Val::Natural(origin)) = (vals[0], vals[1]) {
                     origin_name = self
                         .model
                         .fsm_names
@@ -171,14 +171,14 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
                 .to_owned();
             target_name = origin_name.clone();
             if let EventType::Send(ref vals) = event.event_type {
-                if let Val::Integer(sent_event) = vals[0] {
+                if let Val::Natural(sent_event) = vals[0] {
                     (event_name, param_types) = self.model.events[sent_event as usize].clone();
                     if param_types.is_some() {
                         // No need to trace this as parameters event already traced
                         return;
                     }
                 } else {
-                    panic!("events should be indexed by integer");
+                    panic!("events should be indexed by natural");
                 }
             } else {
                 return;
@@ -287,10 +287,10 @@ fn format_val_from_def(
 ) -> String {
     match omg_type {
         OmgTypeDef::Enumeration(items) => {
-            if let Val::Integer(int) = vals[0] {
+            if let Val::Natural(int) = vals[0] {
                 items[int as usize].clone()
             } else {
-                panic!("enumeration is not represented as Integer")
+                panic!("enumeration is not represented as Natural")
             }
         }
         OmgTypeDef::Structure(btree_map) => {
