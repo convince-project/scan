@@ -416,6 +416,58 @@ impl<'def> ProgramGraphRun<'def> {
             })
     }
 
+    pub fn nosync_possible_transitions(
+        &self,
+    ) -> impl Iterator<Item = (Action, impl Iterator<Item = Location>)> {
+        assert_eq!(self.current_states.len(), 1);
+        let current_loc = self.current_states[0];
+        let mut last_post_state: Option<Location> = None;
+        self.def.locations[current_loc.0 as usize]
+            .0
+            .iter()
+            .map(move |(action, transitions)| {
+                (
+                    *action,
+                    transitions
+                        .iter()
+                        .filter_map(move |(post_state, guard, constraints)| {
+                            // prevent post_states to be duplicated wastefully
+                            if last_post_state.is_some_and(|s| s == *post_state) {
+                                return None;
+                            }
+                            let (_, ref invariants) = self.def.locations[post_state.0 as usize];
+                            if if *action == EPSILON {
+                                self.active_autonomous_transition(
+                                    guard.as_ref(),
+                                    constraints,
+                                    invariants,
+                                )
+                            } else {
+                                match self.def.effects[action.0 as usize] {
+                                    Effect::Effects(_, ref resets) => self.active_transition(
+                                        guard.as_ref(),
+                                        constraints,
+                                        invariants,
+                                        resets,
+                                    ),
+                                    Effect::Send(_) | Effect::Receive(_) => self
+                                        .active_autonomous_transition(
+                                            guard.as_ref(),
+                                            constraints,
+                                            invariants,
+                                        ),
+                                }
+                            } {
+                                last_post_state = Some(*post_state);
+                                last_post_state
+                            } else {
+                                None
+                            }
+                        }),
+                )
+            })
+    }
+
     fn active_transition(
         &self,
         guard: Option<&PgGuard>,
@@ -719,7 +771,7 @@ mod tests {
         let initialize = builder.new_action();
         builder.add_effect(initialize, battery, PgExpression::from(3i64))?;
         let move_left = builder.new_action();
-        let discharge = PgExpression::Integer(IntegerExpr::Var(battery) + (-IntegerExpr::from(-1)));
+        let discharge = PgExpression::Integer(IntegerExpr::Var(battery) + IntegerExpr::from(-1));
         builder.add_effect(move_left, battery, discharge.clone())?;
         let move_right = builder.new_action();
         builder.add_effect(move_right, battery, discharge)?;

@@ -261,222 +261,252 @@ where
         }
     }
 
-    pub fn equal_to(self, rhs: Self) -> Result<Self, TypeError> {
+    pub fn equal_to(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(boolean_expr) => match rhs {
-                Expression::Boolean(boolean_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::Implies(Box::new((
+                Expression::Boolean(boolean_expr_rhs) => {
+                    Ok(BooleanExpr::Implies(Box::new((
                         boolean_expr.clone(),
                         boolean_expr_rhs.clone(),
-                    ))) & BooleanExpr::Implies(Box::new((boolean_expr_rhs, boolean_expr))),
-                )),
+                    ))) & BooleanExpr::Implies(Box::new((boolean_expr_rhs, boolean_expr))))
+                }
                 Expression::Natural(_) | Expression::Integer(_) | Expression::Float(_) => {
                     Err(TypeError::TypeMismatch)
                 }
             },
             Expression::Natural(natural_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::NatEqual(natural_expr, natural_expr_rhs),
+                Expression::Natural(natural_expr_rhs) => {
+                    Ok(BooleanExpr::NatEqual(natural_expr, natural_expr_rhs))
+                }
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::IntEqual(
+                    IntegerExpr::from(natural_expr),
+                    integer_expr_rhs,
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntEqual(IntegerExpr::from(natural_expr), integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatEqual(FloatExpr::Nat(natural_expr), float_expr_rhs),
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatEqual(
+                    FloatExpr::Nat(natural_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Integer(integer_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntEqual(integer_expr, IntegerExpr::from(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::IntEqual(
+                    integer_expr,
+                    IntegerExpr::from(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntEqual(integer_expr, integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatEqual(FloatExpr::Int(integer_expr), float_expr_rhs),
+                Expression::Integer(integer_expr_rhs) => {
+                    Ok(BooleanExpr::IntEqual(integer_expr, integer_expr_rhs))
+                }
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatEqual(
+                    FloatExpr::Int(integer_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Float(float_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatEqual(float_expr, FloatExpr::Nat(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::FloatEqual(
+                    float_expr,
+                    FloatExpr::Nat(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatEqual(float_expr, FloatExpr::Int(integer_expr_rhs)),
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::FloatEqual(
+                    float_expr,
+                    FloatExpr::Int(integer_expr_rhs),
                 )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatEqual(float_expr, float_expr_rhs),
-                )),
+                Expression::Float(float_expr_rhs) => {
+                    Ok(BooleanExpr::FloatEqual(float_expr, float_expr_rhs))
+                }
             },
         }
     }
 
-    pub fn greater_than_or_equal_to(self, rhs: Self) -> Result<Self, TypeError> {
+    pub fn greater_than_or_equal_to(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
             Expression::Natural(natural_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::NatGreaterEq(natural_expr, natural_expr_rhs),
+                Expression::Natural(natural_expr_rhs) => {
+                    Ok(BooleanExpr::NatGreaterEq(natural_expr, natural_expr_rhs))
+                }
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::IntGreaterEq(
+                    IntegerExpr::from(natural_expr),
+                    integer_expr_rhs,
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntGreaterEq(IntegerExpr::from(natural_expr), integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreaterEq(FloatExpr::Nat(natural_expr), float_expr_rhs),
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatGreaterEq(
+                    FloatExpr::Nat(natural_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Integer(integer_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntGreaterEq(integer_expr, IntegerExpr::from(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::IntGreaterEq(
+                    integer_expr,
+                    IntegerExpr::from(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntGreaterEq(integer_expr, integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreaterEq(FloatExpr::Int(integer_expr), float_expr_rhs),
+                Expression::Integer(integer_expr_rhs) => {
+                    Ok(BooleanExpr::IntGreaterEq(integer_expr, integer_expr_rhs))
+                }
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatGreaterEq(
+                    FloatExpr::Int(integer_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Float(float_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreaterEq(float_expr, FloatExpr::Nat(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::FloatGreaterEq(
+                    float_expr,
+                    FloatExpr::Nat(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreaterEq(float_expr, FloatExpr::Int(integer_expr_rhs)),
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::FloatGreaterEq(
+                    float_expr,
+                    FloatExpr::Int(integer_expr_rhs),
                 )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreaterEq(float_expr, float_expr_rhs),
-                )),
+                Expression::Float(float_expr_rhs) => {
+                    Ok(BooleanExpr::FloatGreaterEq(float_expr, float_expr_rhs))
+                }
             },
         }
     }
 
-    pub fn greater_than(self, rhs: Self) -> Result<Self, TypeError> {
+    pub fn greater_than(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
             Expression::Natural(natural_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::NatGreater(natural_expr, natural_expr_rhs),
+                Expression::Natural(natural_expr_rhs) => {
+                    Ok(BooleanExpr::NatGreater(natural_expr, natural_expr_rhs))
+                }
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::IntGreater(
+                    IntegerExpr::from(natural_expr),
+                    integer_expr_rhs,
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntGreater(IntegerExpr::from(natural_expr), integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreater(FloatExpr::from(natural_expr), float_expr_rhs),
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatGreater(
+                    FloatExpr::from(natural_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Integer(integer_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntGreater(integer_expr, IntegerExpr::from(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::IntGreater(
+                    integer_expr,
+                    IntegerExpr::from(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntGreater(integer_expr, integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreater(FloatExpr::from(integer_expr), float_expr_rhs),
+                Expression::Integer(integer_expr_rhs) => {
+                    Ok(BooleanExpr::IntGreater(integer_expr, integer_expr_rhs))
+                }
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatGreater(
+                    FloatExpr::from(integer_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Float(float_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreater(float_expr, FloatExpr::from(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::FloatGreater(
+                    float_expr,
+                    FloatExpr::from(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreater(float_expr, FloatExpr::from(integer_expr_rhs)),
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::FloatGreater(
+                    float_expr,
+                    FloatExpr::from(integer_expr_rhs),
                 )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatGreater(float_expr, float_expr_rhs),
-                )),
+                Expression::Float(float_expr_rhs) => {
+                    Ok(BooleanExpr::FloatGreater(float_expr, float_expr_rhs))
+                }
             },
         }
     }
 
-    pub fn less_than(self, rhs: Self) -> Result<Self, TypeError> {
+    pub fn less_than(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
             Expression::Natural(natural_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::NatLess(natural_expr, natural_expr_rhs),
+                Expression::Natural(natural_expr_rhs) => {
+                    Ok(BooleanExpr::NatLess(natural_expr, natural_expr_rhs))
+                }
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::IntLess(
+                    IntegerExpr::from(natural_expr),
+                    integer_expr_rhs,
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntLess(IntegerExpr::from(natural_expr), integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLess(FloatExpr::from(natural_expr), float_expr_rhs),
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatLess(
+                    FloatExpr::from(natural_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Integer(integer_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntLess(integer_expr, IntegerExpr::from(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::IntLess(
+                    integer_expr,
+                    IntegerExpr::from(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntLess(integer_expr, integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLess(FloatExpr::from(integer_expr), float_expr_rhs),
+                Expression::Integer(integer_expr_rhs) => {
+                    Ok(BooleanExpr::IntLess(integer_expr, integer_expr_rhs))
+                }
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatLess(
+                    FloatExpr::from(integer_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Float(float_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLess(float_expr, FloatExpr::from(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::FloatLess(
+                    float_expr,
+                    FloatExpr::from(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLess(float_expr, FloatExpr::from(integer_expr_rhs)),
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::FloatLess(
+                    float_expr,
+                    FloatExpr::from(integer_expr_rhs),
                 )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLess(float_expr, float_expr_rhs),
-                )),
+                Expression::Float(float_expr_rhs) => {
+                    Ok(BooleanExpr::FloatLess(float_expr, float_expr_rhs))
+                }
             },
         }
     }
 
-    pub fn less_than_or_equal_to(self, rhs: Self) -> Result<Self, TypeError> {
+    pub fn less_than_or_equal_to(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
             Expression::Natural(natural_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::NatLessEq(natural_expr, natural_expr_rhs),
+                Expression::Natural(natural_expr_rhs) => {
+                    Ok(BooleanExpr::NatLessEq(natural_expr, natural_expr_rhs))
+                }
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::IntLessEq(
+                    IntegerExpr::from(natural_expr),
+                    integer_expr_rhs,
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntLessEq(IntegerExpr::from(natural_expr), integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLessEq(FloatExpr::Nat(natural_expr), float_expr_rhs),
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatLessEq(
+                    FloatExpr::Nat(natural_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Integer(integer_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntLessEq(integer_expr, IntegerExpr::from(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::IntLessEq(
+                    integer_expr,
+                    IntegerExpr::from(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::IntLessEq(integer_expr, integer_expr_rhs),
-                )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLessEq(FloatExpr::Int(integer_expr), float_expr_rhs),
+                Expression::Integer(integer_expr_rhs) => {
+                    Ok(BooleanExpr::IntLessEq(integer_expr, integer_expr_rhs))
+                }
+                Expression::Float(float_expr_rhs) => Ok(BooleanExpr::FloatLessEq(
+                    FloatExpr::Int(integer_expr),
+                    float_expr_rhs,
                 )),
             },
             Expression::Float(float_expr) => match rhs {
                 Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                Expression::Natural(natural_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLessEq(float_expr, FloatExpr::Nat(natural_expr_rhs)),
+                Expression::Natural(natural_expr_rhs) => Ok(BooleanExpr::FloatLessEq(
+                    float_expr,
+                    FloatExpr::Nat(natural_expr_rhs),
                 )),
-                Expression::Integer(integer_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLessEq(float_expr, FloatExpr::Int(integer_expr_rhs)),
+                Expression::Integer(integer_expr_rhs) => Ok(BooleanExpr::FloatLessEq(
+                    float_expr,
+                    FloatExpr::Int(integer_expr_rhs),
                 )),
-                Expression::Float(float_expr_rhs) => Ok(Expression::Boolean(
-                    BooleanExpr::FloatLessEq(float_expr, float_expr_rhs),
-                )),
+                Expression::Float(float_expr_rhs) => {
+                    Ok(BooleanExpr::FloatLessEq(float_expr, float_expr_rhs))
+                }
             },
         }
     }

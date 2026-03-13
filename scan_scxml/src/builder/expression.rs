@@ -492,16 +492,14 @@ pub(super) fn expression<V: Clone>(
                     let rhs = rhs[0].clone();
                     let new_expr = match rel_bin {
                         RelationalOp::Equal => lhs.equal_to(rhs)?,
-                        RelationalOp::NotEqual => {
-                            (!(lhs.equal_to(rhs)?)).expect("boolean expression")
-                        }
+                        RelationalOp::NotEqual => !(lhs.equal_to(rhs)?),
                         RelationalOp::GreaterThan => lhs.greater_than(rhs)?,
                         RelationalOp::GreaterThanOrEqual => lhs.greater_than_or_equal_to(rhs)?,
                         RelationalOp::LessThan => lhs.less_than(rhs)?,
                         RelationalOp::LessThanOrEqual => lhs.less_than_or_equal_to(rhs)?,
                         _ => return Err(anyhow!("unimplemented operator")),
                     };
-                    vec![new_expr]
+                    vec![Expression::Boolean(new_expr)]
                 }
                 BinaryOp::Logical(op) => {
                     let lhs = expression(

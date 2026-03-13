@@ -415,50 +415,76 @@ impl<'def> ChannelSystemRun<'def> {
     pub(crate) fn montecarlo_execution(&mut self) -> Option<Event> {
         let pgs = self.program_graphs.len();
         let mut pg_vec = Vec::from_iter((0..pgs as u16).map(PgId));
-        let mut rand = SmallRng::from_rng(&mut self.rng);
+        let mut rand1 = SmallRng::from_rng(&mut self.rng);
+        let mut rand2 = SmallRng::from_rng(&mut self.rng);
         while !pg_vec.is_empty() {
             let pg_id = pg_vec.swap_remove(self.rng.random_range(0..pg_vec.len()));
             // Execute randomly chosen transitions on the picked PG until an event is generated,
             // or no more transition is possible
-            while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
-                .possible_transitions()
-                .filter(|&(action, _)| {
-                    self.def.communication(pg_id, action).is_none_or(
-                        |(Channel(channel_idx), message)| {
-                            let (_, capacity) = self.def.channels[channel_idx as usize];
-                            let queue = &self.message_queue[channel_idx as usize];
-                            // Channel capacity must never be exceeded!
-                            debug_assert!(capacity.is_none_or(|cap| queue.len() <= cap));
-                            // NOTE FIXME currently handshake is unsupported
-                            // !matches!(capacity, Some(0))
-                            match message {
-                                Message::Send => capacity.is_none_or(|cap| queue.len() < cap),
-                                Message::Receive => !queue.is_empty(),
-                                Message::ProbeFullQueue => {
-                                    capacity.is_some_and(|cap| queue.len() == cap)
-                                }
-                                Message::ProbeEmptyQueue => queue.is_empty(),
-                            }
-                        },
-                    )
-                })
-                .filter_map(|(action, post_states)| {
-                    post_states
-                        .map(|locs| locs.choose(&mut self.rng).map(|loc| Location(pg_id, loc)))
-                        .collect::<Option<SmallVec<[Location; 4]>>>()
-                        .map(|locs| (action, locs))
-                })
-                .choose(&mut rand)
-            {
-                let event = self
-                    .transition(pg_id, Action(pg_id, action), post_states.as_slice())
-                    .expect("successful transition");
-                if event.is_some() {
-                    return event;
+            if self.program_graphs[pg_id.0 as usize].current_states().len() == 1 {
+                while let Some((action, post_state)) = self.program_graphs[pg_id.0 as usize]
+                    .nosync_possible_transitions()
+                    .filter(|&(action, _)| {
+                        self.def
+                            .communication(pg_id, action)
+                            .is_none_or(|(channel, message)| self.check_message(channel, message))
+                    })
+                    .filter_map(|(action, post_states)| {
+                        post_states
+                            .choose(&mut rand1)
+                            .map(|loc| (action, Location(pg_id, loc)))
+                    })
+                    .choose(&mut rand2)
+                {
+                    let event = self
+                        .transition(pg_id, Action(pg_id, action), &[post_state])
+                        .expect("successful transition");
+                    if event.is_some() {
+                        return event;
+                    }
+                }
+            } else {
+                while let Some((action, post_states)) = self.program_graphs[pg_id.0 as usize]
+                    .possible_transitions()
+                    .filter(|&(action, _)| {
+                        self.def
+                            .communication(pg_id, action)
+                            .is_none_or(|(channel, message)| self.check_message(channel, message))
+                    })
+                    .filter_map(|(action, post_states)| {
+                        post_states
+                            .map(|locs| locs.choose(&mut rand1).map(|loc| Location(pg_id, loc)))
+                            .collect::<Option<SmallVec<[Location; 4]>>>()
+                            .map(|locs| (action, locs))
+                    })
+                    .choose(&mut rand2)
+                {
+                    let event = self
+                        .transition(pg_id, Action(pg_id, action), post_states.as_slice())
+                        .expect("successful transition");
+                    if event.is_some() {
+                        return event;
+                    }
                 }
             }
         }
         None
+    }
+
+    fn check_message(&self, channel: Channel, message: Message) -> bool {
+        let channel_idx = channel.0 as usize;
+        let (_, capacity) = self.def.channels[channel_idx];
+        let queue = &self.message_queue[channel_idx];
+        // Channel capacity must never be exceeded!
+        debug_assert!(capacity.is_none_or(|cap| queue.len() <= cap));
+        // NOTE FIXME currently handshake is unsupported
+        // !matches!(capacity, Some(0))
+        match message {
+            Message::Send => capacity.is_none_or(|cap| queue.len() < cap),
+            Message::Receive => !queue.is_empty(),
+            Message::ProbeFullQueue => capacity.is_some_and(|cap| queue.len() == cap),
+            Message::ProbeEmptyQueue => queue.is_empty(),
+        }
     }
 
     fn check_communication(&self, pg_id: PgId, action: Action) -> Result<(), CsError> {
