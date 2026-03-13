@@ -579,16 +579,27 @@ pub(super) fn expression<V: Clone>(
                                                 bail!("expression does not support floor operator");
                                             }
                                             let arg = arg[0].clone();
-                                            let arg = if let Expression::Float(arg) = arg {
-                                                arg
+                                            if let Expression::Float(arg) = arg {
+                                                vec![Expression::Integer(IntegerExpr::Floor(
+                                                    Box::new(arg),
+                                                ))]
+                                            } else if let Expression::Integer(arg) = arg {
+                                                // Ignore floor operation if arg is integer
+                                                warn!(
+                                                    "floor operator applied to integer number argument"
+                                                );
+                                                vec![Expression::Integer(arg)]
+                                            } else if let Expression::Natural(arg) = arg {
+                                                // Ignore floor operation if arg is natural
+                                                warn!(
+                                                    "floor operator applied to natural number argument"
+                                                );
+                                                vec![Expression::Natural(arg)]
                                             } else {
                                                 bail!(
-                                                    "floor operation applied on non-float argument"
+                                                    "floor operation applied on non-numeric argument"
                                                 );
-                                            };
-                                            vec![Expression::Integer(IntegerExpr::Floor(Box::new(
-                                                arg,
-                                            )))]
+                                            }
                                         } else {
                                             bail!(
                                                 "Math.floor() called with wrong number of arguments"
