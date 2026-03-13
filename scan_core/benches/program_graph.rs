@@ -43,20 +43,23 @@ fn condition_pg() -> ProgramGraphBuilder {
         action,
         post,
         Some(BooleanExpr::Implies(Box::new((
-            Expression::LessEq(Box::new((
-                Expression::Sum(vec![
-                    Expression::Const(Val::Integer(1)),
-                    Expression::Const(Val::Integer(2)),
-                    Expression::Const(Val::Integer(3)),
-                    Expression::Const(Val::Integer(4)),
-                    Expression::Const(Val::Integer(5)),
-                ]),
-                Expression::Const(Val::Integer(100)),
-            ))),
-            Expression::Greater(Box::new((
-                Expression::Const(Val::Integer(5)),
-                Expression::Const(Val::Integer(6)),
-            ))),
+            Expression::less_than_or_equal_to(
+                ((((Expression::from(Val::Integer(1)) + Expression::from(Val::Integer(2)))
+                    .unwrap()
+                    + Expression::from(Val::Integer(3)))
+                .unwrap()
+                    + Expression::from(Val::Integer(4)))
+                .unwrap()
+                    + Expression::from(Val::Integer(5)))
+                .unwrap(),
+                Expression::from(Val::Integer(100)),
+            )
+            .unwrap(),
+            Expression::greater_than(
+                Expression::from(Val::Integer(5)),
+                Expression::from(Val::Integer(6)),
+            )
+            .unwrap(),
         )))),
     )
     .unwrap();
@@ -81,21 +84,19 @@ fn counter_pg() -> ProgramGraphBuilder {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();
-    let var = pg.new_var(Expression::Const(Val::Integer(0))).unwrap();
+    let var = pg.new_var(Expression::from(Val::Integer(0))).unwrap();
     pg.add_effect(
         action,
         var,
-        Expression::Sum(vec![
-            Expression::Var(var, Type::Integer),
-            Expression::Const(Val::Integer(1)),
-        ]),
+        (Expression::from_var(var, Type::Integer) + Expression::from(Val::Integer(1))).unwrap(),
     )
     .unwrap();
     for counter in 0..10 {
-        let guard = Expression::Equal(Box::new((
-            Expression::Var(var, Type::Integer),
-            Expression::Const(Val::Integer(counter)),
-        )));
+        let guard = Expression::equal_to(
+            Expression::from_var(var, Type::Integer),
+            Expression::from(Val::Integer(counter)),
+        )
+        .unwrap();
         pg.add_transition(initial, action, initial, Some(guard))
             .unwrap();
     }

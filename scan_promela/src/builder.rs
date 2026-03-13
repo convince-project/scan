@@ -432,22 +432,28 @@ impl Builder {
 
             Equal(l, r) => Self::translate_expr(l, ctx, gctx)?
                 .equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map(Expression::Boolean)
                 .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
             NotEqual(l, r) => (!Self::translate_expr(l, ctx, gctx)?
                 .equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map(Expression::Boolean)
                 .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?)
             .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
             GreaterThan(l, r) => Self::translate_expr(l, ctx, gctx)?
                 .greater_than(Self::translate_expr(r, ctx, gctx)?)
+                .map(Expression::Boolean)
                 .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
             GreaterEqual(l, r) => Self::translate_expr(l, ctx, gctx)?
                 .greater_than_or_equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map(Expression::Boolean)
                 .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
             LessThan(l, r) => Self::translate_expr(l, ctx, gctx)?
                 .less_than(Self::translate_expr(r, ctx, gctx)?)
+                .map(Expression::Boolean)
                 .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
             LessEqual(l, r) => Self::translate_expr(l, ctx, gctx)?
                 .less_than_or_equal_to(Self::translate_expr(r, ctx, gctx)?)
+                .map(Expression::Boolean)
                 .map_err(|err| BuilderError::TypeError(format!("{err:?}")))?,
 
             Logical(l, LogicalOp::And, r) | Andor(l, r) => (Self::translate_expr(l, ctx, gctx)?

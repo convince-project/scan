@@ -776,9 +776,10 @@ impl JaniBuilder {
                 let left = self.build_expression(left, local_vars, rng)?;
                 let right = self.build_expression(right, local_vars, rng)?;
                 match op {
-                    parser::EqCompOp::Eq => Ok(PgExpression::equal_to(left, right)?),
-                    parser::EqCompOp::Neq => !(PgExpression::equal_to(left, right)?),
+                    parser::EqCompOp::Eq => PgExpression::equal_to(left, right),
+                    parser::EqCompOp::Neq => PgExpression::equal_to(left, right).map(|expr| !expr),
                 }
+                .map(PgExpression::Boolean)
                 .map_err(anyhow::Error::from)
             }
             Expression::NumComp { op, left, right } => {
@@ -791,6 +792,7 @@ impl JaniBuilder {
                     parser::NumCompOp::Greater => PgExpression::greater_than(left, right),
                     parser::NumCompOp::Geq => PgExpression::greater_than_or_equal_to(left, right),
                 }
+                .map(PgExpression::Boolean)
                 .map_err(anyhow::Error::from)
             }
             Expression::IntOp { op, left, right } => {
@@ -906,8 +908,11 @@ impl JaniBuilder {
                 {
                     match op {
                         parser::EqCompOp::Eq => PgExpression::equal_to(left, right),
-                        parser::EqCompOp::Neq => !(PgExpression::equal_to(left, right)?),
+                        parser::EqCompOp::Neq => {
+                            PgExpression::equal_to(left, right).map(|expr| !expr)
+                        }
                     }
+                    .map(PgExpression::Boolean)
                     .map(Either::Left)
                     .map_err(anyhow::Error::from)
                 } else {
@@ -923,6 +928,7 @@ impl JaniBuilder {
                     parser::NumCompOp::Greater => PgExpression::greater_than(left, right),
                     parser::NumCompOp::Geq => PgExpression::greater_than_or_equal_to(left, right),
                 }
+                .map(PgExpression::Boolean)
                 .map(Either::Left)
                 .map_err(anyhow::Error::from)
             }

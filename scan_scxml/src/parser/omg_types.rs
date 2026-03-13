@@ -82,7 +82,7 @@ impl OmgType {
                 .get(omg_name)
                 .ok_or_else(|| anyhow!("type {omg_name} unknown"))?
             {
-                OmgTypeDef::Enumeration(_items) => Ok(vec![Type::Integer]),
+                OmgTypeDef::Enumeration(_items) => Ok(vec![Type::Natural]),
                 OmgTypeDef::Structure(fields) => fields
                     .values()
                     .map(|field| field.to_scan_types(omg_types))
