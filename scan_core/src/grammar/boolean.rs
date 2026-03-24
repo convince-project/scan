@@ -217,7 +217,7 @@ where
                 BooleanExpr::FloatEqual(float_expr_lhs.map(map), float_expr_rhs.map(map))
             }
             BooleanExpr::NatGreater(natural_expr_lhs, natural_expr_rhs) => {
-                BooleanExpr::NatEqual(natural_expr_lhs.map(map), natural_expr_rhs.map(map))
+                BooleanExpr::NatGreater(natural_expr_lhs.map(map), natural_expr_rhs.map(map))
             }
             BooleanExpr::IntGreater(integer_expr_lhs, integer_expr_rhs) => {
                 BooleanExpr::IntGreater(integer_expr_lhs.map(map), integer_expr_rhs.map(map))
