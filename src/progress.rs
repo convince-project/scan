@@ -109,7 +109,7 @@ impl Bar {
                 let violations = scan.violations();
                 for (i, (header, property)) in bars_guarantees.iter().enumerate() {
                     let violations = violations.get(i).copied().unwrap_or(0);
-                    let pos = runs.checked_sub(violations as u64).unwrap_or_default();
+                    let pos = runs.saturating_sub(violations as u64);
                     header.set_message(format!("{pos}/{violations}"));
                     header.tick();
                     property.set_position(pos);

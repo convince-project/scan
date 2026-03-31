@@ -5,7 +5,7 @@ fn counter_pg() -> Result<(), PgError> {
     let mut pg = ProgramGraphBuilder::new();
     let initial = pg.new_initial_location();
     let action = pg.new_action();
-    let var = pg.new_var(Expression::from(Val::Integer(0)))?;
+    let var = pg.new_var(Val::Integer(0))?;
     pg.add_effect(
         action,
         var,

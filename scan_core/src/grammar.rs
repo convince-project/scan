@@ -127,9 +127,13 @@ pub enum Expression<V>
 where
     V: Clone,
 {
+    /// Expression of Boolean type.
     Boolean(BooleanExpr<V>),
+    /// Expression of Natural type (unsigned integers).
     Natural(NaturalExpr<V>),
+    /// Expression of Integer type.
     Integer(IntegerExpr<V>),
+    /// Expression of Float type.
     Float(FloatExpr<V>),
 }
 
@@ -234,7 +238,7 @@ where
         }
     }
 
-    pub fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> Expression<W> {
+    pub(crate) fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> Expression<W> {
         match self {
             Expression::Boolean(boolean_expr) => Expression::Boolean(boolean_expr.map(map)),
             Expression::Natural(natural_expr) => Expression::Natural(natural_expr.map(map)),
@@ -252,6 +256,7 @@ where
         }
     }
 
+    /// Creates an `[Expression]` out of a variable and the type of such variable.
     pub fn from_var(var: V, r#type: Type) -> Self {
         match r#type {
             Type::Boolean => Expression::Boolean(BooleanExpr::Var(var)),
@@ -261,6 +266,14 @@ where
         }
     }
 
+    /// Creates an [`Expression`] that predicates the equality of `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    ///
+    /// Equality of Boolean is represented as "if and only if".
+    ///
+    /// Equality of numerical types automatically casts the one of most-restrictive type to the less restrictive type of the other one:
+    /// for example, [`NaturalExpr`] can be cast to [`IntegerExpr`] or [`FloatExpr`];
+    /// and `[IntegerExpr]` can be cast to `[FloatExpr]`.
     pub fn equal_to(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(boolean_expr) => match rhs {
@@ -319,6 +332,11 @@ where
         }
     }
 
+    /// Creates a [`BooleanExpr`] that compares numerical expressions `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    ///
+    /// Equality of numerical types automatically casts the one of most-restrictive type to the less restrictive type of the other one;
+    /// see [`Self::equal_to`].
     pub fn greater_than_or_equal_to(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
@@ -367,6 +385,11 @@ where
         }
     }
 
+    /// Creates a [`BooleanExpr`] that compares numerical expressions `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    ///
+    /// Equality of numerical types automatically casts the one of most-restrictive type to the less restrictive type of the other one;
+    /// see [`Self::equal_to`].
     pub fn greater_than(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
@@ -415,6 +438,11 @@ where
         }
     }
 
+    /// Creates a [`BooleanExpr`] that compares numerical expressions `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    ///
+    /// Equality of numerical types automatically casts the one of most-restrictive type to the less restrictive type of the other one;
+    /// see [`Self::equal_to`].
     pub fn less_than(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
@@ -463,6 +491,11 @@ where
         }
     }
 
+    /// Creates a [`BooleanExpr`] that compares numerical expressions `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    ///
+    /// Equality of numerical types automatically casts the one of most-restrictive type to the less restrictive type of the other one;
+    /// see [`Self::equal_to`].
     pub fn less_than_or_equal_to(self, rhs: Self) -> Result<BooleanExpr<V>, TypeError> {
         match self {
             Expression::Boolean(_) => Err(TypeError::TypeMismatch),
@@ -511,6 +544,11 @@ where
         }
     }
 
+    /// Creates a [`BooleanExpr`] that compares numerical expressions `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    ///
+    /// Equality of numerical types automatically casts the one of most-restrictive type to the less restrictive type of the other one;
+    /// see [`Self::equal_to`].
     pub fn ite(self, then: Self, r#else: Self) -> Result<Self, TypeError> {
         if let Expression::Boolean(r#if) = self {
             match then {

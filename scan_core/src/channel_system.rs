@@ -42,7 +42,7 @@
 //!
 //! // Create new send communication action
 //! let send = cs_builder
-//!     .new_send(pg_1, chn, vec![CsExpression::from(1)])
+//!     .new_send(pg_1, chn, vec![CsExpression::from(1i64)])
 //!     .expect("always possible to add new actions");
 //!
 //! // Add transition sending a message to the channel
@@ -59,7 +59,7 @@
 //!
 //! // Add new variable to pg_2
 //! let var = cs_builder
-//!     .new_var(pg_2, Expression::from(0))
+//!     .new_var(pg_2, Val::from(0i64))
 //!     .expect("always possible to add new variable");
 //!
 //! // Create new receive communication action
@@ -696,8 +696,8 @@ mod tests {
     fn new_var() -> Result<(), CsError> {
         let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
-        let _var1 = cs.new_var(pg, Expression::from(false))?;
-        let _var2 = cs.new_var(pg, Expression::from(0i64))?;
+        let _var1 = cs.new_var(pg, Val::from(false))?;
+        let _var2 = cs.new_var(pg, Val::from(0i64))?;
         Ok(())
     }
 
@@ -706,8 +706,8 @@ mod tests {
         let mut cs = ChannelSystemBuilder::new();
         let pg = cs.new_program_graph();
         let action = cs.new_action(pg)?;
-        let var1 = cs.new_var(pg, Expression::from(false))?;
-        let var2 = cs.new_var(pg, Expression::from(0i64))?;
+        let var1 = cs.new_var(pg, Val::from(false))?;
+        let var2 = cs.new_var(pg, Val::from(0i64))?;
         let effect_1 = CsExpression::from(2i64);
         cs.add_effect(pg, action, var1, effect_1.clone())
             .expect_err("type mismatch");
@@ -735,8 +735,8 @@ mod tests {
         let pg = cs.new_program_graph();
         let initial = cs.new_initial_location(pg)?;
         let action = cs.new_action(pg)?;
-        let var1 = cs.new_var(pg, Expression::from(false))?;
-        let var2 = cs.new_var(pg, Expression::from(0i64))?;
+        let var1 = cs.new_var(pg, Val::from(false))?;
+        let var2 = cs.new_var(pg, Val::from(0i64))?;
         let effect_1 = CsExpression::from(0i64);
         let effect_2 = CsExpression::from(true);
         cs.add_effect(pg, action, var1, effect_2)?;
@@ -759,7 +759,7 @@ mod tests {
         let _ = cs.new_send(pg1, ch, vec![effect])?;
         cs.add_transition(pg1, initial1, send, post1, None)?;
 
-        let var1 = cs.new_var(pg1, Expression::from(0i64))?;
+        let var1 = cs.new_var(pg1, Val::from(0i64))?;
         let effect = CsExpression::from(0i64);
         cs.add_effect(pg1, send, var1, effect)
             .expect_err("send is a message so it cannot have effects");
@@ -767,7 +767,7 @@ mod tests {
         let pg2 = cs.new_program_graph();
         let initial2 = cs.new_initial_location(pg2)?;
         let post2 = cs.new_location(pg2)?;
-        let var2 = cs.new_var(pg2, Expression::from(false))?;
+        let var2 = cs.new_var(pg2, Val::from(false))?;
         let receive = cs.new_receive(pg2, ch, vec![var2])?;
         let _ = cs.new_receive(pg2, ch, vec![var2])?;
         let _ = cs.new_receive(pg2, ch, vec![var2])?;
