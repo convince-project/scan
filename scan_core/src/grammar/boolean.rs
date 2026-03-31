@@ -7,12 +7,15 @@ use crate::{
     grammar::{FloatExpr, IntegerExpr, NaturalExpr},
 };
 
+/// Boolean expressions.
 #[derive(Debug, Clone)]
 pub enum BooleanExpr<V>
 where
     V: Clone,
 {
+    /// A Boolean constant (`true` or `false`).
     Const(bool),
+    /// A Boolean variable.
     Var(V),
     /// A Bernoulli distribution with the given probability.
     Rand(FloatExpr<V>),
@@ -30,25 +33,35 @@ where
     // ------------
     // (In)Equality
     // ------------
-    /// Equality of numerical expressions.
+    /// Equality of Natural expressions.
     NatEqual(NaturalExpr<V>, NaturalExpr<V>),
+    /// Equality of Integer expressions.
     IntEqual(IntegerExpr<V>, IntegerExpr<V>),
+    /// Equality of Float expressions.
     FloatEqual(FloatExpr<V>, FloatExpr<V>),
-    /// Inequality of numerical expressions: LHS greater than RHS.
+    /// Inequality of Natural expressions: LHS greater than RHS.
     NatGreater(NaturalExpr<V>, NaturalExpr<V>),
+    /// Inequality of Integer expressions: LHS greater than RHS.
     IntGreater(IntegerExpr<V>, IntegerExpr<V>),
+    /// Inequality of Float expressions: LHS greater than RHS.
     FloatGreater(FloatExpr<V>, FloatExpr<V>),
-    /// Inequality of numerical expressions: LHS greater than, or equal to,  RHS.
+    /// Inequality of Natural expressions: LHS greater than, or equal to,  RHS.
     NatGreaterEq(NaturalExpr<V>, NaturalExpr<V>),
+    /// Inequality of Integer expressions: LHS greater than, or equal to,  RHS.
     IntGreaterEq(IntegerExpr<V>, IntegerExpr<V>),
+    /// Inequality of Float expressions: LHS greater than, or equal to,  RHS.
     FloatGreaterEq(FloatExpr<V>, FloatExpr<V>),
-    /// Inequality of numerical expressions: LHS less than RHS.
+    /// Inequality of Natural expressions: LHS less than RHS.
     NatLess(NaturalExpr<V>, NaturalExpr<V>),
+    /// Inequality of Integer expressions: LHS less than RHS.
     IntLess(IntegerExpr<V>, IntegerExpr<V>),
+    /// Inequality of Float expressions: LHS less than RHS.
     FloatLess(FloatExpr<V>, FloatExpr<V>),
-    /// Inequality of numerical expressions: LHS less than, or equal to, RHS.
+    /// Inequality of Natural expressions: LHS less than, or equal to, RHS.
     NatLessEq(NaturalExpr<V>, NaturalExpr<V>),
+    /// Inequality of Integer expressions: LHS less than, or equal to, RHS.
     IntLessEq(IntegerExpr<V>, IntegerExpr<V>),
+    /// Inequality of Float expressions: LHS less than, or equal to, RHS.
     FloatLessEq(FloatExpr<V>, FloatExpr<V>),
     // -----
     // Flow
@@ -63,6 +76,7 @@ impl<V> BooleanExpr<V>
 where
     V: Clone,
 {
+    /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
         match self {
             BooleanExpr::Const(_) => true,
@@ -104,6 +118,12 @@ where
         }
     }
 
+    /// Returns the Boolean value computed from the expression,
+    /// given the variable evaluation.
+    /// It panics if the evaluation is not possible, including:
+    ///
+    /// - If a variable is not included in the evaluation;
+    /// - If a variable included in the evaluation is not of Boolean type.
     pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> bool {
         match self {
             BooleanExpr::Const(b) => *b,
@@ -185,7 +205,7 @@ where
         }
     }
 
-    pub fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> BooleanExpr<W> {
+    pub(crate) fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> BooleanExpr<W> {
         match self {
             BooleanExpr::Const(b) => BooleanExpr::Const(b),
             BooleanExpr::Var(var) => BooleanExpr::Var(map(var)),
@@ -261,29 +281,44 @@ where
 
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
-            BooleanExpr::Const(_) => todo!(),
-            BooleanExpr::Var(_) => todo!(),
-            BooleanExpr::Rand(float_expr) => todo!(),
-            BooleanExpr::And(boolean_exprs) => todo!(),
-            BooleanExpr::Or(boolean_exprs) => todo!(),
-            BooleanExpr::Implies(_) => todo!(),
-            BooleanExpr::Not(boolean_expr) => todo!(),
-            BooleanExpr::NatEqual(natural_expr, natural_expr1) => todo!(),
-            BooleanExpr::IntEqual(integer_expr, integer_expr1) => todo!(),
-            BooleanExpr::NatGreater(natural_expr, natural_expr1) => todo!(),
-            BooleanExpr::IntGreater(integer_expr, integer_expr1) => todo!(),
-            BooleanExpr::FloatGreater(float_expr, float_expr1) => todo!(),
-            BooleanExpr::NatGreaterEq(natural_expr, natural_expr1) => todo!(),
-            BooleanExpr::IntGreaterEq(integer_expr, integer_expr1) => todo!(),
-            BooleanExpr::NatLess(natural_expr, natural_expr1) => todo!(),
-            BooleanExpr::IntLess(integer_expr, integer_expr1) => todo!(),
-            BooleanExpr::FloatLess(float_expr, float_expr1) => todo!(),
-            BooleanExpr::NatLessEq(natural_expr, natural_expr1) => todo!(),
-            BooleanExpr::IntLessEq(integer_expr, integer_expr1) => todo!(),
-            BooleanExpr::Ite(_) => todo!(),
-            BooleanExpr::FloatEqual(float_expr, float_expr1) => todo!(),
-            BooleanExpr::FloatGreaterEq(float_expr, float_expr1) => todo!(),
-            BooleanExpr::FloatLessEq(float_expr, float_expr1) => todo!(),
+            BooleanExpr::Const(_) => Ok(()),
+            BooleanExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Boolean))
+                .then_some(())
+                .ok_or(TypeError::TypeMismatch),
+            BooleanExpr::Rand(float_expr) => float_expr.context(vars),
+            BooleanExpr::And(boolean_exprs) | BooleanExpr::Or(boolean_exprs) => {
+                boolean_exprs.iter().try_for_each(|expr| expr.context(vars))
+            }
+            BooleanExpr::Implies(exprs) => {
+                exprs.0.context(vars).and_then(|()| exprs.1.context(vars))
+            }
+            BooleanExpr::Not(boolean_expr) => boolean_expr.context(vars),
+            BooleanExpr::NatEqual(natural_expr_lhs, natural_expr_rhs)
+            | BooleanExpr::NatGreater(natural_expr_lhs, natural_expr_rhs)
+            | BooleanExpr::NatGreaterEq(natural_expr_lhs, natural_expr_rhs)
+            | BooleanExpr::NatLess(natural_expr_lhs, natural_expr_rhs)
+            | BooleanExpr::NatLessEq(natural_expr_lhs, natural_expr_rhs) => natural_expr_lhs
+                .context(vars)
+                .and_then(|()| natural_expr_rhs.context(vars)),
+            BooleanExpr::IntEqual(integer_expr_lhs, integer_expr_rhs)
+            | BooleanExpr::IntGreater(integer_expr_lhs, integer_expr_rhs)
+            | BooleanExpr::IntGreaterEq(integer_expr_lhs, integer_expr_rhs)
+            | BooleanExpr::IntLess(integer_expr_lhs, integer_expr_rhs)
+            | BooleanExpr::IntLessEq(integer_expr_lhs, integer_expr_rhs) => integer_expr_lhs
+                .context(vars)
+                .and_then(|()| integer_expr_rhs.context(vars)),
+            BooleanExpr::FloatGreater(float_expr_lhs, float_expr_rhs)
+            | BooleanExpr::FloatLess(float_expr_lhs, float_expr_rhs)
+            | BooleanExpr::FloatEqual(float_expr_lhs, float_expr_rhs)
+            | BooleanExpr::FloatGreaterEq(float_expr_lhs, float_expr_rhs)
+            | BooleanExpr::FloatLessEq(float_expr_lhs, float_expr_rhs) => float_expr_lhs
+                .context(vars)
+                .and_then(|()| float_expr_rhs.context(vars)),
+            BooleanExpr::Ite(exprs) => exprs
+                .0
+                .context(vars)
+                .and_then(|()| exprs.1.context(vars))
+                .and_then(|()| exprs.2.context(vars)),
         }
     }
 }

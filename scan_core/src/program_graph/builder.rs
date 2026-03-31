@@ -3,7 +3,6 @@ use super::{
     PgExpression, ProgramGraph, TimeConstraint, Var,
 };
 use crate::{
-    DummyRng,
     grammar::{BooleanExpr, Type, Val},
     program_graph::PgGuard,
 };
@@ -67,49 +66,19 @@ impl ProgramGraphBuilder {
     /// // Create a new action
     /// let action = pg_builder.new_action();
     ///
+    /// // Create a value to assign the expression.
+    /// let val = (PgExpression::from(40i64) + PgExpression::from(40i64)).unwrap().eval_constant().unwrap();
+    ///
     /// // Create a new variable
-    /// pg_builder
-    ///     .new_var(PgExpression::And(vec![PgExpression::from(0)]))
-    ///     .expect_err("expression is badly-typed");
+    /// let var = pg_builder
+    ///     .new_var(val)
+    ///     .unwrap();
     /// ```
-    pub fn new_var(&mut self, init: PgExpression) -> Result<Var, PgError> {
+    pub fn new_var(&mut self, val: Val) -> Result<Var, PgError> {
         let idx = self.vars.len();
-        // init.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-        //     .map_err(PgError::Type)?;
-        let val = init.eval(&|var| self.vars[var.0 as usize], &mut DummyRng);
         self.vars.push(val);
         Ok(Var(idx as u16))
     }
-
-    // /// Adds a new variable with the given initial value (and the inferred type) to the PG,
-    // /// using the given RNG for probabilistic expressions.
-    // ///
-    // /// It fails if the expression giving the initial value of the variable is not well-typed.
-    // ///
-    // /// ```
-    // /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder, Var};
-    // /// # use rand::rngs::SmallRng;
-    // /// # use rand::{Rng, SeedableRng};
-    // /// # let mut pg_builder = ProgramGraphBuilder::<SmallRng>::new();
-    // /// // Create RNG using `rand`
-    // /// let mut rng = SmallRng::from_os_rng();
-    // ///
-    // /// // Create a new variable
-    // /// let var: Var = pg_builder
-    // ///     .new_var_with_rng(PgExpression::RandBool(0.5), &mut rng)
-    // ///     .expect("expression is well-typed");
-    // /// ```
-    // pub fn new_var_with_rng(&mut self, init: PgExpression) -> Result<Var, PgError> {
-    //     let idx = self.vars.len();
-    //     // We check the type to make sure the expression is well-formed
-    //     let _ = init.r#type().map_err(PgError::Type)?;
-    //     init.context(&|var| self.vars.get(var.0 as usize).map(Val::r#type))
-    //         .map_err(PgError::Type)?;
-    //     let val =
-    //         FnExpression::from(init).eval(&|var| self.vars[var.0 as usize].clone(), &mut DummyRng);
-    //     self.vars.push(val);
-    //     Ok(Var(idx as u16))
-    // }
 
     /// Adds a new clock and returns a [`Clock`] id object.
     ///
@@ -179,16 +148,17 @@ impl ProgramGraphBuilder {
     ///
     /// ```
     /// # use scan_core::program_graph::{Action, PgExpression, ProgramGraphBuilder, Var};
+    /// # use scan_core::Val;
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // Create a new action
     /// let action: Action = pg_builder.new_action();
     ///
     /// // Create a new variable
-    /// let var: Var = pg_builder.new_var(PgExpression::from(true)).expect("expression is well-typed");
+    /// let var: Var = pg_builder.new_var(Val::from(true)).expect("expression is well-typed");
     ///
     /// // Add an effect to the action
     /// pg_builder
-    ///     .add_effect(action, var, PgExpression::from(1))
+    ///     .add_effect(action, var, PgExpression::from(1i64))
     ///     .expect_err("var is of type bool but expression is of type integer");
     /// pg_builder
     ///     .add_effect(action, var, PgExpression::from(false))
@@ -203,9 +173,9 @@ impl ProgramGraphBuilder {
         if action == EPSILON {
             return Err(PgError::NoEffects);
         }
-        // effect
-        //     .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-        //     .map_err(PgError::Type)?;
+        effect
+            .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+            .map_err(PgError::Type)?;
         let var_type = self
             .vars
             .get(var.0 as usize)
@@ -231,11 +201,11 @@ impl ProgramGraphBuilder {
 
     pub(crate) fn new_send(&mut self, msgs: Vec<PgExpression>) -> Result<Action, PgError> {
         // Check message is well-typed
-        // msgs.iter()
-        //     .try_for_each(|msg| {
-        //         msg.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-        //     })
-        //     .map_err(PgError::Type)?;
+        msgs.iter()
+            .try_for_each(|msg| {
+                msg.context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+            })
+            .map_err(PgError::Type)?;
         // Actions are indexed progressively
         let idx = self.effects.len();
         self.effects.push(Effect::Send(msgs.into()));
@@ -320,7 +290,8 @@ impl ProgramGraphBuilder {
     /// Fails if the provided guard is not a boolean expression.
     ///
     /// ```
-    /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
+    /// # use scan_core::program_graph::ProgramGraphBuilder;
+    /// # use scan_core::BooleanExpr;
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
@@ -333,8 +304,8 @@ impl ProgramGraphBuilder {
     ///     .add_transition(initial_loc, action, initial_loc, None)
     ///     .expect("this transition can be added");
     /// pg_builder
-    ///     .add_transition(initial_loc, action, initial_loc, Some(PgExpression::from(1)))
-    ///     .expect_err("the guard expression is not boolean");
+    ///     .add_transition(initial_loc, action, initial_loc, Some(BooleanExpr::from(false)))
+    ///     .expect("this one too");
     /// ```
     #[inline(always)]
     pub fn add_transition(
@@ -354,7 +325,8 @@ impl ProgramGraphBuilder {
     /// Fails if the provided guard is not a boolean expression.
     ///
     /// ```
-    /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
+    /// # use scan_core::program_graph::ProgramGraphBuilder;
+    /// # use scan_core::BooleanExpr;
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
@@ -370,8 +342,8 @@ impl ProgramGraphBuilder {
     ///     .add_timed_transition(initial_loc, action, initial_loc, None, vec![(clock, None, Some(1))])
     ///     .expect("this transition can be added");
     /// pg_builder
-    ///     .add_timed_transition(initial_loc, action, initial_loc, Some(PgExpression::from(1)), vec![(clock, Some(1), None)])
-    ///     .expect_err("the guard expression is not boolean");
+    ///     .add_timed_transition(initial_loc, action, initial_loc, Some(BooleanExpr::from(false)), vec![(clock, Some(1), None)])
+    ///     .expect("this one too");
     /// ```
     pub fn add_timed_transition(
         &mut self,
@@ -394,9 +366,9 @@ impl ProgramGraphBuilder {
             Err(PgError::MissingClock(*clock))
         } else {
             if let Some(ref guard) = guard {
-                // guard
-                //     .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
-                //     .map_err(PgError::Type)?;
+                guard
+                    .context(&|var| self.vars.get(var.0 as usize).map(|val| Val::r#type(*val)))
+                    .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
             let transition = (post, guard, constraints);
@@ -418,7 +390,8 @@ impl ProgramGraphBuilder {
     /// Fails if the provided guard is not a boolean expression.
     ///
     /// ```
-    /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
+    /// # use scan_core::program_graph::ProgramGraphBuilder;
+    /// # use scan_core::BooleanExpr;
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
@@ -428,8 +401,8 @@ impl ProgramGraphBuilder {
     ///     .add_autonomous_transition(initial_loc, initial_loc, None)
     ///     .expect("this autonomous transition can be added");
     /// pg_builder
-    ///     .add_autonomous_transition(initial_loc, initial_loc, Some(PgExpression::from(1)))
-    ///     .expect_err("the guard expression is not boolean");
+    ///     .add_autonomous_transition(initial_loc, initial_loc, Some(BooleanExpr::from(false)))
+    ///     .expect("this one too");
     /// ```
     #[inline(always)]
     pub fn add_autonomous_transition(
@@ -448,7 +421,8 @@ impl ProgramGraphBuilder {
     /// Fails if the provided guard is not a boolean expression.
     ///
     /// ```
-    /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
+    /// # use scan_core::program_graph::ProgramGraphBuilder;
+    /// # use scan_core::BooleanExpr;
     /// # let mut pg_builder = ProgramGraphBuilder::new();
     /// // The builder is initialized with an initial location
     /// let initial_loc = pg_builder.new_initial_location();
@@ -461,8 +435,8 @@ impl ProgramGraphBuilder {
     ///     .add_autonomous_timed_transition(initial_loc, initial_loc, None, vec![(clock, None, Some(1))])
     ///     .expect("this transition can be added");
     /// pg_builder
-    ///     .add_autonomous_timed_transition(initial_loc, initial_loc, Some(PgExpression::from(1)), vec![(clock, Some(1), None)])
-    ///     .expect_err("the guard expression is not boolean");
+    ///     .add_autonomous_timed_transition(initial_loc, initial_loc, Some(BooleanExpr::from(false)), vec![(clock, Some(1), None)])
+    ///     .expect("this one too");
     /// ```
     #[inline(always)]
     pub fn add_autonomous_timed_transition(

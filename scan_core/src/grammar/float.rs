@@ -10,6 +10,7 @@ use crate::{
 /// Floating-point values.
 pub type Float = f64;
 
+/// Floating-point numerical expression.
 #[derive(Debug, Clone)]
 pub enum FloatExpr<V>
 where
@@ -55,6 +56,7 @@ impl<V> FloatExpr<V>
 where
     V: Clone,
 {
+    /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
         match self {
             FloatExpr::Const(_) => true,
@@ -77,6 +79,14 @@ where
         }
     }
 
+    /// Returns the [`Float`] value computed from the expression,
+    /// given the variable evaluation.
+    /// It panics if the evaluation is not possible, including:
+    ///
+    /// - If a variable is not included in the evaluation;
+    /// - If a variable included in the evaluation is not of [`Float`] type;
+    /// - Division by 0;
+    /// - Overflow.
     pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> Float {
         match self {
             FloatExpr::Const(float) => *float,
@@ -122,7 +132,7 @@ where
         }
     }
 
-    pub fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> FloatExpr<W> {
+    pub(crate) fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> FloatExpr<W> {
         match self {
             FloatExpr::Const(float) => FloatExpr::Const(float),
             FloatExpr::Var(var) => FloatExpr::Var(map(var)),
@@ -152,16 +162,24 @@ where
 
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
-            FloatExpr::Const(_) => todo!(),
-            FloatExpr::Var(_) => todo!(),
-            FloatExpr::Nat(natural_expr) => todo!(),
-            FloatExpr::Int(integer_expr) => todo!(),
-            FloatExpr::Rand(_) => todo!(),
-            FloatExpr::Opposite(float_expr) => todo!(),
-            FloatExpr::Sum(float_exprs) => todo!(),
-            FloatExpr::Product(float_exprs) => todo!(),
-            FloatExpr::Div(_) => todo!(),
-            FloatExpr::Ite(_) => todo!(),
+            FloatExpr::Const(_) => Ok(()),
+            FloatExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Float))
+                .then_some(())
+                .ok_or(TypeError::TypeMismatch),
+            FloatExpr::Nat(natural_expr) => natural_expr.context(vars),
+            FloatExpr::Int(integer_expr) => integer_expr.context(vars),
+            FloatExpr::Rand(exprs) | FloatExpr::Div(exprs) => {
+                exprs.0.context(vars).and_then(|()| exprs.1.context(vars))
+            }
+            FloatExpr::Opposite(integer_expr) => integer_expr.context(vars),
+            FloatExpr::Sum(integer_exprs) | FloatExpr::Product(integer_exprs) => {
+                integer_exprs.iter().try_for_each(|expr| expr.context(vars))
+            }
+            FloatExpr::Ite(exprs) => exprs
+                .0
+                .context(vars)
+                .and_then(|()| exprs.1.context(vars))
+                .and_then(|()| exprs.2.context(vars)),
         }
     }
 }

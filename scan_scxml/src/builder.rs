@@ -402,9 +402,9 @@ impl ModelBuilder {
                 )?
                 .iter()
                 .map(|expr| {
-                    self.cs
-                        .new_var(pg_id, expr.clone())
-                        .map(|var| (var, expr.r#type()))
+                    expr.eval_constant()
+                        .map_err(CsError::Type)
+                        .and_then(|val| self.cs.new_var(pg_id, val).map(|var| (var, expr.r#type())))
                 })
                 .collect::<Result<Vec<(Var, Type)>, _>>()?
             } else {
@@ -414,7 +414,7 @@ impl ModelBuilder {
                     .map(|t| {
                         (
                             self.cs
-                                .new_var(pg_id, Expression::from(t.default_value()))
+                                .new_var(pg_id, t.default_value())
                                 .expect("new var"),
                             t,
                         )
@@ -438,13 +438,13 @@ impl ModelBuilder {
         // (use Integer::MAX as no-event flag)
         let current_event_var = self
             .cs
-            .new_var(pg_id, CsExpression::from(Natural::MAX))
+            .new_var(pg_id, Val::from(Natural::MAX))
             .expect("program graph exists!");
         // Variable that will store origin of last processed event.
         // (use Integer::MAX as no-origin flag)
         let origin_var = self
             .cs
-            .new_var(pg_id, CsExpression::from(Natural::MAX))
+            .new_var(pg_id, Val::from(Natural::MAX))
             .expect("program graph exists!");
         // Implement internal queue
         let int_queue = self.cs.new_channel(vec![Type::Natural], None);
@@ -499,7 +499,7 @@ impl ModelBuilder {
                     .map(|t| {
                         (
                             self.cs
-                                .new_var(pg_id, Expression::from(t.default_value()))
+                                .new_var(pg_id, t.default_value())
                                 .expect("new var"),
                             t,
                         )

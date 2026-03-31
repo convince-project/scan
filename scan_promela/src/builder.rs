@@ -361,9 +361,12 @@ impl Builder {
                         ));
                     }
                     let ty = init_expr.r#type();
+                    let val = init_expr
+                        .eval_constant()
+                        .expect("compute initial expression");
                     let v = ctx
                         .cs
-                        .new_var(ctx.pg, init_expr)
+                        .new_var(ctx.pg, val)
                         .map_err(|_| BuilderError::TypeError("init".into()))?;
                     ctx.vars.insert(ivar.name.to_string(), v);
                     created.insert(ivar.name.to_string(), v);

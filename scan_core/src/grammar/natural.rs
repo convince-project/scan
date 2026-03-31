@@ -10,6 +10,7 @@ use crate::{
 /// Natural (unsigned) values.
 pub type Natural = u64;
 
+/// A [`Natural`] number expression
 #[derive(Debug, Clone)]
 pub enum NaturalExpr<V>
 where
@@ -53,6 +54,7 @@ impl<V> NaturalExpr<V>
 where
     V: Clone,
 {
+    /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
         match self {
             NaturalExpr::Const(_) => true,
@@ -72,6 +74,14 @@ where
         }
     }
 
+    /// Returns the [`Natural`] value computed from the expression,
+    /// given the variable evaluation.
+    /// It panics if the evaluation is not possible, including:
+    ///
+    /// - If a variable is not included in the evaluation;
+    /// - If a variable included in the evaluation is not of [`Natural`] type;
+    /// - Division by 0;
+    /// - Overflow.
     pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> Natural {
         match self {
             NaturalExpr::Const(nat) => *nat,
@@ -113,7 +123,7 @@ where
         }
     }
 
-    pub fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> NaturalExpr<W> {
+    pub(crate) fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> NaturalExpr<W> {
         match self {
             NaturalExpr::Const(n) => NaturalExpr::Const(n),
             NaturalExpr::Var(var) => NaturalExpr::Var(map(var)),
@@ -151,15 +161,22 @@ where
 
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
-            NaturalExpr::Const(_) => todo!(),
-            NaturalExpr::Var(_) => todo!(),
-            NaturalExpr::Rand(_) => todo!(),
-            NaturalExpr::Sum(natural_exprs) => todo!(),
-            NaturalExpr::Product(natural_exprs) => todo!(),
-            NaturalExpr::Rem(_) => todo!(),
-            NaturalExpr::Div(_) => todo!(),
-            NaturalExpr::Abs(integer_expr) => todo!(),
-            NaturalExpr::Ite(_) => todo!(),
+            NaturalExpr::Const(_) => Ok(()),
+            NaturalExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Natural))
+                .then_some(())
+                .ok_or(TypeError::TypeMismatch),
+            NaturalExpr::Rand(exprs) | NaturalExpr::Div(exprs) | NaturalExpr::Rem(exprs) => {
+                exprs.0.context(vars).and_then(|()| exprs.1.context(vars))
+            }
+            NaturalExpr::Sum(integer_exprs) | NaturalExpr::Product(integer_exprs) => {
+                integer_exprs.iter().try_for_each(|expr| expr.context(vars))
+            }
+            NaturalExpr::Ite(exprs) => exprs
+                .0
+                .context(vars)
+                .and_then(|()| exprs.1.context(vars))
+                .and_then(|()| exprs.2.context(vars)),
+            NaturalExpr::Abs(integer_expr) => integer_expr.context(vars),
         }
     }
 }

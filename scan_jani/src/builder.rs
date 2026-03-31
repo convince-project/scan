@@ -392,7 +392,7 @@ impl JaniBuilder {
             });
         let val = init.eval_constant()?;
         let t = val.r#type();
-        let var_id = pgb.new_var(init)?;
+        let var_id = pgb.new_var(val)?;
         self.global_vars.insert(var.name.clone(), (var_id, val, t));
         Ok(())
     }
@@ -438,7 +438,7 @@ impl JaniBuilder {
             });
         let val = init.eval_constant()?;
         let t = val.r#type();
-        let var_id = pgb.new_var(init)?;
+        let var_id = pgb.new_var(val)?;
         local_vars.insert(var.name.clone(), (var_id, val, t));
         Ok(())
     }
@@ -471,7 +471,7 @@ impl JaniBuilder {
         e_idx: usize,
     ) -> anyhow::Result<()> {
         // Initialize RNG
-        let rng = pgb.new_var(PgExpression::from(0.)).expect("new var");
+        let rng = pgb.new_var(Val::from(0.)).expect("new var");
         automaton
             .edges
             .iter()

@@ -136,6 +136,7 @@ pub type TimeConstraint = (Clock, Option<Time>, Option<Time>);
 /// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
 
+/// A Boolean expression over [`Var`] variables.
 pub type PgGuard = BooleanExpr<Var>;
 
 /// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
@@ -416,7 +417,7 @@ impl<'def> ProgramGraphRun<'def> {
             })
     }
 
-    pub fn nosync_possible_transitions(
+    pub(crate) fn nosync_possible_transitions(
         &self,
     ) -> impl Iterator<Item = (Action, impl Iterator<Item = Location>)> {
         assert_eq!(self.current_states.len(), 1);
@@ -761,7 +762,7 @@ mod tests {
         let mut builder = ProgramGraphBuilder::new();
         // Variables
         let mut rng = SmallRng::from_seed([0; 32]);
-        let battery = builder.new_var(Expression::from(0i64))?;
+        let battery = builder.new_var(Val::from(0i64))?;
         // Locations
         let initial = builder.new_initial_location();
         let left = builder.new_location();

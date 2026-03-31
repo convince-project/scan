@@ -10,6 +10,7 @@ use crate::{
 /// Integer values.
 pub type Integer = i64;
 
+/// Integer expressions.
 #[derive(Debug, Clone)]
 pub enum IntegerExpr<V>
 where
@@ -57,6 +58,7 @@ impl<V> IntegerExpr<V>
 where
     V: Clone,
 {
+    /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
         match self {
             IntegerExpr::Const(_) => true,
@@ -78,6 +80,14 @@ where
         }
     }
 
+    /// Returns the [`Integer`] value computed from the expression,
+    /// given the variable evaluation.
+    /// It panics if the evaluation is not possible, including:
+    ///
+    /// - If a variable is not included in the evaluation;
+    /// - If a variable included in the evaluation is not of [`Integer`] type;
+    /// - Division by 0;
+    /// - Overflow.
     pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> Integer {
         match self {
             IntegerExpr::Const(int) => *int,
@@ -127,7 +137,7 @@ where
         }
     }
 
-    pub fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> IntegerExpr<W> {
+    pub(crate) fn map<W: Clone>(self, map: &dyn Fn(V) -> W) -> IntegerExpr<W> {
         match self {
             IntegerExpr::Const(i) => IntegerExpr::Const(i),
             IntegerExpr::Var(var) => IntegerExpr::Var(map(var)),
@@ -169,17 +179,24 @@ where
 
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
-            IntegerExpr::Const(_) => todo!(),
-            IntegerExpr::Var(_) => todo!(),
-            IntegerExpr::Nat(natural_expr) => todo!(),
-            IntegerExpr::Rand(_) => todo!(),
-            IntegerExpr::Opposite(integer_expr) => todo!(),
-            IntegerExpr::Sum(integer_exprs) => todo!(),
-            IntegerExpr::Product(integer_exprs) => todo!(),
-            IntegerExpr::Div(_) => todo!(),
-            IntegerExpr::Floor(float_expr) => todo!(),
-            IntegerExpr::Ite(_) => todo!(),
-            IntegerExpr::Rem(_) => todo!(),
+            IntegerExpr::Const(_) => Ok(()),
+            IntegerExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Integer))
+                .then_some(())
+                .ok_or(TypeError::TypeMismatch),
+            IntegerExpr::Nat(natural_expr) => natural_expr.context(vars),
+            IntegerExpr::Rand(exprs) | IntegerExpr::Div(exprs) | IntegerExpr::Rem(exprs) => {
+                exprs.0.context(vars).and_then(|()| exprs.1.context(vars))
+            }
+            IntegerExpr::Opposite(integer_expr) => integer_expr.context(vars),
+            IntegerExpr::Sum(integer_exprs) | IntegerExpr::Product(integer_exprs) => {
+                integer_exprs.iter().try_for_each(|expr| expr.context(vars))
+            }
+            IntegerExpr::Floor(float_expr) => float_expr.context(vars),
+            IntegerExpr::Ite(exprs) => exprs
+                .0
+                .context(vars)
+                .and_then(|()| exprs.1.context(vars))
+                .and_then(|()| exprs.2.context(vars)),
         }
     }
 }
