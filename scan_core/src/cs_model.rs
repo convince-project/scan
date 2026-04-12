@@ -111,10 +111,12 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
         event
     }
 
+    #[inline]
     fn time(&self) -> Time {
         self.cs.time()
     }
 
+    #[inline]
     fn time_tick(&mut self) {
         self.cs.wait(1).expect("time error")
     }
@@ -139,6 +141,7 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
         })
     }
 
+    #[inline]
     fn state(&self) -> impl Iterator<Item = Val> {
         self.ports.iter().flat_map(|p| p.iter().filter_map(|p| *p))
     }

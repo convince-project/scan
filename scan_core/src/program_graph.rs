@@ -107,6 +107,7 @@ pub type ActionIdx = u32;
 pub struct Action(ActionIdx);
 
 impl From<Action> for ActionIdx {
+    #[inline]
     fn from(val: Action) -> Self {
         val.0
     }
@@ -268,7 +269,7 @@ impl ProgramGraph {
 
     // Returns transition's guard.
     // Panics if the pre- or post-state do not exist.
-    #[inline(always)]
+    #[inline]
     fn guards(
         &self,
         pre_state: Location,
@@ -324,7 +325,7 @@ impl<'def> ProgramGraphRun<'def> {
     /// // Execution starts in the initial location
     /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn current_states(&self) -> &SmallVec<[Location; 8]> {
         &self.current_states
     }
@@ -356,7 +357,7 @@ impl<'def> ProgramGraphRun<'def> {
             .map(|action| (action, self.possible_transitions_action(action)))
     }
 
-    #[inline(always)]
+    #[inline]
     fn possible_transitions_action(
         &self,
         action: Action,
@@ -469,6 +470,7 @@ impl<'def> ProgramGraphRun<'def> {
             })
     }
 
+    #[inline]
     fn active_transition(
         &self,
         guard: Option<&PgGuard>,
@@ -492,6 +494,7 @@ impl<'def> ProgramGraphRun<'def> {
         })
     }
 
+    #[inline]
     fn active_autonomous_transition(
         &self,
         guard: Option<&PgGuard>,
@@ -592,6 +595,7 @@ impl<'def> ProgramGraphRun<'def> {
     }
 
     /// Checks if it is possible to wait a given amount of time-units without violating the time invariants.
+    #[inline]
     pub fn can_wait(&self, delta: Time) -> bool {
         self.current_states
             .iter()
@@ -607,6 +611,7 @@ impl<'def> ProgramGraphRun<'def> {
     /// Waits a given amount of time-units.
     ///
     /// Returns error if the waiting would violate the current location's time invariant (if any).
+    #[inline]
     pub fn wait(&mut self, delta: Time) -> Result<(), PgError> {
         if self.can_wait(delta) {
             self.clocks.iter_mut().for_each(|t| *t += delta);
@@ -678,6 +683,7 @@ impl<'def> ProgramGraphRun<'def> {
         }
     }
 
+    #[inline]
     pub(crate) fn eval(&self, expr: &Expression<Var>) -> Val {
         expr.eval(
             &|v: &Var| *self.vars.get(v.0 as usize).unwrap(),
@@ -685,6 +691,7 @@ impl<'def> ProgramGraphRun<'def> {
         )
     }
 
+    #[inline]
     pub(crate) fn val(&self, var: Var) -> Result<Val, PgError> {
         self.vars
             .get(var.0 as usize)

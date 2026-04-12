@@ -81,21 +81,25 @@ impl<TsG, O> Scan<TsG, O> {
     }
 
     /// Tells whether a verification task is currently running.
+    #[inline]
     pub fn running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
 
     /// Returns the number of successful executions in the current verification run.
+    #[inline]
     pub fn successes(&self) -> u32 {
         self.successes.load(Ordering::Relaxed)
     }
 
     /// Returns the number of failed executions in the current verification run.
+    #[inline]
     pub fn failures(&self) -> u32 {
         self.failures.load(Ordering::Relaxed)
     }
 
     /// Returns a vector where each entry contains the number of violations of the associated property in the current verification run.
+    #[inline]
     pub fn violations(&self) -> Vec<u32> {
         self.violations.lock().expect("lock").clone()
     }
@@ -171,6 +175,7 @@ impl<TsG: TransitionSystemGenerator, O: Oracle> Scan<TsG, O> {
         info!("verification terminating");
     }
 
+    #[inline]
     fn trace<'a, T>(&'a self, tracer: T, duration: Time)
     where
         T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,

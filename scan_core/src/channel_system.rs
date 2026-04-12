@@ -131,6 +131,7 @@ use thiserror::Error;
 pub struct PgId(u16);
 
 impl From<PgId> for u16 {
+    #[inline]
     fn from(val: PgId) -> Self {
         val.0
     }
@@ -144,6 +145,7 @@ impl From<PgId> for u16 {
 pub struct Channel(u16);
 
 impl From<Channel> for u16 {
+    #[inline]
     fn from(val: Channel) -> Self {
         val.0
     }
@@ -341,7 +343,7 @@ impl ChannelSystem {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn communication(&self, pg_id: PgId, pg_action: PgAction) -> Option<(Channel, Message)> {
         if pg_action == EPSILON {
             None
@@ -353,7 +355,7 @@ impl ChannelSystem {
 
     /// Returns the list of defined channels, given as the pair of their type and capacity
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
-    #[inline(always)]
+    #[inline]
     pub fn channels(&self) -> &Vec<(Vec<Type>, Option<usize>)> {
         &self.channels
     }
@@ -376,7 +378,7 @@ pub struct ChannelSystemRun<'def> {
 
 impl<'def> ChannelSystemRun<'def> {
     /// Returns the current time of the CS.
-    #[inline(always)]
+    #[inline]
     pub fn time(&self) -> Time {
         self.time
     }
@@ -471,19 +473,20 @@ impl<'def> ChannelSystemRun<'def> {
         None
     }
 
+    #[inline]
     fn check_message(&self, channel: Channel, message: Message) -> bool {
         let channel_idx = channel.0 as usize;
         let (_, capacity) = self.def.channels[channel_idx];
-        let queue = &self.message_queue[channel_idx];
+        let len = self.message_queue[channel_idx].len();
         // Channel capacity must never be exceeded!
-        debug_assert!(capacity.is_none_or(|cap| queue.len() <= cap));
+        debug_assert!(capacity.is_none_or(|cap| len <= cap));
         // NOTE FIXME currently handshake is unsupported
         // !matches!(capacity, Some(0))
         match message {
-            Message::Send => capacity.is_none_or(|cap| queue.len() < cap),
-            Message::Receive => !queue.is_empty(),
-            Message::ProbeFullQueue => capacity.is_some_and(|cap| queue.len() == cap),
-            Message::ProbeEmptyQueue => queue.is_empty(),
+            Message::Send => capacity.is_none_or(|cap| len < cap),
+            Message::Receive => len > 0,
+            Message::ProbeFullQueue => capacity.is_some_and(|cap| len == cap),
+            Message::ProbeEmptyQueue => len == 0,
         }
     }
 
