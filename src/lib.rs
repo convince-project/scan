@@ -25,7 +25,6 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use log::info;
 use progress::Bar;
 use report::Report;
 use scan_core::{CsModel, MtlOracle, Oracle, PgModel, PmtlOracle, Scan, TransitionSystemGenerator};
