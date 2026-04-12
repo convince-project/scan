@@ -1453,87 +1453,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scan"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap-verbosity-flag",
- "env_logger",
- "human-panic",
- "indicatif",
- "log",
- "scan_core",
- "scan_jani",
- "scan_promela",
- "scan_scxml",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "scan_core"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "log",
- "rand",
- "rayon",
- "smallvec",
- "thiserror",
-]
-
-[[package]]
-name = "scan_jani"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "csv",
- "either",
- "flate2",
- "log",
- "rand",
- "scan_core",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "scan_promela"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cfgrammar",
- "log",
- "lrlex",
- "lrpar",
- "rand",
- "regex",
- "scan_core",
- "thiserror",
-]
-
-[[package]]
-name = "scan_scxml"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "boa_ast",
- "boa_interner",
- "boa_parser",
- "chumsky",
- "csv",
- "flate2",
- "log",
- "logos",
- "quick-xml",
- "rand",
- "scan_core",
- "thiserror",
-]
-
-[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1614,6 +1533,87 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "smc_scan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap-verbosity-flag",
+ "env_logger",
+ "human-panic",
+ "indicatif",
+ "log",
+ "serde",
+ "serde_json",
+ "smc_scan_core",
+ "smc_scan_jani",
+ "smc_scan_promela",
+ "smc_scan_scxml",
+]
+
+[[package]]
+name = "smc_scan_core"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "log",
+ "rand",
+ "rayon",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
+name = "smc_scan_jani"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "csv",
+ "either",
+ "flate2",
+ "log",
+ "rand",
+ "serde",
+ "serde_json",
+ "smc_scan_core",
+ "thiserror",
+]
+
+[[package]]
+name = "smc_scan_promela"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cfgrammar",
+ "log",
+ "lrlex",
+ "lrpar",
+ "rand",
+ "regex",
+ "smc_scan_core",
+ "thiserror",
+]
+
+[[package]]
+name = "smc_scan_scxml"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "boa_ast",
+ "boa_interner",
+ "boa_parser",
+ "chumsky",
+ "csv",
+ "flate2",
+ "log",
+ "logos",
+ "quick-xml",
+ "rand",
+ "smc_scan_core",
+ "thiserror",
+]
 
 [[package]]
 name = "sparsevec"

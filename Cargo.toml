@@ -1,5 +1,5 @@
 [package]
-name = "scan"
+name = "smc_scan"
 version = "0.1.0"
 edition = "2024"
 description = "Statistical model checker for large concurrent systems."
@@ -17,6 +17,7 @@ crate-type = ["lib"]   # The crate types to generate.
 
 [[bin]]
 name = "scan"     # The name of the target.
+path = "src/main.rs"
 
 [profile.release]
 lto = "fat"
@@ -46,9 +47,9 @@ env_logger = "0.11.10"
 human-panic = "2.0.7"
 indicatif = { version = "0.18.4", features = ["improved_unicode"] }
 log = { workspace = true }
-scan_core = { version = "0.1.0", path = "scan_core" }
-scan_jani = { version = "0.1.0", path = "scan_jani" }
-scan_scxml = { version = "0.1.0", path = "scan_scxml" }
-scan_promela = { version = "0.1.0", path = "scan_promela" }
+smc_scan_core = { version = "0.1.0", path = "scan_core" }
+smc_scan_jani = { version = "0.1.0", path = "scan_jani" }
+smc_scan_scxml = { version = "0.1.0", path = "scan_scxml" }
+smc_scan_promela = { version = "0.1.0", path = "scan_promela" }
 serde = { workspace = true }
 serde_json = { workspace = true }

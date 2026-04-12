@@ -1,7 +1,8 @@
 [package]
-name = "scan_scxml"
+name = "smc_scan_scxml"
 version = "0.1.0"
 edition = "2024"
+description = "SCXML frontend for Scan, the statistical model checker for large concurrent systems."
 documentation = "https://convince-project.github.io/scan/crates/scan_scxml/index.html"
 homepage = "https://convince-project.github.io/scan/"
 repository = "https://github.com/convince-project/scan"
@@ -15,7 +16,7 @@ name = "scan_scxml"  # The name of the target.
 crate-type = ["lib"]   # The crate types to generate.
 
 [dependencies]
-scan_core = { version = "0.1.0", path="../scan_core" }
+smc_scan_core = { version = "0.1.0", path="../scan_core" }
 anyhow = { workspace = true }
 boa_ast = "0.21.1"
 boa_interner = "0.21.1"

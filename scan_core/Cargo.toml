@@ -1,7 +1,8 @@
 [package]
-name = "scan_core"
+name = "smc_scan_core"
 version = "0.1.0"
 edition = "2024"
+description = "Core module for Scan, the statistical model checker for large concurrent systems."
 documentation = "https://convince-project.github.io/scan/crates/scan_core/index.html"
 homepage = "https://convince-project.github.io/scan/"
 repository = "https://github.com/convince-project/scan"

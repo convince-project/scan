@@ -1,7 +1,8 @@
 [package]
-name = "scan_promela"
+name = "smc_scan_promela"
 version = "0.1.0"
 edition = "2024"
+description = "Promela frontend for Scan, the statistical model checker for large concurrent systems."
 documentation = "https://convince-project.github.io/scan/crates/scan_promela/index.html"
 homepage = "https://convince-project.github.io/scan/"
 repository = "https://github.com/convince-project/scan"
@@ -24,7 +25,7 @@ cfgrammar = "0.14"
 lrlex = "0.14.1"
 lrpar = "0.14.1"
 regex = "1"
-scan_core = { path="../scan_core" }
+smc_scan_core = { path="../scan_core" }
 anyhow = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
