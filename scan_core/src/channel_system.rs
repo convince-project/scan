@@ -494,14 +494,14 @@ impl<'def> ChannelSystemRun<'def> {
             Err(CsError::ActionNotInPg(action, pg_id))
         } else if let Some((channel, message)) = self.def.communication(pg_id, action.1) {
             let (_, capacity) = self.def.channels[channel.0 as usize];
-            let queue = &self.message_queue[channel.0 as usize];
+            let len = self.message_queue[channel.0 as usize].len();
             // Channel capacity must never be exceeded!
-            assert!(capacity.is_none_or(|cap| queue.len() <= cap));
+            assert!(capacity.is_none_or(|cap| len <= cap));
             match message {
-                Message::Send if capacity.is_some_and(|cap| queue.len() >= cap) => {
+                Message::Send if capacity.is_some_and(|cap| len >= cap) => {
                     Err(CsError::OutOfCapacity(channel))
                 }
-                Message::Receive if queue.is_empty() => Err(CsError::Empty(channel)),
+                Message::Receive if len == 0 => Err(CsError::Empty(channel)),
                 Message::ProbeEmptyQueue | Message::ProbeFullQueue
                     if matches!(capacity, Some(0)) =>
                 {
@@ -510,15 +510,14 @@ impl<'def> ChannelSystemRun<'def> {
                 Message::ProbeFullQueue if capacity.is_none() => {
                     Err(CsError::ProbingInfiniteQueue(channel))
                 }
-                Message::ProbeEmptyQueue if !queue.is_empty() => Err(CsError::NotEmpty(channel)),
-                Message::ProbeFullQueue if capacity.is_some_and(|cap| queue.len() < cap) => {
+                Message::ProbeEmptyQueue if len > 0 => Err(CsError::NotEmpty(channel)),
+                Message::ProbeFullQueue if capacity.is_some_and(|cap| len < cap) => {
                     Err(CsError::NotFull(channel))
                 }
                 _ => Ok(()),
             }
         } else {
             Ok(())
-            // Err(CsError::NoCommunication(action))
         }
     }
 
