@@ -9,12 +9,12 @@
 
 # Model Checking Background in SCAN
 
-- [Channel Systems]() TODO
-- [Temporal Logic]() TODO
-- [Statistical Model Checking]() TODO
+- [Channel Systems]()
+- [Temporal Logic]()
+- [Statistical Model Checking]()
 
 # SCXML-based Model Specification Format
 
-- [Model Main File]() TODO
+- [Model Main File]()
 - [Properties](./scxml/properties.md)
-- [SCXML Processes]() TODO
+- [SCXML Processes]()

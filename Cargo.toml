@@ -10,6 +10,10 @@ readme = "README.md"
 license = "Apache-2.0"
 keywords = ["verification", "model-checking"]
 categories = ["compilers", "concurrency", "parser-implementations", "science::robotics", "simulation"]
+exclude = [
+    "scan_book/*",
+    ".github/*"
+]
 
 [lib]
 name = "scan"     # The name of the target.
