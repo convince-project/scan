@@ -2,7 +2,7 @@
 name = "smc_scan_jani"
 version = "0.1.0"
 edition = "2024"
-description = "JANI frontend for Scan, the statistical model checker for large concurrent systems."
+description = "JANI frontend for the Scan model checker."
 documentation = "https://convince-project.github.io/scan/crates/scan_jani/index.html"
 homepage = "https://convince-project.github.io/scan/"
 repository = "https://github.com/convince-project/scan"
