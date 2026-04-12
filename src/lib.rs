@@ -192,9 +192,9 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
-                info!("processing model '{model}' completed");
+                println!("processing model '{model}' completed successfully");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
@@ -202,23 +202,23 @@ impl Cli {
                     .print(json);
             }
             Commands::Validate => {
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let (_scan, _scxml_model) = load(&self.model, &[], true)?;
                 // At this point the model has been validated
-                info!("model '{model}' successfully validated");
+                println!("model '{model}' successfully validated");
             }
             Commands::Trace(mut args) => {
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
-                info!("processing model '{model}' completed");
+                println!("processing model '{model}' completed");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(&scxml_model);
-                info!("trace computation started");
+                println!("trace computation started");
                 args.trace::<CsModel, PmtlOracle, _>(&scan_def, tracer);
-                info!("trace computation completed");
+                println!("trace computation completed");
             }
         }
         Ok(())
@@ -234,30 +234,30 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let properties = args.properties.clone();
                 let (scan, jani_model) = load(&self.model, &properties)?;
-                info!("processing model '{model}' completed");
+                println!("processing model '{model}' completed successfully");
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
                 run_verification::<PgModel, MtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let (_scan, _jani_model) = load(&self.model, &[])?;
-                info!("model '{model}' successfully validated");
+                println!("model '{model}' successfully validated");
             }
             Commands::Trace(args) => {
                 args.validate()?;
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let (scan, jani_model) = load(&self.model, &[])?;
-                info!("processing model '{model}' completed");
+                println!("processing model '{model}' completed successfully");
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
-                info!("trace computation started");
+                println!("trace computation started");
                 args.trace::<PgModel, MtlOracle, _>(&scan, tracer);
-                info!("trace computation completed");
+                println!("trace computation completed");
             }
         }
         Ok(())
@@ -273,22 +273,22 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let properties = args.properties.clone();
                 let (scan, _promela_model) = load(&self.model, &properties, args.all)?;
-                info!("processing model '{model}' completed");
+                println!("processing model '{model}' completed");
                 run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan).print(json);
             }
             Commands::Validate => {
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let (_scan, _jani_model) = load(&self.model, &[], true)?;
-                info!("model '{model}' successfully validated");
+                println!("model '{model}' successfully validated");
             }
             Commands::Trace(args) => {
                 args.validate()?;
-                info!("processing model '{model}' started");
+                println!("processing model '{model}' started");
                 let (_scan, _promela_model) = load(&self.model, &[], args.all)?;
-                info!("processing model '{model}' completed");
+                println!("processing model '{model}' completed");
             }
         }
         Ok(())
