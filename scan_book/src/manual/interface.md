@@ -4,16 +4,16 @@ SCAN provides a command line interface.
 
 To print the help screen, use
 
-```bash
-$ scan --help
+```console
+scan --help
 ```
 
 which will show the available functionalities and commands' syntax.
 
 The general syntax to run SCAN is
 
-```bash
-$ scan [OPTIONS] <MODEL> <COMMAND>
+```console
+scan [OPTIONS] <MODEL> <COMMAND>
 ```
 
 where `MODEL` can be:
@@ -46,8 +46,8 @@ Possible values: `[scxml|jani|promela]`.
 
 An alternative way to set the logging level is to use:
 
-```bash
-$ RUST_LOG=<LOG_LEVEL> scan [OPTIONS] [MODEL]
+```console
+RUST_LOG=<LOG_LEVEL> scan [OPTIONS] [MODEL]
 ```
 
 where `LOG_LEVEL=[error|warn|info|debug|trace]`
@@ -60,8 +60,8 @@ it just parses the model specification and builds the internal model representat
 to check that there are no issues with the specification.
 Just run it with:
 
-```bash
-$ scan <MODEL> validate
+```console
+scan <MODEL> validate
 ```
 
 ## Verify
@@ -70,8 +70,8 @@ The command runs a verification task on the input model and uses statistical met
 
 The syntax for `verify` is:
 
-```bash
-$ scan [GLOBAL_OPTIONS] <MODEL> verify [OPTIONS] [PROPERTIES]...
+```console
+scan [GLOBAL_OPTIONS] <MODEL> verify [OPTIONS] [PROPERTIES]...
 ```
 
 where `PROPERTIES` is a list of space-separated properties to verify (as named in the model specification).
@@ -81,7 +81,7 @@ which triggers verification of all properties specified in the model.
 __Example:__ The simplest way to verify all specified properties of an SCXML model contained in a directory
 is to enter the directory containing the model and call the following command.
 
-```bash
+```console
 user@host:path/to/model$ scan . verify --all
 ```
 
@@ -132,8 +132,8 @@ This command executes the model and saves the execution traces to disk as gz-com
 
 The syntax for `trace` is
 
-```bash
-$ scan [GLOBAL_OPTIONS] <MODEL> trace [OPTIONS] [PROPERTIES]
+```console
+scan [GLOBAL_OPTIONS] <MODEL> trace [OPTIONS] [PROPERTIES]
 ```
 
 where `TRACES` is the number of traces that are requested.

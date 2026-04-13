@@ -13,9 +13,14 @@ Do not forget to set your `PATH` correctly, if required.
 To install and use SCAN on your system,
 the easiest way is to use the `cargo install` command, with:
 
-```bash
-$ cargo install --git https://github.com/convince-project/scan
+```console
+cargo install smc_scan --locked
 ```
+
+Cargo will build and install SCAN on your system
+(the `--locked` option is not required,
+but it is recommended as it improves build reproducibility
+by enforcing the use of specified versions for dependencies).
 
 Cargo will build and install SCAN on your system,
 after which it can be used as a command-line tool.
@@ -23,8 +28,8 @@ The same command updates SCAN to the latest version.
 
 After installation, type
 
-```bash
-$ scan
+```console
+scan
 ```
 
 to verify that the installation completed successfully
