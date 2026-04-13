@@ -13,7 +13,13 @@ in the context of the [CONVINCE project](https://convince-project.eu/).
 
 User documentation: [The SCAN Book](https://convince-project.github.io/scan).
 
-API docs for the library crates: [https://convince-project.github.io/scan/crates/scan](https://convince-project.github.io/scan/crates/scan).
+API docs for the library crates:
+
+- [`smc_scan_core`](https://docs.rs/smc_scan_core/latest/scan_core/)
+- [`smc_scan_scxml`](https://docs.rs/smc_scan_scxml/latest/scan_scxml/)
+- [`smc_scan_jani`](https://docs.rs/smc_scan_jani/latest/scan_jani/)
+- [`smc_scan_promela`](https://docs.rs/smc_scan_promela/latest/scan_promela/)
+- [`smc_scan`](https://docs.rs/smc_scan/latest/scan/)
 
 ## Formalism
 
@@ -44,18 +50,35 @@ Currently, the only way to use SCAN is to build it from sources.
 To install and use SCAN on your system,
 the easiest way is to use the `cargo install` command.
 Follow the instructions from the [Build prerequisites](#build-prerequisites) section to install the required build dependencies.
-Then install Scan directly from this repository with:
+Then, install SCAN directly from `crates.io` with:
 
+```console
+cargo install smc_scan --locked
 ```
+
+Cargo will build and install SCAN on your system
+(the `--locked` option is not required,
+but it is recommended as it improves build reproducibility
+by enforcing the use of specified versions for dependencies).
+
+To install a specific SCAN version, e.g., v0.1.0, use:
+
+```console
+cargo install smc_scan --version 0.1.0 --locked
+```
+
+It is also possible to install SCAN from the latest commit directly from this repository with:
+
+```console
 cargo install --git https://github.com/convince-project/scan
 ```
 
-Cargo will build and install SCAN on your system.
+(see `cargo install --help` for more options).
 
 After installation, SCAN can be used as a CLI tool.
 To print the help screen, use
 
-```
+```console
 scan --help
 ```
 
@@ -63,7 +86,7 @@ which will show the available functionalities and commands' syntax.
 
 To verify all specified properties over a model, for example, use:
 
-```
+```console
 scan <MODEL> verify --all
 ```
 
@@ -72,7 +95,7 @@ where `MODEL` is the path to your model file or folder.
 It can be helpful to run SCAN with logging activated.
 Use the `--verbose` flag (even multiple times) to increase the verbosity level, or
 
-```
+```console
 RUST_LOG=<LOG_LEVEL> scan <MODEL>
 ```
 
@@ -84,7 +107,7 @@ For development's purposes, you will want to build and run SCAN from source code
 Use Cargo's usual `build` and `run` commands for that.
 For example, from the repo's root folder, build SCAN with
 
-```
+```console
 cargo build
 ```
 
@@ -92,30 +115,30 @@ Cargo, Rust's build manager, will take care of importing the required dependenci
 
 Run SCAN via Cargo with
 
-```
+```console
 cargo run -- [ARGS]
 ```
 
 or by running the executable file directly, with
 
-```
+```console
 target/debug/scan [ARGS]
 ```
 
 Install your local version of Scan on your system for more ease of use, with:
 
-```
+```console
 cargo install --path <SCAN_REPO_PATH>
 ```
 
 To build SCAN's documentation API (with suggested flags) and have it open in a browser tab, run:
 
-```
+```console
 cargo doc --no-deps --workspace --open
 ```
 
 Run all unit and integration tests with:
 
-```
+```console
 cargo test --workspace
 ```
