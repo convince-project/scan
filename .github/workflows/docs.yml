@@ -25,23 +25,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 🛎️
-        uses: actions/checkout@v4
-      - name: install-mdbook
-        run: |
-          cargo install mdbook --no-default-features --features search --vers "^0.5" --locked
-      - name: build-manual
-        run: |
-          mdbook build scan_book
+        uses: actions/checkout@v6
       - name: Install and Build 🔧 
         run: |
-          cargo doc --no-deps --workspace
-          mkdir -p scan_book/book/crates
-          mv target/doc/* scan_book/book/crates
+          rustup update stable --no-self-update && rustup default stable
+          cargo install mdbook --no-default-features --features search --vers "^0.5" --locked
+          mdbook build scan_book
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./scan_book/book
-          
 
   docs-deploy:
     needs: docs-build
@@ -54,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
