@@ -4,9 +4,9 @@ SCAN (StatistiCal ANalyzer) is a statistical model checker
 designed to verify large concurrent systems
 for which standard verification techniques do not scale.
 
-## Developement status
+## Development status
 
-SCAN is currently under developement at DIBRIS, University of Genoa (UniGe)
+SCAN is currently under development at DIBRIS, University of Genoa (UniGe)
 in the context of the [CONVINCE project](https://convince-project.eu/).
 
 ## Documentation
