@@ -31,8 +31,8 @@ jobs:
           rustup update stable --no-self-update && rustup default stable
           cargo install mdbook --no-default-features --features search --vers "^0.5" --locked
           mdbook build scan_book
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v5
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: ./scan_book/book
 
