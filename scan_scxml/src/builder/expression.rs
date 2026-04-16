@@ -253,9 +253,8 @@ pub(super) fn expression<V: Clone>(
     expr: &boa_ast::Expression,
     interner: &Interner,
     vars: &HashMap<String, (OmgType, Vec<(V, Type)>)>,
-    strings: &mut HashMap<String, Natural>,
     expr_type: Option<&OmgType>,
-    omg_types: &OmgTypes,
+    omg_types: &mut OmgTypes,
 ) -> anyhow::Result<Vec<Expression<V>>> {
     let expr = match expr {
         boa_ast::Expression::This(_this) => todo!(),
@@ -286,12 +285,9 @@ pub(super) fn expression<V: Clone>(
             use boa_ast::expression::literal::LiteralKind;
             vec![match lit.kind() {
                 LiteralKind::String(s) => {
-                    let len = strings.len() as Natural;
-                    Expression::from(
-                        *strings
-                            .entry(interner.resolve_expect(*s).to_string())
-                            .or_insert(len),
-                    )
+                    let string = interner.resolve_expect(*s).to_string();
+                    let idx: Natural = omg_types.add_string(string) as Natural;
+                    Expression::from(idx)
                 }
                 LiteralKind::Num(f) => Expression::from(*f),
                 LiteralKind::Int(i)
@@ -331,7 +327,6 @@ pub(super) fn expression<V: Clone>(
                                 entry,
                                 interner,
                                 vars,
-                                strings,
                                 Some((*omg_base_type).into()).as_ref(),
                                 omg_types,
                             )
@@ -358,14 +353,7 @@ pub(super) fn expression<V: Clone>(
                     None,
                     omg_types,
                 )?;
-                let target = expression(
-                    target,
-                    interner,
-                    vars,
-                    strings,
-                    Some(&target_type),
-                    omg_types,
-                )?;
+                let target = expression(target, interner, vars, Some(&target_type), omg_types)?;
                 let target_type_def = match target_type {
                     OmgType::Base(omg_base_type) => {
                         bail!("property access on base type {omg_base_type:?}")
@@ -412,14 +400,7 @@ pub(super) fn expression<V: Clone>(
         },
         boa_ast::Expression::Unary(unary) => {
             use boa_ast::expression::operator::unary::UnaryOp;
-            let expr = expression(
-                unary.target(),
-                interner,
-                vars,
-                strings,
-                expr_type,
-                omg_types,
-            )?;
+            let expr = expression(unary.target(), interner, vars, expr_type, omg_types)?;
             if expr.len() != 1 {
                 bail!("expression does not support unary operator");
             }
@@ -458,12 +439,12 @@ pub(super) fn expression<V: Clone>(
                             rhs_hint = Some(&OmgType::Base(OmgBaseType::Uint64));
                         }
                     }
-                    let lhs = expression(bin.lhs(), interner, vars, strings, lhs_hint, omg_types)?;
+                    let lhs = expression(bin.lhs(), interner, vars, lhs_hint, omg_types)?;
                     if lhs.len() != 1 {
                         bail!("expression lhs does not support arithmetic binary operator");
                     }
                     let lhs = lhs[0].clone();
-                    let rhs = expression(bin.rhs(), interner, vars, strings, rhs_hint, omg_types)?;
+                    let rhs = expression(bin.rhs(), interner, vars, rhs_hint, omg_types)?;
                     if rhs.len() != 1 {
                         bail!("expression rhs does not support arithmetic binary operator");
                     }
@@ -480,12 +461,12 @@ pub(super) fn expression<V: Clone>(
                 }
                 BinaryOp::Relational(rel_bin) => {
                     // Type inference is not possible as multiple types are possible
-                    let lhs = expression(bin.lhs(), interner, vars, strings, None, omg_types)?;
+                    let lhs = expression(bin.lhs(), interner, vars, None, omg_types)?;
                     if lhs.len() != 1 {
                         bail!("expression lhs does not support binary relational operator");
                     }
                     let lhs = lhs[0].clone();
-                    let rhs = expression(bin.rhs(), interner, vars, strings, None, omg_types)?;
+                    let rhs = expression(bin.rhs(), interner, vars, None, omg_types)?;
                     if rhs.len() != 1 {
                         bail!("expression rhs does not support binary relational operator");
                     }
@@ -506,7 +487,6 @@ pub(super) fn expression<V: Clone>(
                         bin.lhs(),
                         interner,
                         vars,
-                        strings,
                         Some(&OmgType::Base(OmgBaseType::Boolean)),
                         omg_types,
                     )?;
@@ -518,7 +498,6 @@ pub(super) fn expression<V: Clone>(
                         bin.rhs(),
                         interner,
                         vars,
-                        strings,
                         Some(&OmgType::Base(OmgBaseType::Boolean)),
                         omg_types,
                     )?;
@@ -538,14 +517,9 @@ pub(super) fn expression<V: Clone>(
             }
         }
         boa_ast::Expression::Conditional(_) => todo!(),
-        boa_ast::Expression::Parenthesized(par) => expression(
-            par.expression(),
-            interner,
-            vars,
-            strings,
-            expr_type,
-            omg_types,
-        )?,
+        boa_ast::Expression::Parenthesized(par) => {
+            expression(par.expression(), interner, vars, expr_type, omg_types)?
+        }
         boa_ast::Expression::Call(call) => {
             let fun = call.function();
             let args = call.args();
@@ -569,7 +543,6 @@ pub(super) fn expression<V: Clone>(
                                                 arg,
                                                 interner,
                                                 vars,
-                                                strings,
                                                 Some(&OmgType::Base(OmgBaseType::F64)),
                                                 omg_types,
                                             )?;

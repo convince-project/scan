@@ -53,8 +53,6 @@ struct EventBuilder {
 #[derive(Default)]
 pub struct ModelBuilder {
     cs: ChannelSystemBuilder,
-    // Associates a string with a **globally unique** index.
-    strings: HashMap<String, Natural>,
     // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
     // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
     // QUESTION: Is there a better way?
@@ -90,47 +88,26 @@ impl ModelBuilder {
     ) -> anyhow::Result<(CsModel, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder
-            .build_types(&parser.types)
-            .context("failed building types")?;
-        model_builder
             .prebuild_processes(&mut parser)
             .context("failed prebuilding processes")?;
 
         info!(target: "build", "Visit process list");
         for (id, fsm) in parser.processes.iter() {
             model_builder
-                .build_fsm(fsm, &mut parser.interner, &parser.types)
+                .build_fsm(fsm, &mut parser.interner, &mut parser.types)
                 .with_context(|| format!("failed building FSM '{id}'"))?;
         }
 
         model_builder
-            .build_ports(&parser)
+            .build_ports(&mut parser)
             .context("failed building ports")?;
         model_builder
-            .build_properties(&parser, properties, all_properties)
+            .build_properties(&mut parser, properties, all_properties)
             .context("failed building properties")?;
 
         let model = model_builder.build_model(parser);
 
         Ok(model)
-    }
-
-    fn build_types(&mut self, omg_types: &OmgTypes) -> anyhow::Result<()> {
-        info!(target: "build", "Building types");
-        for (_name, omg_type) in omg_types.type_defs.iter() {
-            if let OmgTypeDef::Enumeration(labels) = omg_type {
-                // NOTE: enum labels are assigned a **globally unique** index,
-                // and the same label can appear in different enums.
-                // This makes it so that SUCCESS and FAILURE from ActionResponse are the same as those in ConditionResponse.
-                for label in labels.iter() {
-                    if !self.strings.contains_key(label) {
-                        let idx = self.strings.len();
-                        self.strings.insert(label.to_owned(), idx as Natural);
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     fn event_index(&mut self, id: &str) -> usize {
@@ -363,7 +340,7 @@ impl ModelBuilder {
         &mut self,
         scxml: &Scxml,
         interner: &mut Interner,
-        omg_types: &OmgTypes,
+        omg_types: &mut OmgTypes,
     ) -> anyhow::Result<()> {
         trace!(target: "build", "build FSM {}", scxml.name);
         // Initialize FSM.
@@ -392,21 +369,14 @@ impl ModelBuilder {
                     })?;
             }
             let vars_types = if let Some(expr) = data.expression.as_ref() {
-                expression(
-                    expr,
-                    interner,
-                    &vars,
-                    &mut self.strings,
-                    Some(&omg_type),
-                    omg_types,
-                )?
-                .iter()
-                .map(|expr| {
-                    expr.eval_constant()
-                        .map_err(CsError::Type)
-                        .and_then(|val| self.cs.new_var(pg_id, val).map(|var| (var, expr.r#type())))
-                })
-                .collect::<Result<Vec<(Var, Type)>, _>>()?
+                expression(expr, interner, &vars, Some(&omg_type), omg_types)?
+                    .iter()
+                    .map(|expr| {
+                        expr.eval_constant().map_err(CsError::Type).and_then(|val| {
+                            self.cs.new_var(pg_id, val).map(|var| (var, expr.r#type()))
+                        })
+                    })
+                    .collect::<Result<Vec<(Var, Type)>, _>>()?
             } else {
                 omg_type
                     .to_scan_types(omg_types).with_context(|| format!("failed converting type {omg_type:?} of location {} to Scan native types", data.id))?
@@ -563,7 +533,7 @@ impl ModelBuilder {
                         onentry_loc,
                         &vars,
                         interner,
-                        &omg_types,
+                        &mut omg_types,
                     )
                     .with_context(|| {
                         format!(
@@ -769,9 +739,8 @@ impl ModelBuilder {
                             cond,
                             interner,
                             &vars,
-                            &mut self.strings,
                             Some(&OmgBaseType::Boolean.into()),
-                            &omg_types,
+                            &mut omg_types,
                         ).with_context(|| format!("failed building conditional expression for transition #{transition_index} in state {}", state.id))
                     })
                     .transpose()?;
@@ -845,7 +814,7 @@ impl ModelBuilder {
                             exec_trans_loc,
                             &vars,
                             interner,
-                            &omg_types,
+                            &mut omg_types,
                         )
                         .with_context(|| {
                             format!(
@@ -863,7 +832,7 @@ impl ModelBuilder {
                             exec_trans_loc,
                             &vars,
                             interner,
-                            &omg_types,
+                            &mut omg_types,
                         )
                         .with_context(|| {
                             format!(
@@ -912,7 +881,7 @@ impl ModelBuilder {
         loc: Location,
         vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
-        omg_types: &OmgTypes,
+        omg_types: &mut OmgTypes,
     ) -> Result<Location, anyhow::Error> {
         match executable {
             Executable::Raise { event } => {
@@ -986,7 +955,7 @@ impl ModelBuilder {
                             let target_exprs = expression(
                                 targetexpr,
                                 interner,
-                                vars, &mut self.strings,
+                                vars,
                                 Some(&OmgBaseType::Uri.into()),
                                 omg_types,
                             ).with_context(|| format!("failed building target expression of <send event=\"{event}\"> element"))?;
@@ -1095,19 +1064,12 @@ impl ModelBuilder {
                 // Add a transition that perform the assignment via the effect of the `assign` action.
                 let (omg_type, scan_vars) =
                     vars.get(location).ok_or(anyhow!("undefined variable"))?;
-                let expr = expression(
-                    expr,
-                    interner,
-                    vars,
-                    &mut self.strings,
-                    Some(omg_type),
-                    omg_types,
-                )
-                .with_context(|| {
-                    format!(
-                        "failed building expression in <assign> element for location {location}"
-                    )
-                })?;
+                let expr = expression(expr, interner, vars, Some(omg_type), omg_types)
+                    .with_context(|| {
+                        format!(
+                            "failed building expression in <assign> element for location {location}"
+                        )
+                    })?;
                 let assign = self.cs.new_action(pg_id).expect("PG exists");
                 scan_vars
                     .iter()
@@ -1136,7 +1098,6 @@ impl ModelBuilder {
                         cond,
                         interner,
                         vars,
-                        &mut self.strings,
                         Some(&OmgBaseType::Boolean.into()),
                         omg_types,
                     )
@@ -1199,7 +1160,7 @@ impl ModelBuilder {
         param_loc: Location,
         vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
-        omg_types: &OmgTypes,
+        omg_types: &mut OmgTypes,
     ) -> Result<Location, anyhow::Error> {
         // assert!(!params.is_empty());
         let mut exprs = Vec::new();
@@ -1211,20 +1172,13 @@ impl ModelBuilder {
                     .as_ref()
                     .ok_or_else(|| anyhow!("unknown type for param {p}"))?;
                 // Build expression from ECMAScript expression.
-                let expr = expression(
-                    &param.expr,
-                    interner,
-                    vars,
-                    &mut self.strings,
-                    Some(param_type),
-                    omg_types,
-                )
-                .with_context(|| {
-                    format!(
-                        "failed building expr for param '{}' of type {param_type:?}",
-                        param.name
-                    )
-                })?;
+                let expr = expression(&param.expr, interner, vars, Some(param_type), omg_types)
+                    .with_context(|| {
+                        format!(
+                            "failed building expr for param '{}' of type {param_type:?}",
+                            param.name
+                        )
+                    })?;
                 exprs.extend_from_slice(&expr);
             } else {
                 warn!("missing param {p}, sending default value");
@@ -1255,7 +1209,7 @@ impl ModelBuilder {
         Ok(next_loc)
     }
 
-    fn build_ports(&mut self, parser: &Parser) -> anyhow::Result<()> {
+    fn build_ports(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
         for (port_id, port) in parser.properties.ports.iter() {
             let origin_builder = self
                 .fsm_builders
@@ -1299,9 +1253,8 @@ impl ModelBuilder {
                     init,
                     &parser.interner,
                     &HashMap::new(),
-                    &mut self.strings,
                     param_type.as_ref(),
-                    &parser.types,
+                    &mut parser.types,
                 )
                 .with_context(|| {
                     format!("failed building default value expression for port {port_id}")
@@ -1357,7 +1310,7 @@ impl ModelBuilder {
 
     fn build_properties(
         &mut self,
-        parser: &Parser,
+        parser: &mut Parser,
         properties: &[String],
         all_properties: bool,
     ) -> anyhow::Result<()> {
@@ -1381,9 +1334,8 @@ impl ModelBuilder {
                         )
                     })
                     .collect(),
-                &mut self.strings,
                 Some(&OmgType::Base(OmgBaseType::Boolean)),
-                &parser.types,
+                &mut parser.types,
             )
             .with_context(|| format!("failed building predicate {predicate:?}"))?;
             if predicate.len() != 1 {

@@ -259,6 +259,16 @@ fn format_omg_base_type(omg_base_type: OmgBaseType) -> &'static str {
 
 fn format_val(vals: &[Val], omg_type: &OmgType, omg_types: &OmgTypes) -> String {
     match omg_type {
+        OmgType::Base(OmgBaseType::String) => {
+            if let Val::Natural(index) = vals[0] {
+                format!(
+                    "'{}'",
+                    omg_types.get_string(index as usize).expect("known string")
+                )
+            } else {
+                panic!("strings are encoded as naturals")
+            }
+        }
         OmgType::Base(_omg_base_type) => format_base_val(vals[0]),
         OmgType::Array(_omg_base_type, _len) => format!(
             "{:?}",

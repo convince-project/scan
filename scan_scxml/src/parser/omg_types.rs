@@ -119,12 +119,16 @@ impl From<OmgBaseType> for OmgType {
 #[derive(Debug, Clone)]
 pub struct OmgTypes {
     pub type_defs: HashMap<String, OmgTypeDef>,
+    strings: Vec<String>,
+    strings_idx: HashMap<String, usize>,
 }
 
 impl OmgTypes {
     pub fn new() -> Self {
         Self {
             type_defs: HashMap::new(),
+            strings: Vec::new(),
+            strings_idx: HashMap::new(),
         }
     }
 
@@ -153,10 +157,20 @@ impl OmgTypes {
             .ok_or_else(|| anyhow!("type {} not known", omg_name))
     }
 
-    // pub fn to_scan_types(&self, omg_name: &str) -> anyhow::Result<Vec<Type>> {
-    //     self.find_type(omg_name)
-    //         .and_then(|omg_type| omg_type.to_scan_types(self))
-    // }
+    pub fn add_string(&mut self, string: String) -> usize {
+        if let Some(&index) = self.strings_idx.get(&string) {
+            index
+        } else {
+            let len = self.strings.len();
+            self.strings.push(string.clone());
+            self.strings_idx.insert(string, len);
+            len
+        }
+    }
+
+    pub fn get_string(&self, index: usize) -> Option<&String> {
+        self.strings.get(index)
+    }
 
     pub fn parse<R: BufRead>(&mut self, reader: &mut Reader<R>) -> anyhow::Result<()> {
         let mut buf = Vec::new();
@@ -226,6 +240,7 @@ impl OmgTypes {
                                 let omg_type = self.type_defs.get_mut(id).unwrap();
                                 if let OmgTypeDef::Enumeration(labels) = omg_type {
                                     labels.push(label.to_owned());
+                                    self.add_string(label.clone());
                                 } else {
                                     panic!("unexpected type");
                                 }
