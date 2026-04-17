@@ -23,19 +23,7 @@ pub(super) fn infer_type(
             let ident = ident.to_interned_string(interner);
             vars.get(&ident)
                 .cloned()
-                .or_else(|| {
-                    if omg_types.type_defs.iter().any(|(_, omg_type)| {
-                        if let OmgTypeDef::Enumeration(labels) = omg_type {
-                            labels.contains(&ident)
-                        } else {
-                            false
-                        }
-                    }) {
-                        Some(OmgBaseType::Uint64.into())
-                    } else {
-                        None
-                    }
-                })
+                .or_else(|| omg_types.find_type(&ident).ok())
                 .ok_or(anyhow!("type cannot be inferred"))
         }
         boa_ast::Expression::ArrayLiteral(lit) => {
@@ -266,34 +254,26 @@ pub(super) fn expression<V: Clone>(
                         .map(|(var, r#type)| Expression::from_var(var.clone(), *r#type))
                         .collect::<Vec<Expression<V>>>()
                 })
-                .or_else(|| {
-                    omg_types
-                        .type_defs
-                        .iter()
-                        .find_map(|(_, omg_type)| {
-                            if let OmgTypeDef::Enumeration(labels) = omg_type {
-                                labels.iter().position(|label| label == &ident)
-                            } else {
-                                None
-                            }
-                        })
-                        .map(|val| vec![Expression::from(val as Natural)])
-                })
                 .ok_or(anyhow!("unknown identifier: {ident}"))?
         }
         boa_ast::Expression::Literal(lit) => {
             use boa_ast::expression::literal::LiteralKind;
-            vec![match lit.kind() {
+            match lit.kind() {
                 LiteralKind::String(s) => {
+                    if expr_type.is_some_and(|omg_type| {
+                        !matches!(omg_type, OmgType::Base(OmgBaseType::String))
+                    }) {
+                        bail!("string literal has mismatched type");
+                    }
                     let string = interner.resolve_expect(*s).to_string();
                     let idx: Natural = omg_types.add_string(string) as Natural;
-                    Expression::from(idx)
+                    vec![Expression::from(idx)]
                 }
-                LiteralKind::Num(f) => Expression::from(*f),
+                LiteralKind::Num(f) => vec![Expression::from(*f)],
                 LiteralKind::Int(i)
                     if expr_type.is_some_and(|t| matches!(t, OmgType::Base(OmgBaseType::F64))) =>
                 {
-                    Expression::from(*i as f64)
+                    vec![Expression::from(*i as f64)]
                 }
                 LiteralKind::Int(i)
                     if expr_type
@@ -302,15 +282,15 @@ pub(super) fn expression<V: Clone>(
                     if *i < 0 {
                         bail!("unsigned expression has negative value")
                     } else {
-                        Expression::from(*i as Natural)
+                        vec![Expression::from(*i as Natural)]
                     }
                 }
-                LiteralKind::Int(i) => Expression::from(*i as Integer),
+                LiteralKind::Int(i) => vec![Expression::from(*i as Integer)],
                 LiteralKind::BigInt(_) => todo!(),
-                LiteralKind::Bool(b) => Expression::from(*b),
+                LiteralKind::Bool(b) => vec![Expression::from(*b)],
                 LiteralKind::Null => todo!(),
                 LiteralKind::Undefined => todo!(),
-            }]
+            }
         }
         boa_ast::Expression::ArrayLiteral(arr) => {
             let expr_type = expr_type.ok_or(anyhow!("unknown array type"))?;
@@ -347,33 +327,46 @@ pub(super) fn expression<V: Clone>(
                     target,
                     &vars
                         .iter()
+                        // WARN: This is probably sub-optimal, how to avoid clones?
                         .map(|(var, (omg_type, _))| (var.clone(), omg_type.clone()))
                         .collect(),
                     interner,
                     None,
                     omg_types,
                 )?;
-                let target = expression(target, interner, vars, Some(&target_type), omg_types)?;
-                let target_type_def = match target_type {
+                let (target_type_def, omg_name) = match target_type {
                     OmgType::Base(omg_base_type) => {
                         bail!("property access on base type {omg_base_type:?}")
                     }
                     OmgType::Array(omg_base_type, _) => {
                         bail!("property access on array [{omg_base_type:?}]")
                     }
-                    OmgType::Custom(omg_name) => omg_types
-                        .type_defs
-                        .get(&omg_name)
-                        .ok_or(anyhow!("type '{omg_name}' undefined"))?,
+                    OmgType::Custom(ref omg_name) => {
+                        let target_type_def = omg_types
+                            .type_defs
+                            .get(omg_name)
+                            .ok_or(anyhow!("type '{omg_name}' undefined"))?;
+                        (target_type_def.clone(), omg_name.clone())
+                    }
                 };
                 match simple_property_access.field() {
                     PropertyAccessField::Const(identifier) => {
                         let field_name = identifier.to_interned_string(interner);
                         match target_type_def {
-                            OmgTypeDef::Enumeration(_items) => {
-                                bail!("property access on enumeration")
-                            }
+                            OmgTypeDef::Enumeration(labels) => labels
+                                .binary_search(&field_name)
+                                .map(|val| vec![Expression::from(val as Natural)])
+                                .map_err(|_| {
+                                    anyhow!("label {field_name} does not belong to enum {omg_name}")
+                                })?,
                             OmgTypeDef::Structure(fields) => {
+                                let target = expression(
+                                    target,
+                                    interner,
+                                    vars,
+                                    Some(&target_type),
+                                    omg_types,
+                                )?;
                                 let mut target = target.as_slice();
                                 for (next_field_name, next_field_type) in fields {
                                     let field_size = next_field_type.size(omg_types).with_context(|| {

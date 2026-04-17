@@ -260,13 +260,18 @@ fn format_omg_base_type(omg_base_type: OmgBaseType) -> &'static str {
 fn format_val(vals: &[Val], omg_type: &OmgType, omg_types: &OmgTypes) -> String {
     match omg_type {
         OmgType::Base(OmgBaseType::String) => {
-            if let Val::Natural(index) = vals[0] {
+            if let Val::Natural(index) = vals
+                .first()
+                .expect("strings should be encoded as exactly one natural number variable")
+            {
                 format!(
                     "'{}'",
-                    omg_types.get_string(index as usize).expect("known string")
+                    omg_types
+                        .get_string(*index as usize)
+                        .expect("all string codes should correspond to a string")
                 )
             } else {
-                panic!("strings are encoded as naturals")
+                panic!("string not encoded as a natural number")
             }
         }
         OmgType::Base(_omg_base_type) => format_base_val(vals[0]),

@@ -9,7 +9,7 @@
     <transition event="tick" target="running_0">
       <send event="tickResponse" target="fsm_1">
         <!-- TYPE result:TickResponse -->
-        <param name="result" expr="RUNNING"/>
+        <param name="result" expr="TickResponse.RUNNING"/>
       </send>
     </transition>
   </state>
@@ -18,7 +18,7 @@
     <transition event="tick" target="running_1">
       <send event="tickResponse" target="fsm_1">
         <!-- TYPE result:TickResponse -->
-        <param name="result" expr="RUNNING"/>
+        <param name="result" expr="TickResponse.RUNNING"/>
       </send>
     </transition>
   </state>
@@ -27,7 +27,7 @@
     <transition event="tick" target="running_2">
       <send event="tickResponse" target="fsm_1">
         <!-- TYPE result:TickResponse -->
-        <param name="result" expr="RUNNING"/>
+        <param name="result" expr="TickResponse.RUNNING"/>
       </send>
     </transition>
   </state>
@@ -36,7 +36,7 @@
     <transition event="tick" target="running_3">
       <send event="tickResponse" target="fsm_1">
         <!-- TYPE result:TickResponse -->
-        <param name="result" expr="RUNNING"/>
+        <param name="result" expr="TickResponse.RUNNING"/>
       </send>
     </transition>
   </state>
@@ -45,7 +45,7 @@
     <transition event="tick" target="finished">
       <send event="tickResponse" target="fsm_1">
         <!-- TYPE result:TickResponse -->
-        <param name="result" expr="SUCCESS"/>
+        <param name="result" expr="TickResponse.SUCCESS"/>
       </send>
     </transition>
   </state>

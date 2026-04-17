@@ -15,9 +15,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 // TODO:
 //
 // -[ ] WARN FIXME System is fragile if name/id/path do not coincide
-// -[ ] WARN FIXME TODO: simplistic implementation of enums
-// The same label can belong to multiple enums,
-// and given a label it is not possible to recover the originating enum.
 
 #[derive(Debug, Clone)]
 pub struct ScxmlModel {
@@ -509,9 +506,6 @@ impl ModelBuilder {
         let param_vars = params_vars;
         let param_actions = params_actions;
 
-        // This will be needed later
-        let mut omg_types = omg_types.clone();
-
         // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
             trace!(target: "build", "build state {state_id}");
@@ -533,7 +527,7 @@ impl ModelBuilder {
                         onentry_loc,
                         &vars,
                         interner,
-                        &mut omg_types,
+                        omg_types,
                     )
                     .with_context(|| {
                         format!(
@@ -740,7 +734,7 @@ impl ModelBuilder {
                             interner,
                             &vars,
                             Some(&OmgBaseType::Boolean.into()),
-                            &mut omg_types,
+                            omg_types,
                         ).with_context(|| format!("failed building conditional expression for transition #{transition_index} in state {}", state.id))
                     })
                     .transpose()?;
@@ -814,7 +808,7 @@ impl ModelBuilder {
                             exec_trans_loc,
                             &vars,
                             interner,
-                            &mut omg_types,
+                            omg_types,
                         )
                         .with_context(|| {
                             format!(
@@ -832,7 +826,7 @@ impl ModelBuilder {
                             exec_trans_loc,
                             &vars,
                             interner,
-                            &mut omg_types,
+                            omg_types,
                         )
                         .with_context(|| {
                             format!(

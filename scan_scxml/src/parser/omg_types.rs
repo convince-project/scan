@@ -127,8 +127,9 @@ impl OmgTypes {
     pub fn new() -> Self {
         Self {
             type_defs: HashMap::new(),
-            strings: Vec::new(),
-            strings_idx: HashMap::new(),
+            // Empty string is default value so it should always be there
+            strings: vec![String::new()],
+            strings_idx: HashMap::from([(String::new(), 0)]),
         }
     }
 
@@ -168,8 +169,8 @@ impl OmgTypes {
         }
     }
 
-    pub fn get_string(&self, index: usize) -> Option<&String> {
-        self.strings.get(index)
+    pub fn get_string(&self, index: usize) -> Option<&str> {
+        self.strings.get(index).map(|s| s.as_str())
     }
 
     pub fn parse<R: BufRead>(&mut self, reader: &mut Reader<R>) -> anyhow::Result<()> {
@@ -239,8 +240,15 @@ impl OmgTypes {
                                 let label = self.parse_id(tag)?;
                                 let omg_type = self.type_defs.get_mut(id).unwrap();
                                 if let OmgTypeDef::Enumeration(labels) = omg_type {
-                                    labels.push(label.to_owned());
-                                    self.add_string(label.clone());
+                                    if labels.binary_search(&label).is_ok() {
+                                        error!(
+                                            "label {label} in enum {id} declared multiple times"
+                                        );
+                                    } else {
+                                        // Keep labels sorted so we can use binary search
+                                        labels.push(label.to_owned());
+                                        labels.sort_unstable();
+                                    }
                                 } else {
                                     panic!("unexpected type");
                                 }

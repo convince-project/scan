@@ -7,32 +7,32 @@
 
   <datamodel>
     <!-- TYPE state:TickResponse -->
-    <data id="state" expr="FAILURE"/>
+    <data id="state" expr="TickResponse.FAILURE"/>
   </datamodel>
 
   <state id="idle">
-	  <transition target="loop" cond="state == RUNNING"/>
-	  <transition target="loop" cond="state == SUCCESS"/>
-	  <transition target="running" cond="state == FAILURE"/>
+	  <transition target="loop" cond="state == TickResponse.RUNNING"/>
+	  <transition target="loop" cond="state == TickResponse.SUCCESS"/>
+	  <transition target="running" cond="state == TickResponse.FAILURE"/>
 	  <transition target="loop"/>
   </state>
 
 	<state id="running">
 	  <onentry>
-	    <assign location="state" expr="RUNNING"/>
+	    <assign location="state" expr="TickResponse.RUNNING"/>
 	  </onentry>
-	  <transition target="loop" cond="state == SUCCESS"/>
-	  <transition target="loop" cond="state == FAILURE"/>
-	  <transition target="finished" cond="state == RUNNING"/>
+	  <transition target="loop" cond="state == TickResponse.SUCCESS"/>
+	  <transition target="loop" cond="state == TickResponse.FAILURE"/>
+	  <transition target="finished" cond="state == TickResponse.RUNNING"/>
 	  <transition target="loop"/>
 	  <onexit>
-	    <assign location="state" expr="SUCCESS"/>
+	    <assign location="state" expr="TickResponse.SUCCESS"/>
 	  </onexit>
   </state>
 
   <state id="finished">
-	  <transition target="loop" cond="state == RUNNING"/>
-	  <transition target="loop" cond="state == FAILURE"/>
+	  <transition target="loop" cond="state == TickResponse.RUNNING"/>
+	  <transition target="loop" cond="state == TickResponse.FAILURE"/>
   </state>
 	
   <state id="loop">
