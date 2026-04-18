@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING** SCXML: Use ECMAScript enumeration syntax (i.e., the property syntax) for enumeration values.
+
 ### Fixed
 
-- Resolve string values in scxml traces.
+- SCXML: Resolve string values in traces.
+- SCXML: Fix inconsistent string representation, possibly affecting verification results.
 
 ## [0.1.0] - 2026-04-13
 
