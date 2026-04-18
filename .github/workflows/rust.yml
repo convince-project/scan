@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install Rust (rustup)
       run: rustup update stable --no-self-update && rustup default stable
     - name: Check fmt
