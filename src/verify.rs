@@ -38,6 +38,7 @@ pub(crate) struct VerifyArgs {
     /// Space-separated list of properties to verify.
     pub(crate) properties: Vec<String>,
     /// Verify all properties found in the model specification.
+    ///
     /// It is equivalent to listing all of the properties.
     #[arg(short, long)]
     pub(crate) all: bool,
@@ -58,7 +59,7 @@ pub(crate) struct VerifyArgs {
     /// By default, SCAN uses multi-threading.
     /// Use this flag to run verification on a single thread.
     ///
-    /// WARNING: only the verification itself is run single-threaded.
+    /// WARNING: only the verification itself is guaranteed to run single-threaded.
     /// Other related functionalities, including model parsing and building,
     /// updating progress bars, etc.,
     /// might still be running multiple threads.

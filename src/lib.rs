@@ -75,8 +75,12 @@ enum Format {
 #[derive(Subcommand)]
 enum Commands {
     /// Validate the syntactical and semantical correctness of the model, without running it.
+    ///
+    /// Examples:
+    /// 'scan PATH/TO/MODEL validate' validates the model.
     Validate,
     /// Verify properties of the given model.
+    ///
     /// At least one property has to be verified.
     ///
     /// Examples:
@@ -91,9 +95,9 @@ enum Commands {
         /// Print progress bars during verification.
         ///
         /// By default, when it starts the verification process, SCAN only prints a terse message.
-        /// For longer computations, it might be nice to see in real-time how the verification is proceeding.
+        /// For longer jobs, it is useful to have real-time feedback on how the verification is proceeding.
         /// This flag has SCAN print progress bars and current statistics on the verification process,
-        /// and make a best-effort attempt to estimate how long it will take to completion.
+        /// and make a best-effort attempt in estimating how long it will take to completion.
         #[arg(long, value_enum)]
         progress: Option<Bar>,
         /// Print JSON-serialized final verification report.
@@ -103,8 +107,10 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Produce execution traces and save them to file in csv format, separating executions that verify the given properties from those that do not.
+    /// Produce execution traces and save them to file in csv format..
+    ///
     /// Executions are always run to completion, regardless of verification outcome.
+    /// Executions that verify the given properties are separated from those that do not.
     /// It is possible to verify no property at all, in which case all executions are successful but still executed to completion.
     ///
     /// Examples:
@@ -140,7 +146,17 @@ pub struct Cli {
     /// and may not be interpreted as expected.
     #[arg(short, long, value_enum)]
     format: Option<Format>,
-    /// Verbose output
+    /// Verbose output.
+    ///
+    /// Verbosity level corresponds to the log level that gets printed.
+    /// Logging mostly concerns parsing and building of the model,
+    /// so it is particularly useful when validating a model
+    /// to check for errors.
+    ///
+    /// Verbosity levels: ERROR, WARNING, INFO, DEBUG, TRACE
+    ///
+    /// Examples:
+    /// 'scan PATH/TO/MODEL validate -vvv' validates the model and prints ERROR, WARNING and INFO log entries.
     #[command(flatten)]
     pub verbosity: clap_verbosity_flag::Verbosity,
     /// Actions to execute on the model.
@@ -191,33 +207,27 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                println!("processing model '{model}' started");
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
-                println!("processing model '{model}' completed successfully");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan_def)
+                run_verification::<CsModel, PmtlOracle>(model, &args, progress, json, &scan_def)
                     .print(json);
             }
             Commands::Validate => {
-                println!("processing model '{model}' started");
                 let (_scan, _scxml_model) = load(&self.model, &[], true)?;
                 // At this point the model has been validated
                 println!("model '{model}' successfully validated");
             }
             Commands::Trace(mut args) => {
-                println!("processing model '{model}' started");
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
-                println!("processing model '{model}' completed");
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(&scxml_model);
-                println!("trace computation started");
                 args.trace::<CsModel, PmtlOracle, _>(&scan_def, tracer);
-                println!("trace computation completed");
+                println!("trace computation for model '{model}' completed");
             }
         }
         Ok(())
@@ -233,30 +243,25 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                println!("processing model '{model}' started");
                 let properties = args.properties.clone();
                 let (scan, jani_model) = load(&self.model, &properties)?;
-                println!("processing model '{model}' completed successfully");
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
-                run_verification::<PgModel, MtlOracle>(model, &args, progress, &scan).print(json);
+                run_verification::<PgModel, MtlOracle>(model, &args, progress, json, &scan)
+                    .print(json);
             }
             Commands::Validate => {
-                println!("processing model '{model}' started");
                 let (_scan, _jani_model) = load(&self.model, &[])?;
                 println!("model '{model}' successfully validated");
             }
             Commands::Trace(args) => {
                 args.validate()?;
-                println!("processing model '{model}' started");
                 let (scan, jani_model) = load(&self.model, &[])?;
-                println!("processing model '{model}' completed successfully");
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
-                println!("trace computation started");
                 args.trace::<PgModel, MtlOracle, _>(&scan, tracer);
-                println!("trace computation completed");
+                println!("trace computation for model '{model}' completed");
             }
         }
         Ok(())
@@ -272,20 +277,17 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                println!("processing model '{model}' started");
                 let properties = args.properties.clone();
                 let (scan, _promela_model) = load(&self.model, &properties, args.all)?;
-                println!("processing model '{model}' completed");
-                run_verification::<CsModel, PmtlOracle>(model, &args, progress, &scan).print(json);
+                run_verification::<CsModel, PmtlOracle>(model, &args, progress, json, &scan)
+                    .print(json);
             }
             Commands::Validate => {
-                println!("processing model '{model}' started");
                 let (_scan, _jani_model) = load(&self.model, &[], true)?;
                 println!("model '{model}' successfully validated");
             }
             Commands::Trace(args) => {
                 args.validate()?;
-                println!("processing model '{model}' started");
                 let (_scan, _promela_model) = load(&self.model, &[], args.all)?;
                 println!("processing model '{model}' completed");
             }
@@ -308,6 +310,7 @@ fn run_verification<'a, Ts, O>(
     model: &str,
     args: &VerifyArgs,
     progress: Option<Bar>,
+    json: bool,
     scan: &'a Scan<Ts, O>,
 ) -> Report
 where
@@ -315,10 +318,12 @@ where
     O: 'a + Oracle + Clone + Sync,
     Ts::Ts<'a>: Clone + Sync,
 {
-    println!(
-        "Verifying {model} (-p {} -c {} -d {}) {:?}",
-        args.precision, args.confidence, args.duration, args.properties
-    );
+    if !json {
+        println!(
+            "Verifying {model} (-p {} -c {} -d {}) {:?}",
+            args.precision, args.confidence, args.duration, args.properties
+        );
+    }
     if let Some(bar) = progress {
         std::thread::scope(|s| {
             s.spawn(|| {
