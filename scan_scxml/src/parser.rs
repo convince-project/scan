@@ -42,8 +42,8 @@ pub enum ParserError {
     UnknownAttrKey(String),
     #[error("open tags have not been closed")]
     UnclosedTags,
-    #[error("type annotation missing")]
-    NoTypeAnnotation,
+    // #[error("type annotation missing")]
+    // NoTypeAnnotation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,7 +223,7 @@ impl Parser {
                         format!("failed to create reader from file '{}'", path.display())
                     })?;
                     self.properties
-                        .parse(&mut reader, &mut self.interner, &self.types)
+                        .parse(&mut reader, &mut self.interner)
                         .with_context(|| {
                             format!(
                                 "failed to parse properties at line {} in '{}'",
@@ -325,7 +325,7 @@ impl Parser {
                                 format!("failed to create reader from file '{}'", path.display())
                             })?;
                             self.properties
-                                .parse(&mut reader, &mut self.interner, &self.types)
+                                .parse(&mut reader, &mut self.interner)
                                 .with_context(|| {
                                     format!(
                                         "failed to parse properties at line {} in '{}'",

@@ -1,7 +1,5 @@
 use super::{ATTR_EVENT, ATTR_EXPR, ATTR_PARAM, ecmascript};
-use crate::parser::{
-    ATTR_ID, ATTR_TARGET, ATTR_TYPE, OmgBaseType, OmgType, OmgTypes, ParserError, attrs,
-};
+use crate::parser::{ATTR_ID, ATTR_TARGET, ATTR_TYPE, ParserError, attrs};
 use anyhow::{Context, anyhow, bail};
 use boa_ast::scope::Scope;
 use boa_interner::Interner;
@@ -35,7 +33,7 @@ enum PropertyTag {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParserPort {
-    pub(crate) r#type: OmgType,
+    // pub(crate) r#type: OmgType,
     pub(crate) origin: String,
     pub(crate) target: String,
     pub(crate) event: String,
@@ -76,7 +74,7 @@ impl Properties {
         &mut self,
         reader: &mut Reader<R>,
         interner: &mut Interner,
-        omg_types: &OmgTypes,
+        // omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
         let mut buf = Vec::new();
         let mut stack: Vec<PropertyTag> = Vec::new();
@@ -170,7 +168,7 @@ impl Properties {
                                         target: target.clone(),
                                         event: event.clone(),
                                         param: None,
-                                        r#type: OmgType::Base(OmgBaseType::Boolean),
+                                        // r#type: OmgType::Base(OmgBaseType::Boolean),
                                     },
                                 );
                             } else {
@@ -205,7 +203,7 @@ impl Properties {
                                         target: target.clone(),
                                         event: event.clone(),
                                         param: Some((attrs[ATTR_PARAM].clone(), expression)),
-                                        r#type: omg_types.find_type(&attrs[ATTR_TYPE])?,
+                                        // r#type: omg_types.find_type(&attrs[ATTR_TYPE])?,
                                     },
                                 );
                             } else {
