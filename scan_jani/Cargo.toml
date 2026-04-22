@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan_jani"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "JANI frontend for the Scan model checker."
 documentation = "https://convince-project.github.io/scan/crates/scan_jani/index.html"
@@ -18,7 +18,7 @@ crate-type = ["lib"]   # The crate types to generate.
 [dependencies]
 anyhow = { workspace = true }
 log = { workspace = true }
-smc_scan_core = {version = "0.1.0", path="../scan_core" }
+smc_scan_core = {version = "0.1.1", path="../scan_core" }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
