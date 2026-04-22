@@ -19,7 +19,6 @@ crate-type = ["lib"]   # The crate types to generate.
 anyhow = { workspace = true }
 log = { workspace = true }
 smc_scan_core = {version = "0.1.0", path="../scan_core" }
-rand = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

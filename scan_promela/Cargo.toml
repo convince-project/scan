@@ -28,5 +28,4 @@ regex = "1"
 smc_scan_core = { version = "0.1.0", path = "../scan_core" }
 anyhow = { workspace = true }
 log = { workspace = true }
-rand = { workspace = true }
 thiserror = { workspace = true }
