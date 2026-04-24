@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::anyhow;
 use clap::Parser;
 use scan_core::{Oracle, Scan, Time, TransitionSystemGenerator};
@@ -101,7 +99,7 @@ impl VerifyArgs {
             .iter()
             .cloned()
             .zip(scan.violations().into_iter().chain([0].into_iter().cycle()))
-            .collect::<HashMap<String, u32>>();
+            .collect::<Vec<(String, u32)>>();
         Report {
             model,
             precision: self.precision,

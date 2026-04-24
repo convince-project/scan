@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Statistical model checker for large concurrent systems."
 documentation = "https://convince-project.github.io/scan/crates/scan/index.html"

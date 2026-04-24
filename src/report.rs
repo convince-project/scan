@@ -1,6 +1,6 @@
 use scan_core::Time;
 use serde::Serialize;
-use std::{collections::HashMap, fmt::Display};
+use std::fmt::Display;
 
 #[derive(Serialize)]
 pub(crate) struct Report {
@@ -12,7 +12,7 @@ pub(crate) struct Report {
     pub(crate) runs: u32,
     pub(crate) successes: u32,
     pub(crate) failures: u32,
-    pub(crate) property_failures: HashMap<String, u32>,
+    pub(crate) property_failures: Vec<(String, u32)>,
 }
 
 impl Report {
@@ -36,14 +36,14 @@ impl Display for Report {
             "Completed {} runs with {} successes and {} failures",
             self.runs, self.successes, self.failures
         )?;
-        for (property, &violations) in self.property_failures.iter() {
+        for (property, violations) in self.property_failures.iter() {
             write!(
                 f,
                 "Property {property} success rate: {0:.1$}",
                 ((self.runs - violations) as f64) / (self.runs as f64),
                 mag,
             )?;
-            if violations > 0 {
+            if *violations > 0 {
                 writeln!(f, " ({violations} fails)")?;
             } else {
                 writeln!(f)?;
