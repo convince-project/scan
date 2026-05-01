@@ -4,7 +4,8 @@ mod expression;
 
 use self::expression::{expression, infer_type};
 use crate::parser::{
-    Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send, Target,
+    Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send, State,
+    Target,
 };
 use anyhow::{Context, anyhow, bail};
 use boa_interner::Interner;
@@ -89,6 +90,28 @@ impl ModelBuilder {
             .context("failed prebuilding processes")?;
 
         info!(target: "build", "Visit process list");
+        // Make sure missing FSM are added as one-state FSMs.
+        for id in model_builder.fsm_builders.keys() {
+            if !parser.processes.contains_key(id) {
+                parser.processes.insert(
+                    id.clone(),
+                    Scxml {
+                        name: id.clone(),
+                        initial: String::from("init"),
+                        datamodel: Vec::new(),
+                        states: HashMap::from([(
+                            String::from("init"),
+                            State {
+                                id: String::from("init"),
+                                transitions: Vec::new(),
+                                on_entry: Vec::new(),
+                                on_exit: Vec::new(),
+                            },
+                        )]),
+                    },
+                );
+            }
+        }
         for (id, fsm) in parser.processes.iter() {
             model_builder
                 .build_fsm(fsm, &mut parser.interner, &mut parser.types)
@@ -123,7 +146,7 @@ impl ModelBuilder {
 
     fn add_fsm_builder(&mut self, id: &str) -> anyhow::Result<&FsmBuilder> {
         if self.fsm_builders.contains_key(id) {
-            bail!("FSM {id} aready exists");
+            bail!("FSM {id} already exists");
         } else {
             let pg_id = self.cs.new_program_graph();
             let ext_queue = self
@@ -856,7 +879,7 @@ impl ModelBuilder {
             }
 
             // Connect NULL events with named events
-            // by transitioning from last "NUll" location to dequeuing event location.
+            // by transitioning from last "NULL" location to dequeuing event location.
             self.cs
                 .add_autonomous_transition(pg_id, null_trans, int_queue_loc, None)?;
             // Return to dequeue a new (internal or external) event.
@@ -1188,7 +1211,7 @@ impl ModelBuilder {
                 );
             }
         }
-        // Retreive or create channel for parameter passing.
+        // Retrieve or create channel for parameter passing.
         let scan_types = exprs.iter().map(|expr| expr.r#type()).collect::<Vec<_>>();
         let param_chn = *self
             .parameter_channels
@@ -1338,13 +1361,13 @@ impl ModelBuilder {
             let predicate = predicate[0].clone();
             self.predicates.push(predicate);
         }
-        self.guarantees = parser
-            .properties
-            .guarantees
-            .iter()
-            .filter(|(name, _)| all_properties || properties.contains(name))
-            .cloned()
-            .collect();
+        if !all_properties {
+            parser
+                .properties
+                .guarantees
+                .retain(|(name, _)| properties.contains(name));
+        }
+        self.guarantees = parser.properties.guarantees.clone();
         self.assumes = parser.properties.assumes.clone();
         Ok(())
     }
