@@ -136,7 +136,7 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
                 b
             } else {
                 // FIXME: handle error or guarantee it won't happen
-                panic!("propositions should evaluate to boolean values")
+                panic!("predicates should evaluate to boolean values")
             }
         })
     }

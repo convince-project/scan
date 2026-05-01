@@ -76,7 +76,6 @@ impl From<&Pmtl<usize>> for ValPmtl {
 
 impl ValPmtl {
     // From Ulus 2024: Online monitoring of metric temporal logic using sequential networks. Link: <http://arxiv.org/abs/1901.00175v2>
-    #[inline(always)]
     pub fn output(&self, time: Time) -> bool {
         match self {
             ValPmtl::True => true,
@@ -304,18 +303,22 @@ impl PmtlOracle {
 }
 
 impl Oracle for PmtlOracle {
+    #[inline]
     fn output_assumes(&self) -> impl Iterator<Item = Option<bool>> {
         self.assumes.iter().map(|f| f.valuation(self.time))
     }
 
+    #[inline]
     fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>> {
         self.guarantees.iter().map(|f| f.valuation(self.time))
     }
 
+    #[inline]
     fn final_output_assumes(&self) -> impl Iterator<Item = bool> {
         self.assumes.iter().map(|f| f.output(self.time))
     }
 
+    #[inline]
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool> {
         self.guarantees.iter().map(|f| f.output(self.time))
     }

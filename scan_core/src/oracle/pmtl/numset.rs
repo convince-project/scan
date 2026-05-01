@@ -8,23 +8,23 @@ use crate::Time;
 pub(super) struct NumSet(Vec<(Time, Time)>);
 
 impl NumSet {
-    #[inline(always)]
+    #[inline]
     pub(super) fn empty() -> Self {
         Self(Vec::new())
     }
 
-    #[inline(always)]
+    #[inline]
     fn _full() -> Self {
         Self(vec![(0, Time::MAX)])
     }
 
-    #[inline(always)]
+    #[inline]
     pub(super) fn from_range(lower_bound: Time, upper_bound: Time) -> Self {
         assert!(lower_bound <= upper_bound);
         Self(vec![(lower_bound, upper_bound)])
     }
 
-    #[inline(always)]
+    #[inline]
     pub(super) fn contains(&self, t: Time) -> bool {
         match self.0.binary_search_by_key(&t, |&(t, _)| t) {
             Ok(_) => true,
@@ -33,7 +33,7 @@ impl NumSet {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn _contains_interval(&self, lower_bound: Time, upper_bound: Time) -> bool {
         assert!(lower_bound <= upper_bound);
         match self.0.binary_search_by_key(&lower_bound, |&(t, _)| t) {
@@ -43,7 +43,7 @@ impl NumSet {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub(super) fn contains_unbounded_interval(&self, lower_bound: Time) -> bool {
         self.0
             .last()

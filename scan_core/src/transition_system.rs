@@ -50,7 +50,7 @@ pub trait TransitionSystem {
     type Event;
 
     /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
-    /// unless the execution is terminated and no further events can happen.
+    /// unless the execution is terminated and no further events can happen at that time step.
     fn transition(&mut self) -> Option<Self::Event>;
 
     /// Current time of the [`TransitionSystem`] (for timed systems).
