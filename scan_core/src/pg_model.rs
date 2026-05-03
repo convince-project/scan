@@ -45,6 +45,7 @@ impl TransitionSystemGenerator for PgModel {
             global_vars: &self.global_vars,
             predicates: &self.predicates,
             time: 0,
+            last_event: None,
         }
     }
 }
@@ -58,23 +59,33 @@ pub struct PgModelRun<'def> {
     global_vars: &'def [Var],
     predicates: &'def [Expression<Var>],
     time: Time,
+    last_event: Option<Action>,
 }
 
 impl<'def> TransitionSystem for PgModelRun<'def> {
     type Event = Action;
 
-    fn transition(&mut self) -> Option<Action> {
-        self.pg.montecarlo(&mut self.rng)
+    #[inline]
+    fn transition(&mut self) {
+        self.last_event = self.pg.montecarlo(&mut self.rng);
     }
 
+    #[inline]
+    fn last_event(&self) -> Option<&Self::Event> {
+        self.last_event.as_ref()
+    }
+
+    #[inline]
     fn time(&self) -> Time {
         self.time
     }
 
+    #[inline]
     fn time_tick(&mut self) {
         self.time += 1;
     }
 
+    #[inline]
     fn labels(&self) -> impl Iterator<Item = bool> {
         self.predicates.iter().map(|p| {
             if let Val::Boolean(b) = self.pg.eval(p) {
@@ -85,6 +96,7 @@ impl<'def> TransitionSystem for PgModelRun<'def> {
         })
     }
 
+    #[inline]
     fn state(&self) -> impl Iterator<Item = Val> {
         self.global_vars
             .as_ref()

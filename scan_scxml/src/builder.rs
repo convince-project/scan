@@ -67,7 +67,7 @@ pub struct ModelBuilder {
     // Properties
     guarantees: Vec<(String, Pmtl<usize>)>,
     assumes: Vec<(String, Pmtl<usize>)>,
-    predicates: Vec<Expression<Atom>>,
+    predicates: Vec<BooleanExpr<Atom>>,
     ports: HashMap<String, (OmgType, Vec<(Atom, Val)>)>,
     // extra data
     int_queues: HashSet<Channel>,
@@ -1356,10 +1356,14 @@ impl ModelBuilder {
             )
             .with_context(|| format!("failed building predicate {predicate:?}"))?;
             if predicate.len() != 1 {
-                bail!("predicate must be a boolean expression");
+                bail!("predicate is not a boolean expression");
+            } else if let Expression::Boolean(predicate) =
+                predicate.first().expect("len of predicate is 1")
+            {
+                self.predicates.push(predicate.clone());
+            } else {
+                bail!("predicate is not a boolean expression");
             }
-            let predicate = predicate[0].clone();
-            self.predicates.push(predicate);
         }
         if !all_properties {
             parser
@@ -1404,6 +1408,8 @@ impl ModelBuilder {
             // TODO FIXME handle error.
             let _id = model.add_predicate(pred_expr);
         }
+        // Shrink model storage (just an optimization);
+        model.shrink();
         let (guarantee_names, guarantees): (Vec<_>, Vec<_>) = self.guarantees.into_iter().unzip();
         let (assume_names, assumes): (Vec<_>, Vec<_>) = self.assumes.into_iter().unzip();
         let oracle = PmtlOracle::new(assumes.as_slice(), guarantees.as_slice());

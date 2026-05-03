@@ -49,9 +49,12 @@ pub trait TransitionSystem {
     /// The type of events produced by the execution of the system.
     type Event;
 
-    /// Performs a (random) transition on the [`TransitionSystem`] and returns the raised `Event`,
+    /// Performs a (random) transition on the [`TransitionSystem`].
+    fn transition(&mut self);
+
+    /// Returns the `Event` raised by the last transition,
     /// unless the execution is terminated and no further events can happen at that time step.
-    fn transition(&mut self) -> Option<Self::Event>;
+    fn last_event(&self) -> Option<&Self::Event>;
 
     /// Current time of the [`TransitionSystem`] (for timed systems).
     fn time(&self) -> Time;
@@ -73,18 +76,17 @@ pub trait TransitionSystem {
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
         trace!("new run starting");
-        let mut time;
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
         while self.time() <= duration {
-            if let Some(_event) = self.transition() {
+            self.transition();
+            if self.last_event().is_some() {
                 labels.clear();
                 labels.extend(self.labels());
                 oracle.update_state(&labels);
             } else {
                 self.time_tick();
-                time = self.time();
-                oracle.update_time(time);
+                oracle.update_time(self.time());
             }
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
@@ -106,23 +108,20 @@ pub trait TransitionSystem {
     where
         T: Tracer<Self::Event>,
     {
-        // let mut current_len = 0;
         trace!("new run starting");
-        let mut time;
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
         tracer.init();
         while self.time() <= duration {
-            if let Some(event) = self.transition() {
+            self.transition();
+            if let Some(event) = self.last_event() {
+                tracer.trace(event, self.time(), self.state());
                 labels.clear();
                 labels.extend(self.labels());
-                time = self.time();
-                tracer.trace(&event, time, self.state());
                 oracle.update_state(&labels);
             } else {
                 self.time_tick();
-                time = self.time();
-                oracle.update_time(time);
+                oracle.update_time(self.time());
             }
         }
         trace!("run complete");
