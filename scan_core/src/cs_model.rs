@@ -1,8 +1,7 @@
-use crate::TransitionSystemGenerator;
 use crate::channel_system::{
     Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
-use crate::{DummyRng, Expression, Time, Val, transition_system::TransitionSystem};
+use crate::{BooleanExpr, DummyRng, Time, TransitionSystem, TransitionSystemGenerator, Val};
 
 /// An atomic variable for [`crate::Pmtl`] formulae.
 #[derive(Debug, Clone)]
@@ -17,8 +16,9 @@ pub enum Atom {
 #[derive(Debug, Clone)]
 pub struct CsModel {
     cs: ChannelSystem,
-    ports: Vec<Vec<Option<Val>>>,
-    predicates: Vec<Expression<Atom>>,
+    ports: Vec<(Channel, usize)>,
+    vals: Vec<Val>,
+    predicates: Vec<BooleanExpr<Atom>>,
 }
 
 impl CsModel {
@@ -27,11 +27,8 @@ impl CsModel {
         // TODO: Check predicates are Boolean expressions and that conversion does not fail
         let cs = cs.build();
         Self {
-            ports: cs
-                .channels()
-                .iter()
-                .map(|(types, _)| vec![None; types.len()])
-                .collect(),
+            ports: Vec::new(),
+            vals: Vec::new(),
             cs,
             predicates: Vec::new(),
         }
@@ -39,24 +36,42 @@ impl CsModel {
 
     /// Adds a new port to the [`CsModel`],
     /// which is given by an [`Channel`] and a default [`Val`] value.
-    pub fn add_port(&mut self, channel: Channel, idx: usize, default: Val) {
+    pub fn add_port(&mut self, channel: Channel, idx: usize, value: Val) {
         // TODO FIXME: error handling and type checking.
-        self.ports[u16::from(channel) as usize][idx] = Some(default);
+        // Keep ports list ordered
+        if let Some(index) = self.ports.binary_search(&(channel, idx)).err() {
+            self.ports.insert(index, (channel, idx));
+            self.vals.insert(index, value);
+        }
+        assert!(self.ports.is_sorted());
+        assert_eq!(self.ports.len(), self.vals.len());
     }
 
     /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
-    pub fn add_predicate(&mut self, predicate: Expression<Atom>) -> usize {
+    pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) -> usize {
         let _ = predicate.eval(
             &|port| match port {
-                Atom::State(channel, idx) => self.ports[u16::from(*channel) as usize][*idx]
-                    .expect("port must have been initialized"),
+                Atom::State(channel, idx) => {
+                    let index = self
+                        .ports
+                        .binary_search(&(*channel, *idx))
+                        .expect("port must have been initialized");
+                    self.vals[index]
+                }
                 Atom::Event(_event) => Val::Boolean(false),
             },
             &mut DummyRng,
         );
         self.predicates.push(predicate);
         self.predicates.len() - 1
+    }
+
+    /// Shrink ports storage to optimize space use.
+    /// To be called after having added all ports.
+    pub fn shrink(&mut self) {
+        self.ports.shrink_to_fit();
+        self.vals.shrink_to_fit();
     }
 }
 
@@ -67,9 +82,12 @@ impl TransitionSystemGenerator for CsModel {
         Self: 'a;
 
     fn generate<'a>(&'a self) -> Self::Ts<'a> {
+        let mut vals = self.vals.clone();
+        vals.shrink_to_fit();
         CsModelRun {
             cs: self.cs.new_instance(),
-            ports: self.ports.clone(),
+            ports: &self.ports,
+            vals,
             predicates: &self.predicates,
             last_event: None,
         }
@@ -83,32 +101,34 @@ impl TransitionSystemGenerator for CsModel {
 #[derive(Debug, Clone)]
 pub struct CsModelRun<'def> {
     cs: ChannelSystemRun<'def>,
-    ports: Vec<Vec<Option<Val>>>,
-    // TODO: predicates should not use rng
-    predicates: &'def [Expression<Atom>],
+    ports: &'def [(Channel, usize)],
+    vals: Vec<Val>,
+    predicates: &'def [BooleanExpr<Atom>],
     last_event: Option<Event>,
 }
 
 impl<'def> TransitionSystem for CsModelRun<'def> {
     type Event = Event;
 
-    fn transition(&mut self) -> Option<Event> {
-        let event = self.cs.montecarlo_execution();
-        if let Some(ref event) = event
+    fn transition(&mut self) {
+        self.last_event = self.cs.montecarlo_execution();
+        if let Some(ref event) = self.last_event
             && let EventType::Send(ref vals) = event.event_type
         {
-            let port = self
-                .ports
-                .get_mut(u16::from(event.channel) as usize)
-                .expect("port must exist");
-            port.iter_mut().zip(vals).for_each(|(p, &v)| {
-                if p.is_some() {
-                    *p = Some(v)
-                }
-            });
+            let start = self.ports.partition_point(|&(ch, _)| ch < event.channel);
+            self.ports[start..]
+                .iter()
+                .take_while(|(ch, _)| *ch == event.channel)
+                .zip(&mut self.vals[start..])
+                .for_each(|((_, i), val)| {
+                    *val = vals[*i];
+                });
         }
-        self.last_event = event.clone();
-        event
+    }
+
+    #[inline]
+    fn last_event(&self) -> Option<&Self::Event> {
+        self.last_event.as_ref()
     }
 
     #[inline]
@@ -123,26 +143,26 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
 
     fn labels(&self) -> impl Iterator<Item = bool> {
         self.predicates.iter().map(|prop| {
-            if let Val::Boolean(b) = prop.eval(
+            prop.eval(
                 &|port| match port {
-                    Atom::State(channel, idx) => self.ports[u16::from(*channel) as usize][*idx]
-                        .expect("port must exist and be initialized"),
+                    &Atom::State(channel, idx) => {
+                        let port_idx = self
+                            .ports
+                            .binary_search(&(channel, idx))
+                            .expect("port must exist and be initialized");
+                        self.vals[port_idx]
+                    }
                     Atom::Event(event) => {
                         Val::Boolean(self.last_event.as_ref().is_some_and(|e| e == event))
                     }
                 },
                 &mut DummyRng,
-            ) {
-                b
-            } else {
-                // FIXME: handle error or guarantee it won't happen
-                panic!("predicates should evaluate to boolean values")
-            }
+            )
         })
     }
 
     #[inline]
     fn state(&self) -> impl Iterator<Item = Val> {
-        self.ports.iter().flat_map(|p| p.iter().filter_map(|p| *p))
+        self.vals.iter().copied()
     }
 }
