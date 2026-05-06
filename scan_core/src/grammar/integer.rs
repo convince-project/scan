@@ -56,7 +56,7 @@ where
 
 impl<V> IntegerExpr<V>
 where
-    V: Clone,
+    V: Copy,
 {
     /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
@@ -88,11 +88,11 @@ where
     /// - If a variable included in the evaluation is not of [`Integer`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> Integer {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Integer {
         match self {
             IntegerExpr::Const(int) => *int,
             IntegerExpr::Var(var) => {
-                if let Val::Integer(int) = vars(var) {
+                if let Val::Integer(int) = vars(*var) {
                     int
                 } else {
                     panic!("type mismatch: expected natural variable")
@@ -180,7 +180,7 @@ where
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
             IntegerExpr::Const(_) => Ok(()),
-            IntegerExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Integer))
+            IntegerExpr::Var(v) => matches!(vars(*v), Some(Type::Integer))
                 .then_some(())
                 .ok_or(TypeError::TypeMismatch),
             IntegerExpr::Nat(natural_expr) => natural_expr.context(vars),

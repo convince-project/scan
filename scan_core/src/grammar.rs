@@ -187,9 +187,18 @@ where
     }
 }
 
+impl<V> From<(V, Type)> for Expression<V>
+where
+    V: Copy,
+{
+    fn from((var, r#type): (V, Type)) -> Self {
+        Expression::from_var(var, r#type)
+    }
+}
+
 impl<V> Expression<V>
 where
-    V: Clone,
+    V: Copy,
 {
     /// Computes the type of an expression.
     ///
@@ -208,7 +217,7 @@ where
     ///
     /// Will assume the expression (with the variable assignment) is well-typed,
     /// and may panic if producing an unexpected type.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> Val {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Val {
         match self {
             Expression::Boolean(boolean_expr) => Val::Boolean(boolean_expr.eval(vars, rng)),
             Expression::Natural(natural_expr) => Val::Natural(natural_expr.eval(vars, rng)),

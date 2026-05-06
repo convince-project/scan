@@ -54,7 +54,7 @@ where
 
 impl<V> FloatExpr<V>
 where
-    V: Clone,
+    V: Copy,
 {
     /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
@@ -87,11 +87,11 @@ where
     /// - If a variable included in the evaluation is not of [`Float`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> Float {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Float {
         match self {
             FloatExpr::Const(float) => *float,
             FloatExpr::Var(var) => {
-                if let Val::Float(float) = vars(var) {
+                if let Val::Float(float) = vars(*var) {
                     float
                 } else {
                     panic!("type mismatch: expected float variable")
@@ -163,7 +163,7 @@ where
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
             FloatExpr::Const(_) => Ok(()),
-            FloatExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Float))
+            FloatExpr::Var(v) => matches!(vars(*v), Some(Type::Float))
                 .then_some(())
                 .ok_or(TypeError::TypeMismatch),
             FloatExpr::Nat(natural_expr) => natural_expr.context(vars),
