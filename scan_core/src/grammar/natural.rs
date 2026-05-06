@@ -52,7 +52,7 @@ where
 
 impl<V> NaturalExpr<V>
 where
-    V: Clone,
+    V: Copy,
 {
     /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
@@ -82,11 +82,11 @@ where
     /// - If a variable included in the evaluation is not of [`Natural`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> Natural {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Natural {
         match self {
             NaturalExpr::Const(nat) => *nat,
             NaturalExpr::Var(var) => {
-                if let Val::Natural(nat) = vars(var) {
+                if let Val::Natural(nat) = vars(*var) {
                     nat
                 } else {
                     panic!("type mismatch: expected natural variable")
@@ -162,7 +162,7 @@ where
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
             NaturalExpr::Const(_) => Ok(()),
-            NaturalExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Natural))
+            NaturalExpr::Var(v) => matches!(vars(*v), Some(Type::Natural))
                 .then_some(())
                 .ok_or(TypeError::TypeMismatch),
             NaturalExpr::Rand(exprs) | NaturalExpr::Div(exprs) | NaturalExpr::Rem(exprs) => {

@@ -74,7 +74,7 @@ where
 
 impl<V> BooleanExpr<V>
 where
-    V: Clone,
+    V: Copy,
 {
     /// Returns `true` if the expression is constant, i.e., it contains no variables, and `false` otherwise.
     pub fn is_constant(&self) -> bool {
@@ -124,11 +124,11 @@ where
     ///
     /// - If a variable is not included in the evaluation;
     /// - If a variable included in the evaluation is not of Boolean type.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(&V) -> Val, rng: &mut R) -> bool {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> bool {
         match self {
             BooleanExpr::Const(b) => *b,
             BooleanExpr::Var(var) => {
-                if let Val::Boolean(b) = vars(var) {
+                if let Val::Boolean(b) = vars(*var) {
                     b
                 } else {
                     panic!("type mismatch: expected boolean variable")
@@ -282,7 +282,7 @@ where
     pub(crate) fn context(&self, vars: &dyn Fn(V) -> Option<Type>) -> Result<(), TypeError> {
         match self {
             BooleanExpr::Const(_) => Ok(()),
-            BooleanExpr::Var(v) => matches!(vars(v.clone()), Some(Type::Boolean))
+            BooleanExpr::Var(v) => matches!(vars(*v), Some(Type::Boolean))
                 .then_some(())
                 .ok_or(TypeError::TypeMismatch),
             BooleanExpr::Rand(float_expr) => float_expr.context(vars),

@@ -686,7 +686,7 @@ impl<'def> ProgramGraphRun<'def> {
     #[inline]
     pub(crate) fn eval(&self, expr: &Expression<Var>) -> Val {
         expr.eval(
-            &|v: &Var| *self.vars.get(v.0 as usize).unwrap(),
+            &|v: Var| *self.vars.get(v.0 as usize).unwrap(),
             &mut DummyRng,
         )
     }
