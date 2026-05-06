@@ -328,6 +328,10 @@ impl ChannelSystem {
     ///
     /// See also [`ProgramGraph::new_instance`].
     pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
+        let pgs = self.program_graphs.len() as u16;
+        let mut pg_list = Vec::from_iter((0..pgs).map(PgId));
+        pg_list.shrink_to_fit();
+
         ChannelSystemRun {
             rng: rand::make_rng(),
             time: 0,
@@ -340,6 +344,7 @@ impl ChannelSystem {
                 })
             })),
             def: self,
+            pg_list,
         }
     }
 
@@ -374,6 +379,7 @@ pub struct ChannelSystemRun<'def> {
     message_queue: Vec<VecDeque<Val>>,
     program_graphs: Vec<ProgramGraphRun<'def>>,
     def: &'def ChannelSystem,
+    pg_list: Vec<PgId>,
 }
 
 impl<'def> ChannelSystemRun<'def> {
@@ -415,12 +421,18 @@ impl<'def> ChannelSystemRun<'def> {
     }
 
     pub(crate) fn montecarlo_execution(&mut self) -> Option<Event> {
-        let pgs = self.program_graphs.len();
-        let mut pg_vec = Vec::from_iter((0..pgs as u16).map(PgId));
         let mut rand1 = SmallRng::from_rng(&mut self.rng);
         let mut rand2 = SmallRng::from_rng(&mut self.rng);
-        while !pg_vec.is_empty() {
-            let pg_id = pg_vec.swap_remove(self.rng.random_range(0..pg_vec.len()));
+        // Setting pgs_left as length resets the queue
+        let mut pgs_left = self.pg_list.len();
+        while pgs_left > 0 {
+            // Select random pg within 0..pgs_left
+            let pg_select = self.rng.random_range(0..pgs_left);
+            let pg_id = self.pg_list[pg_select];
+            // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
+            // Decrease the length of the queue (so that selected element is removed)
+            pgs_left -= 1;
+            self.pg_list.swap(pg_select, pgs_left);
             // Execute randomly chosen transitions on the picked PG until an event is generated,
             // or no more transition is possible
             if self.program_graphs[pg_id.0 as usize].current_states().len() == 1 {
