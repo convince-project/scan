@@ -77,7 +77,9 @@ pub trait TransitionSystem {
     ) -> RunOutcome {
         trace!("new run starting");
         // reuse vector to avoid allocations
-        let mut labels = Vec::new();
+        let mut labels = Vec::from_iter(self.labels());
+        // Initialize oracle with TS initial state
+        oracle.update_state(&labels);
         while self.time() <= duration {
             self.transition();
             if self.last_event().is_some() {
