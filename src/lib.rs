@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{CsModel, MtlOracle, Oracle, PgModel, PmtlOracle, Scan, TransitionSystemGenerator};
+use scan_core::{CsModel, MtlOracle, Oracle, PmtlOracle, Scan, TransitionSystemGenerator};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -248,7 +248,7 @@ impl Cli {
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
-                run_verification::<PgModel, MtlOracle>(model, &args, progress, json, &scan)
+                run_verification::<CsModel, MtlOracle>(model, &args, progress, json, &scan)
                     .print(json);
             }
             Commands::Validate => {
@@ -260,7 +260,7 @@ impl Cli {
                 let (scan, jani_model) = load(&self.model, &[])?;
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
-                args.trace::<PgModel, MtlOracle, _>(&scan, tracer);
+                args.trace::<CsModel, MtlOracle, _>(&scan, tracer);
                 println!("trace computation for model '{model}' completed");
             }
         }

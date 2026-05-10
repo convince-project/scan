@@ -4,27 +4,26 @@ use crate::channel_system::{
 use crate::{BooleanExpr, DummyRng, Time, TransitionSystem, TransitionSystemGenerator, Val};
 
 /// An atomic variable for [`crate::Pmtl`] formulae.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Atom {
     /// A predicate.
     State(Channel, usize),
-    /// An event.
-    Event(Event),
+    /// A send event.
+    Event(Channel),
 }
 
 /// A definition type that instances new [`CsModelRun`].
 #[derive(Debug, Clone)]
 pub struct CsModel {
     cs: ChannelSystem,
-    ports: Vec<(Channel, usize)>,
-    vals: Vec<Val>,
+    ports: Vec<Channel>,
+    vals: Vec<Vec<Val>>,
     predicates: Vec<BooleanExpr<Atom>>,
 }
 
 impl CsModel {
     /// Creates a new [`CsModel`] from a [`ChannelSystemBuilder`].
     pub fn new(cs: ChannelSystemBuilder) -> Self {
-        // TODO: Check predicates are Boolean expressions and that conversion does not fail
         let cs = cs.build();
         Self {
             ports: Vec::new(),
@@ -36,11 +35,15 @@ impl CsModel {
 
     /// Adds a new port to the [`CsModel`],
     /// which is given by an [`Channel`] and a default [`Val`] value.
-    pub fn add_port(&mut self, channel: Channel, idx: usize, value: Val) {
+    pub fn add_port(&mut self, channel: Channel, mut value: Vec<Val>) {
+        let len = self.cs.channels()[u16::from(channel) as usize].0.len();
+        assert_eq!(len, value.len());
         // TODO FIXME: error handling and type checking.
         // Keep ports list ordered
-        if let Some(index) = self.ports.binary_search(&(channel, idx)).err() {
-            self.ports.insert(index, (channel, idx));
+        // Don't insert duplicated ports
+        if let Err(index) = self.ports.binary_search(&channel) {
+            self.ports.insert(index, channel);
+            value.shrink_to_fit();
             self.vals.insert(index, value);
         }
         assert!(self.ports.is_sorted());
@@ -49,22 +52,22 @@ impl CsModel {
 
     /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
-    pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) -> usize {
+    pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) {
+        // Make sure predicate type-checks
         let _ = predicate.eval(
             &|port| match port {
                 Atom::State(channel, idx) => {
                     let index = self
                         .ports
-                        .binary_search(&(*channel, *idx))
+                        .binary_search(&channel)
                         .expect("port must have been initialized");
-                    self.vals[index]
+                    self.vals[index][idx]
                 }
-                Atom::Event(_event) => Val::Boolean(false),
+                Atom::Event(..) => Val::Boolean(false),
             },
             &mut DummyRng,
         );
         self.predicates.push(predicate);
-        self.predicates.len() - 1
     }
 
     /// Shrink ports storage to optimize space use.
@@ -101,8 +104,8 @@ impl TransitionSystemGenerator for CsModel {
 #[derive(Debug, Clone)]
 pub struct CsModelRun<'def> {
     cs: ChannelSystemRun<'def>,
-    ports: &'def [(Channel, usize)],
-    vals: Vec<Val>,
+    ports: &'def [Channel],
+    vals: Vec<Vec<Val>>,
     predicates: &'def [BooleanExpr<Atom>],
     last_event: Option<Event>,
 }
@@ -114,15 +117,12 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
         self.last_event = self.cs.montecarlo_execution();
         if let Some(ref event) = self.last_event
             && let EventType::Send(ref vals) = event.event_type
+            && let Ok(index) = self.ports.binary_search(&event.channel)
         {
-            let start = self.ports.partition_point(|&(ch, _)| ch < event.channel);
-            self.ports[start..]
-                .iter()
-                .take_while(|(ch, _)| *ch == event.channel)
-                .zip(&mut self.vals[start..])
-                .for_each(|((_, i), val)| {
-                    *val = vals[*i];
-                });
+            // Since we have to update old values,
+            // the vectors are already allocated and their is always the same.
+            // Copying from slice should be faster than cloning.
+            self.vals[index].copy_from_slice(vals);
         }
     }
 
@@ -145,15 +145,17 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
         self.predicates.iter().map(|prop| {
             prop.eval(
                 &|port| match port {
-                    &Atom::State(channel, idx) => {
+                    Atom::State(channel, idx) => {
                         let port_idx = self
                             .ports
-                            .binary_search(&(channel, idx))
+                            .binary_search(&channel)
                             .expect("port must exist and be initialized");
-                        self.vals[port_idx]
+                        self.vals[port_idx][idx]
                     }
-                    Atom::Event(event) => {
-                        Val::Boolean(self.last_event.as_ref().is_some_and(|e| e == event))
+                    Atom::Event(channel) => {
+                        Val::Boolean(self.last_event.as_ref().is_some_and(|e| {
+                            e.channel == channel && matches!(e.event_type, EventType::Send(..))
+                        }))
                     }
                 },
                 &mut DummyRng,
@@ -163,6 +165,6 @@ impl<'def> TransitionSystem for CsModelRun<'def> {
 
     #[inline]
     fn state(&self) -> impl Iterator<Item = Val> {
-        self.vals.iter().copied()
+        self.vals.iter().flatten().copied()
     }
 }
