@@ -1,5 +1,8 @@
 use super::JaniModelData;
-use scan_core::{RunOutcome, Time, Tracer, Val, program_graph::Action};
+use scan_core::{
+    RunOutcome, Time, Tracer, Val,
+    channel_system::{Action, Event},
+};
 use std::{
     env::current_dir,
     fs::{File, create_dir, create_dir_all, exists, remove_file, rename},
@@ -66,7 +69,7 @@ impl Clone for TracePrinter {
     }
 }
 
-impl Tracer<Action> for TracePrinter {
+impl Tracer<Event> for TracePrinter {
     fn init(&mut self) {
         let idx = self
             .index
@@ -92,9 +95,10 @@ impl Tracer<Action> for TracePrinter {
         self.writer = Some(writer);
     }
 
-    fn trace<I: IntoIterator<Item = Val>>(&mut self, action: &Action, time: Time, ports: I) {
+    fn trace<I: IntoIterator<Item = Val>>(&mut self, event: &Event, time: Time, ports: I) {
         let time = time.to_string();
-        let action_name = self.model.actions.get(action).cloned().unwrap_or_default();
+        let action_name = String::from("TODO");
+        // self.model.actions.get(event).cloned().unwrap_or_default();
 
         self.writer
             .as_mut()

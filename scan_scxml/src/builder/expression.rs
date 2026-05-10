@@ -236,25 +236,27 @@ pub(super) fn infer_type(
     }
 }
 
-// WARN: vars and params have the same type so they could be easily swapped by mistake when calling the function.
-pub(super) fn expression<V: Clone>(
+pub(super) fn expression<V, E>(
     expr: &boa_ast::Expression,
     interner: &Interner,
-    vars: &HashMap<String, (OmgType, Vec<(V, Type)>)>,
+    vars: &HashMap<String, (OmgType, Vec<E>)>,
     expr_type: Option<&OmgType>,
     omg_types: &mut OmgTypes,
-) -> anyhow::Result<Vec<Expression<V>>> {
+) -> anyhow::Result<Vec<Expression<V>>>
+where
+    V: Copy,
+    E: Clone + Into<Expression<V>>,
+{
     let expr = match expr {
         boa_ast::Expression::This(_this) => todo!(),
         boa_ast::Expression::Identifier(ident) => {
             let ident = ident.to_interned_string(interner);
             vars.get(&ident)
-                .map(|(_, vars)| {
-                    vars.iter()
-                        .map(|(var, r#type)| Expression::from_var(var.clone(), *r#type))
-                        .collect::<Vec<Expression<V>>>()
-                })
                 .ok_or(anyhow!("unknown identifier: {ident}"))?
+                .1
+                .iter()
+                .map(|t| t.clone().into())
+                .collect()
         }
         boa_ast::Expression::Literal(lit) => {
             use boa_ast::expression::literal::LiteralKind;

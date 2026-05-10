@@ -9,24 +9,26 @@ repository = "https://github.com/convince-project/scan"
 readme = "README.md"
 license = "Apache-2.0"
 keywords = ["verification", "model-checking"]
-categories = ["compilers", "concurrency", "parser-implementations", "science::robotics", "simulation"]
-exclude = [
-    "scan_book/*",
-    ".github/*"
+categories = [
+  "compilers",
+  "concurrency",
+  "parser-implementations",
+  "science::robotics",
+  "simulation"
 ]
+exclude = ["scan_book/*", ".github/*"]
 
 [lib]
-name = "scan"     # The name of the target.
-crate-type = ["lib"]   # The crate types to generate.
+name = "scan"  # The name of the target.
+crate-type = ["lib"]  # The crate types to generate.
 
 [[bin]]
-name = "scan"     # The name of the target.
+name = "scan"  # The name of the target.
 path = "src/main.rs"
 
 [profile.release]
 lto = true
 codegen-units = 1
-# debug = true # only to run profiling
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]

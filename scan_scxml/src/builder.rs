@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Clone)]
 pub struct ScxmlModel {
     // u16 here represents PgId
+    // TODO: turn into indexed Vec<String>
     pub fsm_names: HashMap<u16, String>,
     // usize here represents event index
     pub parameters: HashMap<Channel, (PgId, PgId, usize)>,
@@ -68,7 +69,8 @@ pub struct ModelBuilder {
     guarantees: Vec<(String, Pmtl<usize>)>,
     assumes: Vec<(String, Pmtl<usize>)>,
     predicates: Vec<BooleanExpr<Atom>>,
-    ports: HashMap<String, (OmgType, Vec<(Atom, Val)>)>,
+    ports: HashMap<String, (OmgType, Vec<Expression<Atom>>)>,
+    atoms: Vec<(Channel, Vec<Val>)>,
     // extra data
     int_queues: HashSet<Channel>,
 }
@@ -1266,7 +1268,7 @@ impl ModelBuilder {
                         )
                     })?
                     .clone();
-                let init = expression::<Var>(
+                let init = expression::<Var, Expression<Var>>(
                     init,
                     &parser.interner,
                     &HashMap::new(),
@@ -1292,34 +1294,86 @@ impl ModelBuilder {
                         })?,
                         init.iter()
                             .enumerate()
-                            .map(|(param_idx, &init)| {
-                                (Atom::State(*channel, param_start_idx + param_idx), init)
+                            .map(|(param_idx, init)| {
+                                Expression::from_var(
+                                    Atom::State(*channel, param_start_idx + param_idx),
+                                    init.r#type(),
+                                )
                             })
                             .collect(),
                     ),
                 );
+
+                let index = match self.atoms.binary_search_by_key(channel, |(ch, _)| *ch) {
+                    Ok(index) => index,
+                    Err(index) => {
+                        let default = event_builder
+                            .params
+                            .values()
+                            .flat_map(|omg_type| {
+                                omg_type
+                                    .as_ref()
+                                    .ok_or_else(|| {
+                                        anyhow!(
+                                            "type of param {param} for port {port_id} not found"
+                                        )
+                                    })
+                                    .expect("omg type")
+                                    .to_scan_types(&parser.types)
+                                    .expect("omg type to scan type")
+                                    .into_iter()
+                                    .map(|t| t.default_value())
+                            })
+                            .collect::<Vec<Val>>();
+                        self.atoms.insert(index, (*channel, default));
+                        index
+                    }
+                };
+                init.iter().enumerate().for_each(|(param_idx, init)| {
+                    self.atoms[index].1[param_start_idx + param_idx] = *init
+                });
             } else {
-                let channel = target_builder.ext_queue;
-                self.ports.insert(
-                    port_id.to_owned(),
-                    (
-                        OmgType::Base(OmgBaseType::Boolean),
-                        vec![(
-                            Atom::Event(Event {
-                                pg_id: origin,
-                                channel,
-                                event_type: EventType::Send(
-                                    vec![
-                                        Val::Natural(event_id as Natural),
-                                        Val::Natural(u16::from(origin) as Natural),
-                                    ]
-                                    .into(),
+                // If the event has params,
+                // we consider the receiving of a message in the dedicated param channel;
+                // otherwise, we consider every event on the external queue and test for the event/origin to match.
+                if let Some(&channel) = self.parameter_channels.get(&(origin, target, event_id)) {
+                    self.ports.insert(
+                        port_id.to_owned(),
+                        (
+                            OmgType::Base(OmgBaseType::Boolean),
+                            vec![Expression::Boolean(BooleanExpr::Var(Atom::Event(channel)))],
+                        ),
+                    );
+                } else {
+                    let ext_queue = target_builder.ext_queue;
+                    self.ports.insert(
+                        port_id.to_owned(),
+                        (
+                            OmgType::Base(OmgBaseType::Boolean),
+                            vec![Expression::Boolean(BooleanExpr::And(vec![
+                                BooleanExpr::Var(Atom::Event(ext_queue)),
+                                BooleanExpr::NatEqual(
+                                    NaturalExpr::Var(Atom::State(ext_queue, 0)),
+                                    NaturalExpr::Const(event_id as Natural),
                                 ),
-                            }),
-                            Val::Boolean(false),
-                        )],
-                    ),
-                );
+                                BooleanExpr::NatEqual(
+                                    NaturalExpr::Var(Atom::State(ext_queue, 1)),
+                                    NaturalExpr::Const(u16::from(origin) as Natural),
+                                ),
+                            ]))],
+                        ),
+                    );
+                    // Default values represent a non-existing event/origin
+                    if let Err(index) = self.atoms.binary_search_by_key(&ext_queue, |(ch, _)| *ch) {
+                        self.atoms.insert(
+                            index,
+                            (
+                                ext_queue,
+                                vec![Val::from(Natural::MAX), Val::from(Natural::MAX)],
+                            ),
+                        );
+                    }
+                }
             }
         }
         Ok(())
@@ -1335,22 +1389,7 @@ impl ModelBuilder {
             let predicate = expression(
                 predicate,
                 &parser.interner,
-                &self
-                    .ports
-                    .iter()
-                    .map(|(name, (omg_type, atoms))| {
-                        (
-                            name.clone(),
-                            (
-                                omg_type.clone(),
-                                atoms
-                                    .iter()
-                                    .map(|(atom, val)| (atom.clone(), val.r#type()))
-                                    .collect(),
-                            ),
-                        )
-                    })
-                    .collect(),
+                &self.ports,
                 Some(&OmgType::Base(OmgBaseType::Boolean)),
                 &mut parser.types,
             )
@@ -1379,34 +1418,39 @@ impl ModelBuilder {
     fn build_model(self, parser: Parser) -> (CsModel, PmtlOracle, ScxmlModel) {
         let mut model = CsModel::new(self.cs);
         let mut ports = Vec::new();
-        for (port_name, (_omg_type, atoms)) in self.ports {
-            // TODO FIXME handle error.
-            // NOTE: all atoms in the same port must have the same channel
-            if let Some((Atom::State(channel, _), _)) = atoms.first().cloned() {
-                let (param_idxs, types): (Vec<usize>, _) = atoms
-                    .into_iter()
-                    .map(|(atom, init)| {
-                        if let Atom::State(c, param_idx) = atom {
-                            assert_eq!(channel, c);
-                            model.add_port(channel, param_idx, init);
-                            (param_idx, init.r#type())
-                        } else {
-                            panic!("all atoms are of state type")
-                        }
-                    })
-                    .unzip();
-                ports.push((channel, param_idxs, port_name, _omg_type, types));
-            }
+        for (channel, init) in self.atoms {
+            model.add_port(channel, init);
         }
+        for (port_name, (omg_type, exprs)) in self.ports {
+            ports.push((
+                port_name,
+                omg_type,
+                exprs.iter().map(|expr| expr.r#type()).collect(),
+            ));
+        }
+        //         let (param_idxs, types): (Vec<usize>, _) = init
+        //             .into_iter()
+        //             .map(|(atom, init)| {
+        //                 if let Atom::State(c, param_idx) = atom {
+        //                     assert_eq!(channel, c);
+        //                     model.add_port(channel, param_idx, init);
+        //                     (param_idx, init.r#type())
+        //                 } else {
+        //                     panic!("all atoms are of state type")
+        //                 }
+        //             })
+        //             .unzip();
+        //     }
+        // }
         // Ports need to be sorted by channel or will not match state iterator
-        ports.sort_by_key(|(c, idxs, ..)| (*c, *idxs.first().expect("at least a value")));
-        let ports = ports
-            .into_iter()
-            .map(|(_, _, name, omg_type, types)| (name, omg_type, types))
-            .collect();
+        // ports.sort_by_key(|(c, idxs, ..)| (*c, *idxs.first().expect("at least a value")));
+        // let ports = ports
+        //     .into_iter()
+        //     .map(|(_, _, name, omg_type, types)| (name, omg_type, types))
+        //     .collect();
         for pred_expr in self.predicates {
             // TODO FIXME handle error.
-            let _id = model.add_predicate(pred_expr);
+            model.add_predicate(pred_expr);
         }
         // Shrink model storage (just an optimization);
         model.shrink();
