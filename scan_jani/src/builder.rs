@@ -30,7 +30,7 @@ pub(crate) fn build(
 
 #[derive(Default, Debug, Clone)]
 struct JaniBuilder {
-    system_actions: HashMap<String, channel_system::Action>,
+    system_actions: HashMap<String, Action>,
     // Sync actions (same order as syncs in model)
     sync_actions: Vec<channel_system::Action>,
     // Associating name to variable, initial value and type.
@@ -44,7 +44,7 @@ struct JaniBuilder {
 #[derive(Debug, Clone)]
 struct AutomatonBuilder {
     // tracks locations and their "idle" side-location
-    locations: HashMap<String, (channel_system::Location, channel_system::Location)>,
+    locations: HashMap<String, (Location, Location)>,
     local_vars: HashMap<String, (Var, Val, Type)>,
     // assign action name -> cs base action + destination actions
     dest_actions: HashMap<
@@ -72,7 +72,6 @@ impl AutomatonBuilder {
 }
 
 impl JaniBuilder {
-    const RNG: &str = "__RNG__";
     const SILENT: &str = "__SILENT__";
 
     pub(crate) fn build(
@@ -98,7 +97,7 @@ impl JaniBuilder {
                 .initial_value
                 .as_ref()
                 .and_then(|expr| {
-                    self.build_expression(expr, Some(var_type), &self.global_vars, None)
+                    self.build_expression(expr, Some(var_type), &self.global_vars)
                         .ok()
                 })
                 .unwrap_or_else(|| CsExpression::from(var_type.default_value()));
@@ -200,17 +199,6 @@ impl JaniBuilder {
             let sync_action = cs.new_action(pg_id).expect("new action");
             self.sync_actions.push(sync_action);
 
-            // Sync actions initiate a transition so they need to reset transient variables
-            for var_decl in jani_model
-                .variables
-                .iter()
-                .filter(|var_decl| var_decl.transient)
-            {
-                let (var, init, _) = self.global_vars.get(&var_decl.name).expect("variable");
-                cs.add_effect(pg_id, sync_action, *var, CsExpression::from(*init))
-                    .expect("effect");
-            }
-
             // elements unaffected by sync must ignore the sync action in every location
             // by moving to idle location
             for (element_idx, (element, _)) in jani_model
@@ -246,20 +234,6 @@ impl JaniBuilder {
                     cs.add_transition(pg_id, loc, sync_action, idle_loc, None)
                         .expect("add transition");
                 }
-
-                // Sync actions initiate a transition so they need to reset transient variables
-                for var_decl in automaton
-                    .variables
-                    .iter()
-                    .filter(|var_decl| var_decl.transient)
-                {
-                    let (var, init, _) = automaton_builder
-                        .local_vars
-                        .get(&var_decl.name)
-                        .expect("variable");
-                    cs.add_effect(pg_id, sync_action, *var, CsExpression::from(*init))
-                        .expect("effect");
-                }
             }
 
             // For every element involved in the sync action,
@@ -280,17 +254,16 @@ impl JaniBuilder {
                     .find(|aut| aut.name == element.automaton)
                     .ok_or_else(|| anyhow!("missing automaton {}", element.automaton))?;
 
-                let automaton_builder_rng = self
+                let automaton_builder = self
                     .automaton_builders
                     .get(element_idx)
-                    .expect("automaton builder")
-                    .rng;
+                    .expect("automaton builder");
 
                 // Sync actions randomize automaton's RNG
                 cs.add_effect(
                     pg_id,
                     sync_action,
-                    automaton_builder_rng,
+                    automaton_builder.rng,
                     CsExpression::Float(FloatExpr::Rand(Box::new((
                         FloatExpr::from(0.),
                         FloatExpr::from(1.),
@@ -319,6 +292,32 @@ impl JaniBuilder {
                             )
                         })?;
 
+                    // Sync actions initiate a transition so they need to reset transient variables
+                    // WARN: We assume that no other automaton is setting the same transient global variables,
+                    // so that resetting all of them at the level of sync action is consistent with expected behavior.
+                    for transient in &automaton
+                        .locations
+                        .iter()
+                        .find(|loc| loc.name == edge.location)
+                        .ok_or_else(|| anyhow!("edge location {} not found", edge.location))?
+                        .transient_values
+                    {
+                        let (var, _init, r#type) = automaton_builder
+                            .local_vars
+                            .get(&transient.r#ref)
+                            .or_else(|| self.global_vars.get(&transient.r#ref))
+                            .ok_or_else(|| {
+                                anyhow!("transient value {} not found", transient.r#ref)
+                            })?;
+                        let effect = self.build_expression(
+                            &transient.value,
+                            Some(*r#type),
+                            &automaton_builder.local_vars,
+                        )?;
+                        cs.add_effect(pg_id, sync_action, *var, effect)
+                            .expect("set transient value");
+                    }
+
                     // Transition to edge location
                     let edge_location = cs.new_location(pg_id).expect("new location");
                     let guard = edge
@@ -329,8 +328,6 @@ impl JaniBuilder {
                                 &guard.exp,
                                 Some(Type::Boolean),
                                 &automaton_builder.local_vars,
-                                // guards should not use rand (or have effects at all)
-                                None,
                             )
                             .and_then(|guard| {
                                 if let CsExpression::Boolean(guard) = guard {
@@ -392,7 +389,6 @@ impl JaniBuilder {
                                     &assignment.value,
                                     Some(*r#type),
                                     &automaton_builder.local_vars,
-                                    Some(automaton_builder.rng),
                                 )
                                 .with_context(|| {
                                     format!(
@@ -405,14 +401,15 @@ impl JaniBuilder {
                         }
 
                         // dest actions need to also set transient variables of destination
-                        let location = automaton
+                        for transient in &automaton
                             .locations
                             .iter()
                             .find(|loc| loc.name == dest.location)
                             .ok_or_else(|| {
                                 anyhow!("transition destination {} not found", dest.location)
-                            })?;
-                        for transient in &location.transient_values {
+                            })?
+                            .transient_values
+                        {
                             let (var, _init, r#type) = automaton_builder
                                 .local_vars
                                 .get(&transient.r#ref)
@@ -424,7 +421,6 @@ impl JaniBuilder {
                                 &transient.value,
                                 Some(*r#type),
                                 &automaton_builder.local_vars,
-                                Some(automaton_builder.rng),
                             )?;
                             cs.add_effect(pg_id, dest_action, *var, effect)
                                 .expect("set transient value");
@@ -437,7 +433,6 @@ impl JaniBuilder {
                                 &prob.exp,
                                 Some(Type::Float),
                                 &automaton_builder.local_vars,
-                                None,
                             )? {
                                 probability = prob;
                             } else {
@@ -583,15 +578,6 @@ impl JaniBuilder {
         // global state port, only one we need
         cs_model.add_port(global_state_channel, global_state_init);
 
-        // jani_model.system.syncs.iter().for_each(|sync| {
-        //     let result = sync.result.as_ref().expect("no silent actions");
-        //     if !self.system_actions.contains_key(result) {
-        //         let action = cs.new_action(pg_id).expect("pg exists");
-        //         let prev = self.system_actions.insert(result.clone(), action);
-        //         assert!(prev.is_none(), "checked by above if condition");
-        //     }
-        // });
-
         // Add properties
         let properties = if properties.is_empty() {
             jani_model
@@ -661,252 +647,6 @@ impl JaniBuilder {
         Ok((cs_model, oracle, data))
     }
 
-    // fn init(&mut self, jani_model: &mut Model) -> anyhow::Result<()> {
-    //     // New initial action sync over all elements
-    //     let sync_initial = Sync {
-    //         synchronise: vec![Some(String::from(Self::INITIAL)); jani_model.system.elements.len()],
-    //         result: Some(String::from(Self::INITIAL)),
-    //         _comment: String::new(),
-    //     };
-    //     jani_model.system.syncs.push(sync_initial);
-
-    //     for automaton in &mut jani_model.automata {
-    //         // New "real" initial location, needed to instantiate automaton's initial locations
-    //         let gen_initial = Location {
-    //             name: String::from(Self::INITIAL),
-    //             transient_values: Vec::new(),
-    //             _comment: String::new(),
-    //         };
-    //         automaton.locations.push(gen_initial);
-
-    //         let init_edge = Edge {
-    //             location: String::from(Self::INITIAL),
-    //             action: Some(String::from(Self::INITIAL)),
-    //             guard: None,
-    //             destinations: automaton
-    //                 .initial_locations
-    //                 .iter()
-    //                 .cloned()
-    //                 .map(|location| Destination {
-    //                     location,
-    //                     probability: None,
-    //                     assignments: Vec::new(),
-    //                     _comment: String::new(),
-    //                 })
-    //                 .collect(),
-    //             _comment: String::new(),
-    //         };
-    //         automaton.edges.push(init_edge);
-
-    //         // Replace initial location
-    //         automaton.initial_locations = vec![String::from(Self::INITIAL)];
-    //     }
-    //     Ok(())
-    // }
-
-    // // An action in JANI does not carry effects,
-    // // so we need to duplicate actions until each one has unique effects.
-    // // The modified model is such that:
-    // //
-    // // - Every action has a unique set of assignments (duplicates actions).
-    // // - Every edge has a unique destination (because destinations are tied to assignments).
-    // // - Probability is encoded in guard
-    // fn normalize(&mut self, jani_model: &mut Model) -> anyhow::Result<()> {
-    //     // index is global so there is no risk of name-clash
-    //     let mut idx = 0;
-    //     let rng = Expression::Identifier(String::from(Self::RNG));
-    //     for automaton in &mut jani_model.automata {
-    //         let mut new_edges = Vec::new();
-    //         for edge in &mut automaton.edges {
-    //             // Avoid silent actions
-    //             if edge.action.is_none() {
-    //                 edge.action = Some(Self::GEN.to_string() + &idx.to_string());
-    //                 idx += 1;
-    //             }
-    //             let edge_action = edge.action.clone().expect("no silent action");
-    //             assert!(!edge_action.is_empty());
-    //             let mut prob: Option<Expression> = None;
-    //             for dest in &mut edge.destinations {
-    //                 // Add probability to guard
-    //                 let mut guard_exp = edge.guard.as_ref().map(|guard| guard.exp.clone());
-    //                 if let Some(ref p) = dest.probability {
-    //                     // First probability case has no lower bound
-    //                     if let Some(ref prob) = prob {
-    //                         let lower_bound = Expression::NumComp {
-    //                             op: NumCompOp::Leq,
-    //                             left: Box::new(prob.clone()),
-    //                             right: Box::new(rng.clone()),
-    //                         };
-    //                         guard_exp = guard_exp
-    //                             .map(|g| Expression::Bool {
-    //                                 op: BoolOp::And,
-    //                                 left: Box::new(lower_bound.clone()),
-    //                                 right: Box::new(g),
-    //                             })
-    //                             .or(Some(lower_bound));
-    //                     }
-    //                     let upper_prob = prob.map_or_else(
-    //                         || p.exp.clone(),
-    //                         |prob| Expression::IntOp {
-    //                             op: parser::IntOp::Plus,
-    //                             left: Box::new(prob),
-    //                             right: Box::new(p.exp.clone()),
-    //                         },
-    //                     );
-    //                     let upper_bound = Expression::NumComp {
-    //                         op: NumCompOp::Less,
-    //                         left: Box::new(rng.clone()),
-    //                         right: Box::new(upper_prob.clone()),
-    //                     };
-    //                     guard_exp = guard_exp
-    //                         .map(|g| Expression::Bool {
-    //                             op: BoolOp::And,
-    //                             left: Box::new(upper_bound.clone()),
-    //                             right: Box::new(g),
-    //                         })
-    //                         .or(Some(upper_bound));
-    //                     // Update accumulated probability
-    //                     prob = Some(upper_prob);
-    //                 } else if let Some(ref prob) = prob {
-    //                     // Last probability could be left implicit
-    //                     let lower_bound = Expression::NumComp {
-    //                         op: NumCompOp::Leq,
-    //                         left: Box::new(prob.clone()),
-    //                         right: Box::new(rng.clone()),
-    //                     };
-    //                     guard_exp = guard_exp
-    //                         .map(|g| Expression::Bool {
-    //                             op: BoolOp::And,
-    //                             left: Box::new(lower_bound.clone()),
-    //                             right: Box::new(g),
-    //                         })
-    //                         .or(Some(lower_bound));
-    //                     // Need to remember this had a probability
-    //                     dest.probability = Some(parser::Probability {
-    //                         exp: Expression::IntOp {
-    //                             op: parser::IntOp::Minus,
-    //                             left: Box::new(Expression::ConstantValue(
-    //                                 parser::ConstantValue::NumberReal(1.),
-    //                             )),
-    //                             right: Box::new(prob.clone()),
-    //                         },
-    //                         _comment: String::new(),
-    //                     });
-    //                 }
-
-    //                 // actions need new unique names (tracking when new name is not necessary is difficult because of transient variables)
-    //                 let action = edge_action.clone() + Self::GEN + &idx.to_string();
-    //                 idx += 1;
-
-    //                 new_edges.push(Edge {
-    //                     location: edge.location.clone(),
-    //                     action: Some(action.clone()),
-    //                     guard: guard_exp.map(|exp| Guard {
-    //                         exp,
-    //                         _comment: String::new(),
-    //                     }),
-    //                     destinations: vec![dest.clone()],
-    //                     _comment: String::new(),
-    //                 });
-
-    //                 // Update syncs with new action (has to synchronise like original one)
-    //                 for e_idx in (0..jani_model.system.elements.len()).filter(|e_idx| {
-    //                     jani_model.system.elements[*e_idx].automaton == automaton.name
-    //                 }) {
-    //                     // add new syncs for newly generated action
-    //                     let to_add = jani_model
-    //                         .system
-    //                         .syncs
-    //                         .iter()
-    //                         .filter(|sync| {
-    //                             sync.synchronise[e_idx]
-    //                                 .as_ref()
-    //                                 .is_some_and(|a| *a == edge_action)
-    //                         })
-    //                         .map(|sync| {
-    //                             let mut synchronise = sync.synchronise.clone();
-    //                             let _ = synchronise[e_idx].insert(action.clone());
-    //                             // Generate new unique result action
-    //                             let result = sync.result.clone().unwrap_or_default()
-    //                                 + Self::GEN
-    //                                 + &idx.to_string();
-    //                             idx += 1;
-    //                             Sync {
-    //                                 synchronise,
-    //                                 result: Some(result),
-    //                                 _comment: String::new(),
-    //                             }
-    //                         })
-    //                         .collect::<Vec<_>>();
-    //                     jani_model.system.syncs.extend(to_add);
-
-    //                     // If original action did not appear in syncs it means that it does not sync between automata.
-    //                     // We still want to keep track of it explicitly.
-    //                     if jani_model.system.syncs.iter().all(|sync| {
-    //                         sync.synchronise[e_idx]
-    //                             .as_ref()
-    //                             .is_none_or(|a| *a != edge_action)
-    //                     }) {
-    //                         let mut synchronise = vec![None; jani_model.system.elements.len()];
-    //                         synchronise[e_idx] = Some(action.clone());
-    //                         // ensure result is unique
-    //                         let result = action.clone() + Self::GEN + &idx.to_string();
-    //                         idx += 1;
-    //                         jani_model.system.syncs.push(Sync {
-    //                             synchronise,
-    //                             result: Some(result),
-    //                             _comment: String::new(),
-    //                         });
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //         // Keep only syncs that are actually used
-    //         jani_model.system.syncs.retain(|sync| {
-    //             jani_model
-    //                 .system
-    //                 .elements
-    //                 .iter()
-    //                 .enumerate()
-    //                 .filter(|(_, e)| e.automaton == automaton.name)
-    //                 .all(|(e_idx, _)| {
-    //                     sync.synchronise[e_idx].as_ref().is_none_or(|a| {
-    //                         new_edges
-    //                             .iter()
-    //                             .any(|edge| edge.action.as_ref().unwrap() == a)
-    //                     })
-    //                 })
-    //         });
-    //         // Replace edges with new ones
-    //         automaton.edges = new_edges;
-    //     }
-    //     Ok(())
-    // }
-
-    // fn add_global_var(
-    //     &mut self,
-    //     cs: &mut ChannelSystemBuilder,
-    //     pg_id: PgId,
-    //     var: &VariableDeclaration,
-    // ) -> anyhow::Result<()> {
-    //     // TODO WARN FIXME: in JANI initial values are random?
-    //     let var_type = (&var.r#type).try_into().expect("convert type");
-    //     let init = var
-    //         .initial_value
-    //         .as_ref()
-    //         .and_then(|expr| {
-    //             self.build_expression(expr, Some(var_type), &HashMap::new(), None)
-    //                 .ok()
-    //         })
-    //         .unwrap_or_else(|| CsExpression::from(var_type.default_value()));
-    //     let val = init.eval_constant()?;
-    //     let t = val.r#type();
-    //     let var_id = cs.new_var(pg_id, val)?;
-    //     self.global_vars.insert(var.name.clone(), (var_id, val, t));
-    //     self.global_state_vec.push(var.name.clone());
-    //     Ok(())
-    // }
-
     fn add_global_constant(&mut self, c: &ConstantDeclaration) -> anyhow::Result<()> {
         // TODO WARN FIXME: in JANI initial values are random?
         let c_type = (&c.r#type).try_into().expect("convert type");
@@ -914,7 +654,7 @@ impl JaniBuilder {
             .value
             .as_ref()
             .and_then(|expr| {
-                self.build_expression(expr, Some(c_type), &HashMap::new(), None)
+                self.build_expression(expr, Some(c_type), &HashMap::new())
                     .and_then(|e| e.eval_constant().map_err(|err| anyhow!(err)))
                     .ok()
             })
@@ -935,10 +675,7 @@ impl JaniBuilder {
         let init = var
             .initial_value
             .as_ref()
-            .and_then(|expr| {
-                self.build_expression(expr, Some(var_type), local_vars, None)
-                    .ok()
-            })
+            .and_then(|expr| self.build_expression(expr, Some(var_type), local_vars).ok())
             .unwrap_or_else(|| CsExpression::from(var_type.default_value()));
         let val = init.eval_constant()?;
         let t = val.r#type();
@@ -968,254 +705,11 @@ impl JaniBuilder {
         }
     }
 
-    // fn build_automaton(
-    //     &mut self,
-    //     jani_model: &Model,
-    //     pgb: &mut ProgramGraphBuilder,
-    //     automaton: &Automaton,
-    //     e_idx: usize,
-    // ) -> anyhow::Result<()> {
-    //     // Initialize RNG
-    //     let rng = pgb.new_var(Val::from(0.)).expect("new var");
-    //     automaton
-    //         .edges
-    //         .iter()
-    //         .filter(|edge| edge.location.as_str() == Self::INITIAL)
-    //         .for_each(|edge| {
-    //             // For all edges starting from the unique initial locations,
-    //             // get the corresponding action and add RNG assignment as an effect.
-    //             let system_action = jani_model
-    //                 .system
-    //                 .syncs
-    //                 .iter()
-    //                 .find(|sync| {
-    //                     sync.synchronise[e_idx]
-    //                         .as_ref()
-    //                         .is_some_and(|a| a == edge.action.as_ref().expect("init action"))
-    //                 })
-    //                 .expect("sync")
-    //                 .result
-    //                 .as_ref()
-    //                 .expect("no silent result");
-    //             let init_action = *self.system_actions.get(system_action).expect("exist");
-    //             pgb.add_effect(
-    //                 init_action,
-    //                 rng,
-    //                 PgExpression::Float(FloatExpr::Rand(Box::new((
-    //                     FloatExpr::from(0.),
-    //                     FloatExpr::from(1.),
-    //                 )))),
-    //             )
-    //             .expect("add effect");
-    //         });
-
-    //     // Add locations
-    //     let mut locations: HashMap<String, scan_core::program_graph::Location> = HashMap::new();
-    //     for location in &automaton.locations {
-    //         self.build_location(jani_model, pgb, location, e_idx, &mut locations)
-    //             .with_context(|| format!("failed building location: {}", &location.name))?;
-    //     }
-
-    //     // Add local variables
-    //     let mut local_vars: HashMap<String, (Var, Val, Type)> = HashMap::new();
-    //     automaton
-    //         .variables
-    //         .iter()
-    //         .try_for_each(|var| self.add_local_var(pgb, var, &mut local_vars))
-    //         .context("failed adding local variables")?;
-
-    //     // Add edges
-    //     let mut rng_actions = HashSet::new();
-    //     for (n_edge, edge) in automaton.edges.iter().enumerate() {
-    //         self.build_edge(
-    //             jani_model,
-    //             automaton,
-    //             pgb,
-    //             edge,
-    //             e_idx,
-    //             &local_vars,
-    //             &locations,
-    //             &mut rng_actions,
-    //             rng,
-    //         )
-    //         .with_context(|| {
-    //             format!(
-    //                 "failed building {}-th edge for action {}",
-    //                 n_edge + 1,
-    //                 edge.action.clone().unwrap_or(String::from("silent"))
-    //             )
-    //         })?;
-    //     }
-    //     Ok(())
-    // }
-
-    // fn build_location(
-    //     &mut self,
-    //     jani_model: &Model,
-    //     pgb: &mut ProgramGraphBuilder,
-    //     location: &Location,
-    //     e_idx: usize,
-    //     locations: &mut HashMap<String, scan_core::program_graph::Location>,
-    // ) -> anyhow::Result<()> {
-    //     let loc = pgb.new_location();
-    //     // Initial location has to be the start of the new process
-    //     if location.name.as_str() == Self::INITIAL {
-    //         pgb.new_process(loc).expect("new process");
-    //     }
-    //     assert!(locations.insert(location.name.clone(), loc).is_none());
-    //     // For every action that is **NOT** synchronised on this automaton,
-    //     // allow action with no change in state.
-    //     jani_model
-    //         .system
-    //         .syncs
-    //         .iter()
-    //         .filter(|sync| sync.synchronise[e_idx].is_none())
-    //         .for_each(|sync| {
-    //             let result = sync.result.as_ref().expect("result must have name");
-    //             let action = self.system_actions.get(result).expect("system action");
-    //             pgb.add_transition(loc, *action, loc, None).unwrap();
-    //         });
-    //     Ok(())
-    // }
-
-    // fn build_edge(
-    //     &mut self,
-    //     jani_model: &Model,
-    //     automaton: &Automaton,
-    //     pgb: &mut ProgramGraphBuilder,
-    //     edge: &Edge,
-    //     e_idx: usize,
-    //     local_vars: &HashMap<String, (Var, Val, Type)>,
-    //     locations: &HashMap<String, scan_core::program_graph::Location>,
-    //     rng_actions: &mut HashSet<Action>,
-    //     rng: Var,
-    // ) -> anyhow::Result<()> {
-    //     let pre = locations.get(&edge.location).ok_or(anyhow!(
-    //         "pre-transition location {} not found",
-    //         edge.location
-    //     ))?;
-    //     let guard = edge
-    //         .guard
-    //         .as_ref()
-    //         .map(|guard| self.build_expression(&guard.exp,None, local_vars, Some(rng)))
-    //         .transpose()
-    //         .with_context(|| {
-    //             format!(
-    //                 "failed to build guard with expression {:?}",
-    //                 edge.guard.as_ref().map(|g| &g.exp)
-    //             )
-    //         })?;
-    //     let guard = guard
-    //         .map(|guard| {
-    //             if let PgExpression::Boolean(bool_expr) = guard {
-    //                 Ok(bool_expr)
-    //             } else {
-    //                 bail!("guard is not a boolean expression")
-    //             }
-    //         })
-    //         .transpose()?;
-    //     // There must be only one destination per edge!
-    //     if let [dest] = edge.destinations.as_slice() {
-    //         let post = locations.get(&dest.location).ok_or(anyhow!(
-    //             "post-transition location {} not found",
-    //             dest.location
-    //         ))?;
-    //         jani_model
-    //             .system
-    //             .syncs
-    //             .iter()
-    //             .filter(|sync| {
-    //                 sync.synchronise[e_idx].as_ref().is_some_and(|sync_action| {
-    //                     *edge.action.as_ref().expect("no silent action") == *sync_action
-    //                 })
-    //             })
-    //             .try_for_each(|sync| {
-    //                 let result = sync.result.as_ref().expect("no silent actions generated");
-    //                 let action = self.system_actions.get(result).unwrap();
-    //                 // checks to do this only once per action
-    //                 if dest.probability.is_some() && !rng_actions.contains(action) {
-    //                     pgb.add_effect(
-    //                         *action,
-    //                         rng,
-    //                         PgExpression::Float(FloatExpr::Rand(Box::new((
-    //                             FloatExpr::from(0.),
-    //                             FloatExpr::from(1.),
-    //                         )))),
-    //                     )
-    //                     .expect("effect");
-    //                     rng_actions.insert(*action);
-    //                 }
-    //                 // Set transient variables' values as their initial values before transition from pre location
-    //                 for transient_value in automaton
-    //                     .locations
-    //                     .iter()
-    //                     .find(|loc| loc.name == edge.location)
-    //                     .map(|loc| &loc.transient_values)
-    //                     .ok_or(anyhow!(
-    //                         "post-transition location {} not found",
-    //                         edge.location
-    //                     ))?
-    //                 {
-    //                     let r#ref = &transient_value.r#ref;
-    //                     let (var, val, _) = local_vars
-    //                         .get(r#ref)
-    //                         .or_else(|| self.global_vars.get(r#ref))
-    //                         .ok_or(anyhow!("variable {} not found", r#ref))?;
-    //                     let expr = scan_core::Expression::from(*val);
-    //                     pgb.add_effect(*action, *var, expr).context(
-    //                         "failed setting transient variable {r#ref} to initial value",
-    //                     )?;
-    //                 }
-    //                 // Apply assignments
-    //                 for (n, assignment) in dest.assignments.iter().enumerate() {
-    //                     let (var, ..) = local_vars
-    //                         .get(&assignment.r#ref)
-    //                         .or_else(|| self.global_vars.get(&assignment.r#ref))
-    //                         .ok_or_else(|| anyhow!("unknown id `{}`", &assignment.r#ref))?;
-    //                     let expr = self
-    //                         .build_expression(&assignment.value,None, local_vars, Some(rng))
-    //                         .context("failed building expression")?;
-    //                     pgb.add_effect(*action, *var, expr).with_context(|| {
-    //                         format!("failed adding {}-th assignment to action", n + 1)
-    //                     })?;
-    //                 }
-    //                 // Set transient variables' values for destination location
-    //                 for transient_value in automaton
-    //                     .locations
-    //                     .iter()
-    //                     .find(|loc| loc.name == dest.location)
-    //                     .map(|loc| &loc.transient_values)
-    //                     .ok_or(anyhow!(
-    //                         "post-transition location {} not found",
-    //                         dest.location
-    //                     ))?
-    //                 {
-    //                     let r#ref = &transient_value.r#ref;
-    //                     let (var, ..) = local_vars
-    //                         .get(r#ref)
-    //                         .or_else(|| self.global_vars.get(r#ref))
-    //                         .ok_or(anyhow!("variable {} not found", r#ref))?;
-    //                     let expr =
-    //                         self.build_expression(&transient_value.value,None, local_vars, Some(rng))?;
-    //                     pgb.add_effect(*action, *var, expr).context(
-    //                         "failed setting transient variable {r#ref} to transient value",
-    //                     )?;
-    //                 }
-    //                 pgb.add_transition(*pre, *action, *post, guard.clone())
-    //                     .context("failed adding transition")
-    //             })?;
-    //     } else {
-    //         panic!("edges should be normalized");
-    //     }
-    //     Ok(())
-    // }
-
     fn build_expression(
         &self,
         expr: &Expression,
         type_hint: Option<Type>,
         local_vars: &HashMap<String, (Var, Val, Type)>,
-        rng: Option<Var>,
     ) -> anyhow::Result<CsExpression> {
         match expr {
             Expression::ConstantValue(constant_value) => match constant_value {
@@ -1231,9 +725,6 @@ impl JaniBuilder {
                     _ => Ok(CsExpression::from(*num as Integer)),
                 },
             },
-            Expression::Identifier(id) if id == Self::RNG => rng
-                .ok_or_else(|| anyhow!("rng not available"))
-                .map(|rng| CsExpression::Float(FloatExpr::Var(rng))),
             Expression::Identifier(id) => local_vars
                 .get(id)
                 .or_else(|| self.global_vars.get(id))
@@ -1251,16 +742,16 @@ impl JaniBuilder {
                 then,
                 r#else,
             } => {
-                let r#if = self.build_expression(r#if, Some(Type::Boolean), local_vars, rng)?;
-                let then = self.build_expression(then, type_hint, local_vars, rng)?;
-                let r#else = self.build_expression(r#else, type_hint, local_vars, rng)?;
+                let r#if = self.build_expression(r#if, Some(Type::Boolean), local_vars)?;
+                let then = self.build_expression(then, type_hint, local_vars)?;
+                let r#else = self.build_expression(r#else, type_hint, local_vars)?;
                 match op {
                     parser::IteOp::Ite => r#if.ite(then, r#else).map_err(anyhow::Error::from),
                 }
             }
             Expression::Bool { op, left, right } => {
-                let left = self.build_expression(left, Some(Type::Boolean), local_vars, rng)?;
-                let right = self.build_expression(right, Some(Type::Boolean), local_vars, rng)?;
+                let left = self.build_expression(left, Some(Type::Boolean), local_vars)?;
+                let right = self.build_expression(right, Some(Type::Boolean), local_vars)?;
                 match op {
                     BoolOp::And => left & right,
                     BoolOp::Or => left | right,
@@ -1272,14 +763,14 @@ impl JaniBuilder {
                 .map_err(anyhow::Error::from)
             }
             Expression::Neg { op, exp } => {
-                let exp = self.build_expression(exp, Some(Type::Boolean), local_vars, rng)?;
+                let exp = self.build_expression(exp, Some(Type::Boolean), local_vars)?;
                 match op {
                     parser::NegOp::Neg => (!exp).map_err(|err| err.into()),
                 }
             }
             Expression::EqComp { op, left, right } => {
-                let left = self.build_expression(left, None, local_vars, rng)?;
-                let right = self.build_expression(right, None, local_vars, rng)?;
+                let left = self.build_expression(left, None, local_vars)?;
+                let right = self.build_expression(right, None, local_vars)?;
                 match op {
                     parser::EqCompOp::Eq => CsExpression::equal_to(left, right),
                     parser::EqCompOp::Neq => CsExpression::equal_to(left, right).map(|expr| !expr),
@@ -1288,8 +779,8 @@ impl JaniBuilder {
                 .map_err(anyhow::Error::from)
             }
             Expression::NumComp { op, left, right } => {
-                let left = self.build_expression(left, None, local_vars, rng)?;
-                let right = self.build_expression(right, None, local_vars, rng)?;
+                let left = self.build_expression(left, None, local_vars)?;
+                let right = self.build_expression(right, None, local_vars)?;
 
                 match op {
                     parser::NumCompOp::Less => CsExpression::less_than(left, right),
@@ -1301,8 +792,8 @@ impl JaniBuilder {
                 .map_err(anyhow::Error::from)
             }
             Expression::IntOp { op, left, right } => {
-                let left = self.build_expression(left, type_hint, local_vars, rng)?;
-                let right = self.build_expression(right, type_hint, local_vars, rng)?;
+                let left = self.build_expression(left, type_hint, local_vars)?;
+                let right = self.build_expression(right, type_hint, local_vars)?;
                 match op {
                     parser::IntOp::Plus => left + right,
                     parser::IntOp::Minus => left + (-right)?,
@@ -1312,8 +803,8 @@ impl JaniBuilder {
                 .map_err(anyhow::Error::from)
             }
             Expression::RealOp { op, left, right } => {
-                let left = self.build_expression(left, Some(Type::Float), local_vars, rng)?;
-                let right = self.build_expression(right, Some(Type::Float), local_vars, rng)?;
+                let left = self.build_expression(left, Some(Type::Float), local_vars)?;
+                let right = self.build_expression(right, Some(Type::Float), local_vars)?;
                 match op {
                     parser::RealOp::Div => left / right,
                     parser::RealOp::Pow => todo!(),
@@ -1322,7 +813,7 @@ impl JaniBuilder {
                 .map_err(anyhow::Error::from)
             }
             Expression::Real2IntOp { op, exp } => {
-                let _exp = self.build_expression(exp, None, local_vars, rng)?;
+                let _exp = self.build_expression(exp, None, local_vars)?;
                 if matches!(_exp.r#type(), Type::Float) {
                     match op {
                         parser::Real2IntOp::Floor => todo!(),
