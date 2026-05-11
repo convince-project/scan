@@ -16,9 +16,9 @@ pub(crate) enum BasicType {
     Real,
 }
 
-impl Into<scan_core::Type> for BasicType {
-    fn into(self) -> scan_core::Type {
-        match self {
+impl From<BasicType> for scan_core::Type {
+    fn from(val: BasicType) -> Self {
+        match val {
             BasicType::Bool => scan_core::Type::Boolean,
             BasicType::Int => scan_core::Type::Integer,
             BasicType::Real => scan_core::Type::Float,

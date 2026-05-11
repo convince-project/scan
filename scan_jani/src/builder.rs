@@ -5,8 +5,8 @@ use crate::parser::{
 use anyhow::{Context, anyhow, bail};
 use either::Either;
 use scan_core::{
-    Atom, BooleanExpr, CsModel, Float, FloatExpr, Integer, Mtl, MtlOracle, Natural, Type,
-    TypeError, Val,
+    Atom, BooleanExpr, CsModel, Float, FloatExpr, Integer, IntegerExpr, Mtl, MtlOracle, Natural,
+    Type, TypeError, Val,
     channel_system::{
         self, Action, Channel, ChannelSystemBuilder, CsExpression, Location, PgId, Var,
     },
@@ -813,12 +813,14 @@ impl JaniBuilder {
                 .map_err(anyhow::Error::from)
             }
             Expression::Real2IntOp { op, exp } => {
-                let _exp = self.build_expression(exp, None, local_vars)?;
-                if matches!(_exp.r#type(), Type::Float) {
-                    match op {
-                        parser::Real2IntOp::Floor => todo!(),
-                        parser::Real2IntOp::Ceil => todo!(),
-                    }
+                let exp = self.build_expression(exp, None, local_vars)?;
+                if matches!(exp.r#type(), Type::Float) {
+                    Ok(CsExpression::Integer(match op {
+                        parser::Real2IntOp::Floor => IntegerExpr::Floor,
+                        parser::Real2IntOp::Ceil => IntegerExpr::Ceil,
+                    }(Box::new(
+                        FloatExpr::try_from(exp)?,
+                    ))))
                 } else {
                     bail!(TypeError::TypeMismatch)
                 }
