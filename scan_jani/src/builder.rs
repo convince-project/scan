@@ -35,7 +35,7 @@ struct JaniBuilder {
     sync_actions: Vec<channel_system::Action>,
     // Associating name to variable, initial value and type.
     global_state_channel: Option<Channel>,
-    global_vars: HashMap<String, (Var, Type)>,
+    global_vars: HashMap<String, (Var, Val, Type)>,
     global_state_vec: Vec<String>,
     global_constants: HashMap<String, Val>,
     automaton_builders: Vec<AutomatonBuilder>,
@@ -45,7 +45,7 @@ struct JaniBuilder {
 struct AutomatonBuilder {
     // tracks locations and their "idle" side-location
     locations: HashMap<String, (channel_system::Location, channel_system::Location)>,
-    local_vars: HashMap<String, (Var, Type)>,
+    local_vars: HashMap<String, (Var, Val, Type)>,
     // assign action name -> cs base action + destination actions
     dest_actions: HashMap<
         // triggering sync action
@@ -112,7 +112,7 @@ impl JaniBuilder {
 
             let var = cs.new_var(pg_id, val)?;
             self.global_vars
-                .insert(variable_dec.name.clone(), (var, var_type));
+                .insert(variable_dec.name.clone(), (var, val, var_type));
             self.global_state_vec.push(variable_dec.name.clone());
             global_state_type.push(var_type);
             global_state_init.push(val);
@@ -200,6 +200,17 @@ impl JaniBuilder {
             let sync_action = cs.new_action(pg_id).expect("new action");
             self.sync_actions.push(sync_action);
 
+            // Sync actions initiate a transition so they need to reset transient variables
+            for var_decl in jani_model
+                .variables
+                .iter()
+                .filter(|var_decl| var_decl.transient)
+            {
+                let (var, init, _) = self.global_vars.get(&var_decl.name).expect("variable");
+                cs.add_effect(pg_id, sync_action, *var, CsExpression::from(*init))
+                    .expect("effect");
+            }
+
             // elements unaffected by sync must ignore the sync action in every location
             // by moving to idle location
             for (element_idx, (element, _)) in jani_model
@@ -234,6 +245,20 @@ impl JaniBuilder {
                         })?;
                     cs.add_transition(pg_id, loc, sync_action, idle_loc, None)
                         .expect("add transition");
+                }
+
+                // Sync actions initiate a transition so they need to reset transient variables
+                for var_decl in automaton
+                    .variables
+                    .iter()
+                    .filter(|var_decl| var_decl.transient)
+                {
+                    let (var, init, _) = automaton_builder
+                        .local_vars
+                        .get(&var_decl.name)
+                        .expect("variable");
+                    cs.add_effect(pg_id, sync_action, *var, CsExpression::from(*init))
+                        .expect("effect");
                 }
             }
 
@@ -357,7 +382,7 @@ impl JaniBuilder {
 
                         // add effects
                         for assignment in &dest.assignments {
-                            let (var, r#type) = automaton_builder
+                            let (var, _, r#type) = automaton_builder
                                 .local_vars
                                 .get(&assignment.r#ref)
                                 .or_else(|| self.global_vars.get(&assignment.r#ref))
@@ -377,6 +402,32 @@ impl JaniBuilder {
                                 })?;
                             cs.add_effect(pg_id, dest_action, *var, effect)
                                 .expect("add effect");
+                        }
+
+                        // dest actions need to also set transient variables of destination
+                        let location = automaton
+                            .locations
+                            .iter()
+                            .find(|loc| loc.name == dest.location)
+                            .ok_or_else(|| {
+                                anyhow!("transition destination {} not found", dest.location)
+                            })?;
+                        for transient in &location.transient_values {
+                            let (var, _init, r#type) = automaton_builder
+                                .local_vars
+                                .get(&transient.r#ref)
+                                .or_else(|| self.global_vars.get(&transient.r#ref))
+                                .ok_or_else(|| {
+                                    anyhow!("transient value {} not found", transient.r#ref)
+                                })?;
+                            let effect = self.build_expression(
+                                &transient.value,
+                                Some(*r#type),
+                                &automaton_builder.local_vars,
+                                Some(automaton_builder.rng),
+                            )?;
+                            cs.add_effect(pg_id, dest_action, *var, effect)
+                                .expect("set transient value");
                         }
 
                         let prob_expr;
@@ -877,7 +928,7 @@ impl JaniBuilder {
         cs: &mut ChannelSystemBuilder,
         pg_id: PgId,
         var: &VariableDeclaration,
-        local_vars: &mut HashMap<String, (Var, Type)>,
+        local_vars: &mut HashMap<String, (Var, Val, Type)>,
     ) -> anyhow::Result<()> {
         // TODO WARN FIXME: in JANI initial values are random?
         let var_type = (&var.r#type).try_into().expect("convert type");
@@ -892,7 +943,7 @@ impl JaniBuilder {
         let val = init.eval_constant()?;
         let t = val.r#type();
         let var_id = cs.new_var(pg_id, val)?;
-        local_vars.insert(var.name.clone(), (var_id, t));
+        local_vars.insert(var.name.clone(), (var_id, val, t));
         Ok(())
     }
 
@@ -909,7 +960,7 @@ impl JaniBuilder {
                 .map(|name| {
                     self.global_vars
                         .get(&name)
-                        .map(|(_var, t)| (name, *t))
+                        .map(|(_var, _, t)| (name, *t))
                         .unwrap()
                 })
                 .collect(),
@@ -1163,7 +1214,7 @@ impl JaniBuilder {
         &self,
         expr: &Expression,
         type_hint: Option<Type>,
-        local_vars: &HashMap<String, (Var, Type)>,
+        local_vars: &HashMap<String, (Var, Val, Type)>,
         rng: Option<Var>,
     ) -> anyhow::Result<CsExpression> {
         match expr {
@@ -1186,7 +1237,7 @@ impl JaniBuilder {
             Expression::Identifier(id) => local_vars
                 .get(id)
                 .or_else(|| self.global_vars.get(id))
-                .map(|(var, t)| CsExpression::from_var(*var, *t))
+                .map(|(var, _, t)| CsExpression::from_var(*var, *t))
                 .or_else(|| {
                     self.global_constants
                         .get(id)
@@ -1303,7 +1354,7 @@ impl JaniBuilder {
                 }))
             }
             PropertyExpression::Identifier(id) => {
-                if let Some((_, t)) = self.global_vars.get(id) {
+                if let Some((_, _, t)) = self.global_vars.get(id) {
                     let var_idx = self
                         .global_state_vec
                         .iter()
