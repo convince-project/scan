@@ -45,6 +45,8 @@ where
     Rem(Box<(IntegerExpr<V>, IntegerExpr<V>)>),
     /// Floor
     Floor(Box<FloatExpr<V>>),
+    /// Ceil
+    Ceil(Box<FloatExpr<V>>),
     // -----
     // Flow
     // -----
@@ -72,7 +74,9 @@ where
                 let (lhs, rhs) = args.as_ref();
                 lhs.is_constant() && rhs.is_constant()
             }
-            IntegerExpr::Floor(float_expr) => float_expr.is_constant(),
+            IntegerExpr::Floor(float_expr) | IntegerExpr::Ceil(float_expr) => {
+                float_expr.is_constant()
+            }
             IntegerExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
                 ite.is_constant() && lhs.is_constant() && rhs.is_constant()
@@ -124,8 +128,8 @@ where
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.strict_rem_euclid(rhs)
             }
-            // NOTE WARN: is float-to-int floor operation sound?
             IntegerExpr::Floor(float_expr) => float_expr.eval(vars, rng).floor() as Integer,
+            IntegerExpr::Ceil(float_expr) => float_expr.eval(vars, rng).ceil() as Integer,
             IntegerExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
                 if ite.eval(vars, rng) {
@@ -170,6 +174,7 @@ where
                 IntegerExpr::Rem(Box::new((lhs.map(map), rhs.map(map))))
             }
             IntegerExpr::Floor(float_expr) => IntegerExpr::Floor(Box::new(float_expr.map(map))),
+            IntegerExpr::Ceil(float_expr) => IntegerExpr::Ceil(Box::new(float_expr.map(map))),
             IntegerExpr::Ite(args) => {
                 let (r#if, then, r#else) = *args;
                 IntegerExpr::Ite(Box::new((r#if.map(map), then.map(map), r#else.map(map))))
@@ -191,7 +196,9 @@ where
             IntegerExpr::Sum(integer_exprs) | IntegerExpr::Product(integer_exprs) => {
                 integer_exprs.iter().try_for_each(|expr| expr.context(vars))
             }
-            IntegerExpr::Floor(float_expr) => float_expr.context(vars),
+            IntegerExpr::Floor(float_expr) | IntegerExpr::Ceil(float_expr) => {
+                float_expr.context(vars)
+            }
             IntegerExpr::Ite(exprs) => exprs
                 .0
                 .context(vars)
