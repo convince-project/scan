@@ -2,6 +2,7 @@ use super::{
     Action, Channel, ChannelSystem, Clock, CsError, Location, Message, PgError, PgExpression, PgId,
     ProgramGraphBuilder, TimeConstraint, Var,
 };
+use crate::channel_system::ChannelCapacity;
 use crate::grammar::{BooleanExpr, Type};
 use crate::program_graph::ProgramGraph;
 use crate::{Expression, Val};
@@ -28,7 +29,7 @@ impl From<(PgId, CsExpression)> for PgExpression {
 /// The object used to define and build a CS.
 pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
-    channels: Vec<(Vec<Type>, Option<usize>)>,
+    channels: Vec<(Vec<Type>, ChannelCapacity)>,
     communications: BTreeMap<Action, Option<(Channel, Message)>>,
 }
 
@@ -464,7 +465,15 @@ impl ChannelSystemBuilder {
     /// - [`Some(0)`] capacity means the channel uses the handshake protocol (NOT YET IMPLEMENTED!)
     pub fn new_channel(&mut self, var_types: Vec<Type>, capacity: Option<usize>) -> Channel {
         let channel = Channel(self.channels.len() as u16);
-        self.channels.push((var_types, capacity));
+        self.channels
+            .push((var_types, ChannelCapacity::Queue(capacity)));
+        channel
+    }
+
+    /// Adds a new sink of the given type to the CS.
+    pub fn new_sink(&mut self, var_types: Vec<Type>) -> Channel {
+        let channel = Channel(self.channels.len() as u16);
+        self.channels.push((var_types, ChannelCapacity::Sink));
         channel
     }
 
@@ -555,7 +564,7 @@ impl ChannelSystemBuilder {
             .channels
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))?;
-        if matches!(cap, Some(0)) {
+        if matches!(cap, ChannelCapacity::Queue(Some(0))) {
             // it makes no sense to probe an handshake channel
             Err(CsError::ProbingHandshakeChannel(channel))
         } else {
@@ -585,10 +594,10 @@ impl ChannelSystemBuilder {
             .channels
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))?;
-        if matches!(cap, Some(0)) {
+        if matches!(cap, ChannelCapacity::Queue(Some(0))) {
             // it makes no sense to probe an handshake channel
             Err(CsError::ProbingHandshakeChannel(channel))
-        } else if cap.is_none() {
+        } else if matches!(cap, ChannelCapacity::Queue(None)) {
             // it makes no sense to probe for fullness an handshake channel
             Err(CsError::ProbingInfiniteQueue(channel))
         } else {

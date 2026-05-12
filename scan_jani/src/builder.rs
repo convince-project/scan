@@ -4,12 +4,11 @@ use crate::parser::{
 };
 use anyhow::{Context, anyhow, bail};
 use either::Either;
+use log::trace;
 use scan_core::{
     Atom, BooleanExpr, CsModel, Float, FloatExpr, Integer, IntegerExpr, Mtl, MtlOracle, Natural,
     Type, TypeError, Val,
-    channel_system::{
-        self, Action, Channel, ChannelSystemBuilder, CsExpression, Location, PgId, Var,
-    },
+    channel_system::{Action, Channel, ChannelSystemBuilder, CsExpression, Location, PgId, Var},
 };
 use std::collections::HashMap;
 
@@ -31,8 +30,6 @@ pub(crate) fn build(
 #[derive(Default, Debug, Clone)]
 struct JaniBuilder {
     system_actions: HashMap<String, Action>,
-    // Sync actions (same order as syncs in model)
-    sync_actions: Vec<channel_system::Action>,
     // Associating name to variable, initial value and type.
     global_state_channel: Option<Channel>,
     global_vars: HashMap<String, (Var, Val, Type)>,
@@ -91,6 +88,8 @@ impl JaniBuilder {
         let mut global_state_init = Vec::with_capacity(len);
         let mut global_state_type = Vec::with_capacity(len);
         let mut global_state_expr = Vec::with_capacity(len);
+
+        // Create global variables
         for variable_dec in jani_model.variables.iter() {
             let var_type = (&variable_dec.r#type).try_into().expect("convert type");
             let init = variable_dec
@@ -119,7 +118,7 @@ impl JaniBuilder {
         }
 
         // Create channel to send global state expression to
-        let global_state_channel = cs.new_channel(global_state_type, None);
+        let global_state_channel = cs.new_sink(global_state_type);
         self.global_state_channel = Some(global_state_channel);
 
         // for every system action (including silent one),
@@ -133,7 +132,7 @@ impl JaniBuilder {
                 .insert(system_action.name.clone(), system_action_id);
         }
 
-        for element in &jani_model.system.elements {
+        for (element_idx, element) in jani_model.system.elements.iter().enumerate() {
             let rng = cs.new_var(pg_id, Val::from(0.)).expect("new var");
 
             let mut automaton_builder = AutomatonBuilder::new(rng);
@@ -150,9 +149,22 @@ impl JaniBuilder {
                 // elements must return to non-idle states upon system actions in every location
                 cs.add_transition(pg_id, idle_loc, silent_system_action, loc, None)
                     .expect("add transition");
-                for system_action in self.system_actions.values() {
-                    cs.add_transition(pg_id, idle_loc, *system_action, loc, None)
-                        .expect("add transition");
+                for (action_name, system_action) in self.system_actions.iter() {
+                    // (OPTIMIZATION: only if said system action MAY NOT involve the element automaton)
+                    if jani_model
+                        .system
+                        .syncs
+                        .iter()
+                        .filter(|sync| {
+                            sync.result
+                                .as_ref()
+                                .is_some_and(|result| result == action_name)
+                        })
+                        .any(|sync| sync.synchronise[element_idx].is_none())
+                    {
+                        cs.add_transition(pg_id, idle_loc, *system_action, loc, None)
+                            .expect("add transition");
+                    }
                 }
                 automaton_builder
                     .locations
@@ -197,7 +209,10 @@ impl JaniBuilder {
         // for every sync, create sync action
         for sync in silent_syncs.chain(jani_model.system.syncs) {
             let sync_action = cs.new_action(pg_id).expect("new action");
-            self.sync_actions.push(sync_action);
+            trace!(
+                "building sync action {}",
+                sync.result.as_deref().unwrap_or(Self::SILENT)
+            );
 
             // elements unaffected by sync must ignore the sync action in every location
             // by moving to idle location
@@ -275,7 +290,7 @@ impl JaniBuilder {
                 for edge in automaton
                     .edges
                     .iter()
-                    .filter(|edge| edge.action.as_ref().map_or(Self::SILENT, |v| v) == action)
+                    .filter(|edge| edge.action.as_deref().unwrap_or(Self::SILENT) == action)
                 {
                     let automaton_builder = self
                         .automaton_builders
