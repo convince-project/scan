@@ -6,10 +6,11 @@ use anyhow::{Context, anyhow, bail};
 use either::Either;
 use log::trace;
 use scan_core::{
-    Atom, BooleanExpr, Float, FloatExpr, Integer, IntegerExpr, Mtl, MtlOracle, Natural,
-    TransitionSystem, Type, TypeError, Val,
+    Atom, BooleanExpr, Float, FloatExpr, Integer, IntegerExpr, Natural, TransitionSystem, Type,
+    TypeError, Val,
     channel_system::{Action, Channel, ChannelSystemBuilder, CsExpression, Location, PgId, Var},
 };
+use scan_mtl::{Mtl, MtlOracle};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

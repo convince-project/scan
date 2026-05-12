@@ -1,0 +1,25 @@
+[package]
+name = "smc_scan_pmtl"
+version = "0.1.0"
+edition = "2024"
+description = "pMTL oracle for the Scan model checker."
+documentation = "https://convince-project.github.io/scan/crates/scan_pmtl/index.html"
+homepage = "https://convince-project.github.io/scan/"
+repository = "https://github.com/convince-project/scan"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["verification", "model-checking", "pmtl"]
+categories = [
+  "compilers",
+  "concurrency",
+  "parser-implementations",
+  "science::robotics",
+  "simulation"
+]
+
+[lib]
+name = "scan_pmtl"  # The name of the target.
+crate-type = ["lib"]  # The crate types to generate.
+
+[dependencies]
+smc_scan_core = { version = "0.1.1", path = "../scan_core" }

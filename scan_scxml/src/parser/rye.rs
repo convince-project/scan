@@ -1,7 +1,8 @@
 use anyhow::{anyhow, bail};
 use chumsky::{IterParser, Parser, prelude::*, select};
 use logos::Logos;
-use scan_core::{Pmtl, Time};
+use scan_core::Time;
+use scan_pmtl::Pmtl;
 
 #[derive(Logos, Debug, PartialEq, Eq, Hash, Clone)]
 #[logos(skip r"[ \t\n]+")]
