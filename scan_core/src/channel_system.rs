@@ -278,6 +278,13 @@ pub enum EventType {
     ProbeFullQueue,
 }
 
+/// The capacity type of a channel:
+#[derive(Debug, Clone, Copy)]
+pub enum ChannelCapacity {
+    Queue(Option<usize>),
+    Sink,
+}
+
 /// A definition object for a CS.
 /// It represents the abstract definition of a CS.
 ///
@@ -314,7 +321,7 @@ pub enum EventType {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ChannelSystem {
-    channels: Vec<(Vec<Type>, Option<usize>)>,
+    channels: Vec<(Vec<Type>, ChannelCapacity)>,
     communications: Vec<Option<(Channel, Message)>>,
     communications_pg_idxs: Vec<usize>,
     program_graphs: Vec<ProgramGraph>,
@@ -338,10 +345,11 @@ impl ChannelSystem {
             program_graphs: Vec::from_iter(
                 self.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
             ),
-            message_queue: Vec::from_iter(self.channels.iter().map(|(types, cap)| {
-                cap.map_or_else(VecDeque::new, |cap| {
+            message_queue: Vec::from_iter(self.channels.iter().map(|(types, cap)| match cap {
+                ChannelCapacity::Queue(queue) => queue.map_or_else(VecDeque::new, |cap| {
                     VecDeque::with_capacity(types.len() * cap)
-                })
+                }),
+                ChannelCapacity::Sink => VecDeque::new(),
             })),
             def: self,
             pg_list,
@@ -361,7 +369,7 @@ impl ChannelSystem {
     /// Returns the list of defined channels, given as the pair of their type and capacity
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
     #[inline]
-    pub fn channels(&self) -> &Vec<(Vec<Type>, Option<usize>)> {
+    pub fn channels(&self) -> &Vec<(Vec<Type>, ChannelCapacity)> {
         &self.channels
     }
 }
@@ -491,14 +499,20 @@ impl<'def> ChannelSystemRun<'def> {
         let (_, capacity) = self.def.channels[channel_idx];
         let len = self.message_queue[channel_idx].len();
         // Channel capacity must never be exceeded!
-        debug_assert!(capacity.is_none_or(|cap| len <= cap));
+        // debug_assert!(capacity.is_none_or(|cap| len <= cap));
         // NOTE FIXME currently handshake is unsupported
         // !matches!(capacity, Some(0))
-        match message {
-            Message::Send => capacity.is_none_or(|cap| len < cap),
-            Message::Receive => len > 0,
-            Message::ProbeFullQueue => capacity.is_some_and(|cap| len == cap),
-            Message::ProbeEmptyQueue => len == 0,
+        match capacity {
+            ChannelCapacity::Queue(capacity) => match message {
+                Message::Send => capacity.is_none_or(|cap| len < cap),
+                Message::Receive => len > 0,
+                Message::ProbeFullQueue => capacity.is_some_and(|cap| len == cap),
+                Message::ProbeEmptyQueue => len == 0,
+            },
+            ChannelCapacity::Sink => match message {
+                Message::Send | Message::ProbeEmptyQueue => true,
+                Message::Receive | Message::ProbeFullQueue => false,
+            },
         }
     }
 
@@ -511,25 +525,32 @@ impl<'def> ChannelSystemRun<'def> {
             let (_, capacity) = self.def.channels[channel.0 as usize];
             let len = self.message_queue[channel.0 as usize].len();
             // Channel capacity must never be exceeded!
-            assert!(capacity.is_none_or(|cap| len <= cap));
-            match message {
-                Message::Send if capacity.is_some_and(|cap| len >= cap) => {
-                    Err(CsError::OutOfCapacity(channel))
-                }
-                Message::Receive if len == 0 => Err(CsError::Empty(channel)),
-                Message::ProbeEmptyQueue | Message::ProbeFullQueue
-                    if matches!(capacity, Some(0)) =>
-                {
-                    Err(CsError::ProbingHandshakeChannel(channel))
-                }
-                Message::ProbeFullQueue if capacity.is_none() => {
-                    Err(CsError::ProbingInfiniteQueue(channel))
-                }
-                Message::ProbeEmptyQueue if len > 0 => Err(CsError::NotEmpty(channel)),
-                Message::ProbeFullQueue if capacity.is_some_and(|cap| len < cap) => {
-                    Err(CsError::NotFull(channel))
-                }
-                _ => Ok(()),
+            // assert!(capacity.is_none_or(|cap| len <= cap));
+            match capacity {
+                ChannelCapacity::Queue(capacity) => match message {
+                    Message::Send if capacity.is_some_and(|cap| len >= cap) => {
+                        Err(CsError::OutOfCapacity(channel))
+                    }
+                    Message::Receive if len == 0 => Err(CsError::Empty(channel)),
+                    Message::ProbeEmptyQueue | Message::ProbeFullQueue
+                        if matches!(capacity, Some(0)) =>
+                    {
+                        Err(CsError::ProbingHandshakeChannel(channel))
+                    }
+                    Message::ProbeFullQueue if capacity.is_none() => {
+                        Err(CsError::ProbingInfiniteQueue(channel))
+                    }
+                    Message::ProbeEmptyQueue if len > 0 => Err(CsError::NotEmpty(channel)),
+                    Message::ProbeFullQueue if capacity.is_some_and(|cap| len < cap) => {
+                        Err(CsError::NotFull(channel))
+                    }
+                    _ => Ok(()),
+                },
+                ChannelCapacity::Sink => match message {
+                    Message::Send | Message::ProbeEmptyQueue => Ok(()),
+                    Message::ProbeFullQueue => Err(CsError::NotFull(channel)),
+                    Message::Receive => Err(CsError::Empty(channel)),
+                },
             }
         } else {
             Ok(())
@@ -560,8 +581,10 @@ impl<'def> ChannelSystemRun<'def> {
             let (_, capacity) = self.def.channels[channel.0 as usize];
             let event_type = match message {
                 Message::Send
-                    if capacity
-                        .is_some_and(|cap| self.message_queue[channel.0 as usize].len() >= cap) =>
+                    if let ChannelCapacity::Queue(capacity) = capacity
+                        && capacity.is_some_and(|cap| {
+                            self.message_queue[channel.0 as usize].len() >= cap
+                        }) =>
                 {
                     return Err(CsError::OutOfCapacity(channel));
                 }
@@ -576,7 +599,9 @@ impl<'def> ChannelSystemRun<'def> {
                             &mut self.rng,
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
-                    self.message_queue[channel.0 as usize].extend(vals.iter().copied());
+                    if matches!(capacity, ChannelCapacity::Queue(_)) {
+                        self.message_queue[channel.0 as usize].extend(vals.iter().copied());
+                    }
                     EventType::Send(vals)
                 }
                 Message::Receive if self.message_queue[channel.0 as usize].is_empty() => {
@@ -600,7 +625,7 @@ impl<'def> ChannelSystemRun<'def> {
                     EventType::Receive(vals)
                 }
                 Message::ProbeEmptyQueue | Message::ProbeFullQueue
-                    if matches!(capacity, Some(0)) =>
+                    if matches!(capacity, ChannelCapacity::Queue(Some(0))) =>
                 {
                     return Err(CsError::ProbingHandshakeChannel(channel));
                 }
@@ -620,28 +645,29 @@ impl<'def> ChannelSystemRun<'def> {
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     EventType::ProbeEmptyQueue
                 }
-                Message::ProbeFullQueue
-                    if capacity
-                        .is_some_and(|cap| self.message_queue[channel.0 as usize].len() < cap) =>
-                {
-                    return Err(CsError::NotFull(channel));
-                }
-                Message::ProbeFullQueue if capacity.is_none() => {
-                    return Err(CsError::ProbingInfiniteQueue(channel));
-                }
-                Message::ProbeFullQueue => {
-                    let _ = self.program_graphs[pg_id.0 as usize]
-                        .send(
-                            action.1,
-                            post.iter()
-                                .map(|loc| loc.1)
-                                .collect::<SmallVec<[PgLocation; 8]>>()
-                                .as_slice(),
-                            &mut self.rng,
-                        )
-                        .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
-                    EventType::ProbeFullQueue
-                }
+                Message::ProbeFullQueue => match capacity {
+                    ChannelCapacity::Queue(None) => {
+                        return Err(CsError::ProbingInfiniteQueue(channel));
+                    }
+                    ChannelCapacity::Queue(Some(capacity)) => {
+                        if self.message_queue[channel.0 as usize].len() >= capacity {
+                            let _ = self.program_graphs[pg_id.0 as usize]
+                                .send(
+                                    action.1,
+                                    post.iter()
+                                        .map(|loc| loc.1)
+                                        .collect::<SmallVec<[PgLocation; 8]>>()
+                                        .as_slice(),
+                                    &mut self.rng,
+                                )
+                                .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
+                            EventType::ProbeFullQueue
+                        } else {
+                            return Err(CsError::NotFull(channel));
+                        }
+                    }
+                    ChannelCapacity::Sink => return Err(CsError::NotFull(channel)),
+                },
             };
             Ok(Some(Event {
                 pg_id,
