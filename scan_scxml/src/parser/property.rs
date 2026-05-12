@@ -4,7 +4,7 @@ use anyhow::{Context, anyhow, bail};
 use boa_ast::scope::Scope;
 use boa_interner::Interner;
 use log::{error, info, trace};
-use quick_xml::{Reader, events::Event};
+use quick_xml::{Reader, XmlVersion, events::Event};
 use scan_core::Pmtl;
 use std::{
     collections::HashMap,
@@ -78,6 +78,7 @@ impl Properties {
     ) -> anyhow::Result<()> {
         let mut buf = Vec::new();
         let mut stack: Vec<PropertyTag> = Vec::new();
+        let mut xml_version = XmlVersion::Implicit1_0;
         info!("parsing properties");
         loop {
             match reader
@@ -104,10 +105,15 @@ impl Properties {
                                 .last()
                                 .is_some_and(|tag| matches!(*tag, PropertyTag::Ports)) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_EVENT, ATTR_ORIGIN, ATTR_TARGET], &[])
-                                .with_context(|| {
-                                    format!("failed to parse '{TAG_PORT}' tag attributes")
-                                })?;
+                            let attrs = attrs(
+                                tag,
+                                &[ATTR_EVENT, ATTR_ORIGIN, ATTR_TARGET],
+                                &[],
+                                xml_version,
+                            )
+                            .with_context(|| {
+                                format!("failed to parse '{TAG_PORT}' tag attributes")
+                            })?;
                             stack.push(PropertyTag::Port(
                                 attrs[ATTR_EVENT].clone(),
                                 attrs[ATTR_ORIGIN].clone(),
@@ -157,9 +163,9 @@ impl Properties {
                                 .is_some_and(|tag| matches!(*tag, PropertyTag::Port(_, _, _))) =>
                         {
                             if let Some(PropertyTag::Port(event, origin, target)) = stack.last() {
-                                let attrs = attrs(tag, &[ATTR_ID], &[]).with_context(|| {
-                                    format!("failed to parse '{TAG_EVENT_VAR}' tag attributes")
-                                })?;
+                                let attrs = attrs(tag, &[ATTR_ID], &[], xml_version).with_context(
+                                    || format!("failed to parse '{TAG_EVENT_VAR}' tag attributes"),
+                                )?;
                                 let id = attrs[ATTR_ID].clone();
                                 self.ports.insert(
                                     id,
@@ -182,11 +188,15 @@ impl Properties {
                         {
                             if let Some(PropertyTag::Port(event, origin, target)) = stack.last_mut()
                             {
-                                let attrs =
-                                    attrs(tag, &[ATTR_ID, ATTR_PARAM, ATTR_EXPR, ATTR_TYPE], &[])
-                                        .with_context(|| {
-                                        format!("failed to parse '{TAG_STATE_VAR}' tag attributes")
-                                    })?;
+                                let attrs = attrs(
+                                    tag,
+                                    &[ATTR_ID, ATTR_PARAM, ATTR_EXPR, ATTR_TYPE],
+                                    &[],
+                                    xml_version,
+                                )
+                                .with_context(|| {
+                                    format!("failed to parse '{TAG_STATE_VAR}' tag attributes")
+                                })?;
                                 let expression = ecmascript(
                                     attrs[ATTR_EXPR].as_str(),
                                     &Scope::new_global(),
@@ -211,10 +221,11 @@ impl Properties {
                             }
                         }
                         TAG_PROPERTY => {
-                            let attrs = attrs(tag, &[ATTR_ID, ATTR_EXPR], &[ATTR_LOGIC])
-                                .with_context(|| {
-                                    format!("failed to parse '{TAG_PROPERTY}' tag attributes")
-                                })?;
+                            let attrs =
+                                attrs(tag, &[ATTR_ID, ATTR_EXPR], &[ATTR_LOGIC], xml_version)
+                                    .with_context(|| {
+                                        format!("failed to parse '{TAG_PROPERTY}' tag attributes")
+                                    })?;
                             let id = attrs[ATTR_ID].to_owned();
                             let expr = attrs[ATTR_EXPR].as_str();
                             let formula = super::rye::parse(expr)
@@ -258,7 +269,9 @@ impl Properties {
                 Event::CData(_) => {
                     return Err(anyhow!("CData not supported"));
                 }
-                Event::Decl(_) => continue,
+                Event::Decl(decl) => {
+                    xml_version = decl.xml_version()?;
+                }
                 Event::PI(_) => {
                     return Err(anyhow!("Processing Instructions not supported"));
                 }

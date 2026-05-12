@@ -18,6 +18,7 @@ use boa_interner::Interner;
 use log::warn;
 use log::{error, info, trace};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -73,13 +74,14 @@ fn attrs(
     tag: quick_xml::events::BytesStart<'_>,
     keys: &[&str],
     opt_keys: &[&str],
+    xml_version: XmlVersion,
 ) -> anyhow::Result<HashMap<String, String>> {
     let mut attrs = HashMap::new();
     for attr in tag.attributes() {
         let attr = attr?;
         let key = str::from_utf8(attr.key.into_inner())?;
         if keys.contains(&key) || opt_keys.contains(&key) {
-            let val = attr.unescape_value()?.to_string();
+            let val = attr.normalized_value(xml_version)?.to_string();
             attrs.insert(key.to_string(), val);
         } else {
             error!(target: "parser", "found unknown attribute '{key}'");
@@ -247,6 +249,7 @@ impl Parser {
     ) -> anyhow::Result<()> {
         let mut buf = Vec::new();
         let mut stack = Vec::new();
+        let mut xml_version = XmlVersion::Implicit1_0;
         loop {
             match reader
                 .read_event_into(&mut buf)
@@ -297,7 +300,7 @@ impl Parser {
                                 .last()
                                 .is_some_and(|e| *e == ConvinceTag::Specification) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_PATH], &[])
+                            let attrs = attrs(tag, &[ATTR_PATH], &[], xml_version)
                                 .context("failed to parse 'types' tag attributes")?;
                             let mut path = parent.to_owned();
                             path.extend(&PathBuf::from(attrs.get(ATTR_PATH).unwrap()));
@@ -316,7 +319,7 @@ impl Parser {
                                 .last()
                                 .is_some_and(|e| *e == ConvinceTag::Specification) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_PATH], &[])
+                            let attrs = attrs(tag, &[ATTR_PATH], &[], xml_version)
                                 .context("failed to parse 'properties' tag attributes")?;
                             let mut path = parent.to_owned();
                             path.extend(&PathBuf::from(attrs.get(ATTR_PATH).unwrap()));
@@ -337,7 +340,7 @@ impl Parser {
                         TAG_PROCESS
                             if stack.last().is_some_and(|e| *e == ConvinceTag::ProcessList) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC])
+                            let attrs = attrs(tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC], xml_version)
                                 .context("failed to parse 'process' tag attributes")?;
                             if let Some(moc) = attrs.get(ATTR_MOC)
                                 && moc != "fsm"
@@ -386,7 +389,9 @@ impl Parser {
                 Event::CData(_) => {
                     return Err(anyhow!("CData not supported"));
                 }
-                Event::Decl(_) => continue,
+                Event::Decl(decl) => {
+                    xml_version = decl.xml_version()?;
+                }
                 Event::PI(_) => {
                     return Err(anyhow!("Processing Instructions not supported"));
                 }
