@@ -9,12 +9,11 @@ pub use builder::JaniModelData;
 use builder::build;
 use log::info;
 use parser::Model;
-use scan_core::CsModel;
 use scan_core::{MtlOracle, Scan};
 use std::{fs::File, io::Read, path::Path};
 pub use tracer::TracePrinter;
 
-pub type JaniScan = Scan<CsModel, MtlOracle>;
+pub type JaniScan = Scan<MtlOracle>;
 
 pub fn load<'def>(
     path: &'def Path,

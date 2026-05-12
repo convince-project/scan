@@ -1,75 +1,176 @@
-use crate::{Oracle, RunOutcome, Time, Val};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use log::trace;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+
+use crate::channel_system::{
+    Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
+use crate::{BooleanExpr, DummyRng, Oracle, RunOutcome, Time, Tracer, Val};
 
-/// Trait that handles streaming of traces,
-/// e.g., to print them to file.
-pub trait Tracer<A> {
-    /// Initialize new streaming.
-    ///
-    /// This method needs to be called once, before calls to [`Self::trace`].
-    fn init(&mut self);
-
-    /// Stream a new state of the trace.
-    fn trace<I: IntoIterator<Item = Val>>(&mut self, action: &A, time: Time, ports: I);
-
-    /// Finalize and close streaming.
-    ///
-    /// This method needs to be called at the end of the execution.
-    fn finalize(self, outcome: &RunOutcome);
+/// An atomic variable exposed by the [`ChannelSystem to the TransitionSystem`].
+#[derive(Debug, Clone, Copy)]
+pub enum Atom {
+    /// A predicate.
+    State(Channel, usize),
+    /// A send event.
+    Event(Channel),
 }
 
-// Dummy Tracer that does nothing
-impl<A> Tracer<A> for () {
-    fn init(&mut self) {}
-
-    fn trace<I: IntoIterator<Item = Val>>(&mut self, _action: &A, _time: Time, _ports: I) {}
-
-    fn finalize(self, _outcome: &RunOutcome) {}
+/// A definition type that instances new [`CsModelRun`].
+#[derive(Debug, Clone)]
+pub struct TransitionSystem {
+    cs: ChannelSystem,
+    ports: Vec<Channel>,
+    vals: Vec<Vec<Val>>,
+    predicates: Vec<BooleanExpr<Atom>>,
 }
 
-/// A type that can generate instances of a [`TransitionSystem`].
-pub trait TransitionSystemGenerator {
-    /// The type of [`TransitionSystem`] to be generated.
-    type Ts<'a>: TransitionSystem
-    where
-        Self: 'a;
+impl TransitionSystem {
+    /// Creates a new [`CsModel`] from a [`ChannelSystemBuilder`].
+    pub fn new(cs: ChannelSystemBuilder) -> Self {
+        let cs = cs.build();
+        Self {
+            ports: Vec::new(),
+            vals: Vec::new(),
+            cs,
+            predicates: Vec::new(),
+        }
+    }
 
-    /// Generate a new instance of the [`TransitionSystem`].
-    fn generate<'a>(&'a self) -> Self::Ts<'a>;
+    /// Adds a new port to the [`CsModel`],
+    /// which is given by an [`Channel`] and a default [`Val`] value.
+    pub fn add_port(&mut self, channel: Channel, mut value: Vec<Val>) {
+        let len = self.cs.channels()[u16::from(channel) as usize].0.len();
+        assert_eq!(len, value.len());
+        // TODO FIXME: error handling and type checking.
+        // Keep ports list ordered
+        // Don't insert duplicated ports
+        if let Err(index) = self.ports.binary_search(&channel) {
+            self.ports.insert(index, channel);
+            value.shrink_to_fit();
+            self.vals.insert(index, value);
+        }
+        assert!(self.ports.is_sorted());
+        assert_eq!(self.ports.len(), self.vals.len());
+    }
+
+    /// Adds a new predicate to the [`CsModel`],
+    /// which is an expression over the CS's channels.
+    pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) {
+        // Make sure predicate type-checks
+        let _ = predicate.eval(
+            &|port| match port {
+                Atom::State(channel, idx) => {
+                    let index = self
+                        .ports
+                        .binary_search(&channel)
+                        .expect("port must have been initialized");
+                    self.vals[index][idx]
+                }
+                Atom::Event(..) => Val::Boolean(false),
+            },
+            &mut DummyRng,
+        );
+        self.predicates.push(predicate);
+    }
+
+    /// Shrink ports storage to optimize space use.
+    /// To be called after having added all ports.
+    pub fn shrink(&mut self) {
+        self.ports.shrink_to_fit();
+        self.vals.shrink_to_fit();
+    }
+
+    /// Generates an executable run of the model.
+    pub fn new_run(&self) -> TransitionSystemRun<'_> {
+        let mut vals = self.vals.clone();
+        vals.shrink_to_fit();
+        TransitionSystemRun {
+            cs: self.cs.new_instance(),
+            ports: &self.ports,
+            vals,
+            predicates: &self.predicates,
+            last_event: None,
+        }
+    }
 }
 
-/// Trait for types that can execute like a transition system.
+/// Transition system model based on a [`ChannelSystem`].
 ///
-/// Together with an [`Oracle`], it provides a verifiable system.
-pub trait TransitionSystem {
-    /// The type of events produced by the execution of the system.
-    type Event;
+/// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
+/// and determining a set of predicates.
+#[derive(Debug, Clone)]
+pub struct TransitionSystemRun<'def> {
+    cs: ChannelSystemRun<'def>,
+    ports: &'def [Channel],
+    vals: Vec<Vec<Val>>,
+    predicates: &'def [BooleanExpr<Atom>],
+    last_event: Option<Event>,
+}
 
-    /// Performs a (random) transition on the [`TransitionSystem`].
-    fn transition(&mut self);
+impl<'def> TransitionSystemRun<'def> {
+    /// Perform a random transition.
+    ///
+    /// Used to generate Montecarlo-like executions
+    pub fn transition(&mut self) {
+        self.last_event = self.cs.montecarlo_execution();
+        if let Some(ref event) = self.last_event
+            && let EventType::Send(ref vals) = event.event_type
+            && let Ok(index) = self.ports.binary_search(&event.channel)
+        {
+            // Since we have to update old values,
+            // the vectors are already allocated and their is always the same.
+            // Copying from slice should be faster than cloning.
+            self.vals[index].copy_from_slice(vals);
+        }
+    }
 
-    /// Returns the `Event` raised by the last transition,
-    /// unless the execution is terminated and no further events can happen at that time step.
-    fn last_event(&self) -> Option<&Self::Event>;
+    /// Returns last event processed by model.
+    #[inline]
+    pub fn last_event(&self) -> Option<&Event> {
+        self.last_event.as_ref()
+    }
 
-    /// Current time of the [`TransitionSystem`] (for timed systems).
-    fn time(&self) -> Time;
+    #[inline]
+    fn time(&self) -> Time {
+        self.cs.time()
+    }
 
-    /// Increase current time of the [`TransitionSystem`] (for timed systems).
-    fn time_tick(&mut self);
+    #[inline]
+    fn time_tick(&mut self) {
+        self.cs.wait(1).expect("time error")
+    }
 
-    /// The current values of the [`TransitionSystem`]'s labels.
-    fn labels(&self) -> impl Iterator<Item = bool>;
+    fn labels(&self) -> impl Iterator<Item = bool> {
+        self.predicates.iter().map(|prop| {
+            prop.eval(
+                &|port| match port {
+                    Atom::State(channel, idx) => {
+                        let port_idx = self
+                            .ports
+                            .binary_search(&channel)
+                            .expect("port must exist and be initialized");
+                        self.vals[port_idx][idx]
+                    }
+                    Atom::Event(channel) => {
+                        Val::Boolean(self.last_event.as_ref().is_some_and(|e| {
+                            e.channel == channel && matches!(e.event_type, EventType::Send(..))
+                        }))
+                    }
+                },
+                &mut DummyRng,
+            )
+        })
+    }
 
-    /// The current internal state of the [`TransitionSystem`].
-    fn state(&self) -> impl Iterator<Item = Val>;
+    #[inline]
+    fn state(&self) -> impl Iterator<Item = Val> {
+        self.vals.iter().flatten().copied()
+    }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
-    fn experiment<O: Oracle>(
+    pub(crate) fn experiment<O: Oracle>(
         &mut self,
         duration: Time,
         mut oracle: O,
@@ -106,9 +207,9 @@ pub trait TransitionSystem {
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
     /// and process the execution trace via the given [`Tracer`].
-    fn trace<T, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: T)
+    pub(crate) fn trace<T, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: T)
     where
-        T: Tracer<Self::Event>,
+        T: Tracer<Event>,
     {
         trace!("new run starting");
         // reuse vector to avoid allocations

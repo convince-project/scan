@@ -13,9 +13,9 @@ lrpar_mod!("spinv4.y");
 pub mod builder;
 pub use builder::*;
 use regex::Regex;
-use scan_core::{CsModel, PmtlOracle, Scan};
+use scan_core::{PmtlOracle, Scan, TransitionSystem};
 
-pub type PromelaScan = Scan<CsModel, PmtlOracle>;
+pub type PromelaScan = Scan<PmtlOracle>;
 
 pub type PromelaModel = ();
 
@@ -89,7 +89,7 @@ fn process_file(path: &Path, debug_mode: bool) -> anyhow::Result<(PromelaScan, P
     let cs = Builder::create_channel_system(ast)
         .context("failed to create channel system from AST".to_string())?;
     info!("Channel system built successfully.");
-    let tsd = CsModel::new(cs);
+    let tsd = TransitionSystem::new(cs);
     let oracle = PmtlOracle::new(&[], &[]);
     let scan = Scan::new(tsd, oracle);
     Ok((scan, ()))

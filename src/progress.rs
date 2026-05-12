@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use scan_core::{Oracle, Scan, TransitionSystemGenerator, adaptive_bound, okamoto_bound};
+use scan_core::{Oracle, Scan, adaptive_bound, okamoto_bound};
 
 /// Verification progress bar
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -13,12 +13,12 @@ pub(crate) enum Bar {
 }
 
 impl Bar {
-    pub(crate) fn print_progress_bar<Ts: TransitionSystemGenerator, O: Oracle>(
+    pub(crate) fn print_progress_bar<O: Oracle>(
         &self,
         confidence: f64,
         precision: f64,
         guarantees: &[String],
-        scan: &Scan<Ts, O>,
+        scan: &Scan<O>,
     ) {
         const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
         const ASCII_BAR: &str = "#--";

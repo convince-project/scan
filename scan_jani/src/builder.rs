@@ -6,8 +6,8 @@ use anyhow::{Context, anyhow, bail};
 use either::Either;
 use log::trace;
 use scan_core::{
-    Atom, BooleanExpr, CsModel, Float, FloatExpr, Integer, IntegerExpr, Mtl, MtlOracle, Natural,
-    Type, TypeError, Val,
+    Atom, BooleanExpr, Float, FloatExpr, Integer, IntegerExpr, Mtl, MtlOracle, Natural,
+    TransitionSystem, Type, TypeError, Val,
     channel_system::{Action, Channel, ChannelSystemBuilder, CsExpression, Location, PgId, Var},
 };
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ pub struct JaniModelData {
 pub(crate) fn build(
     jani_model: Model,
     properties: &[String],
-) -> anyhow::Result<(CsModel, MtlOracle, JaniModelData)> {
+) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
     builder.build(jani_model, properties)
 }
@@ -75,7 +75,7 @@ impl JaniBuilder {
         mut self,
         jani_model: Model,
         properties: &[String],
-    ) -> anyhow::Result<(CsModel, MtlOracle, JaniModelData)> {
+    ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
         let mut cs = ChannelSystemBuilder::new();
         let pg_id = cs.new_program_graph();
 
@@ -589,7 +589,7 @@ impl JaniBuilder {
             }
         }
 
-        let mut cs_model = CsModel::new(cs);
+        let mut cs_model = TransitionSystem::new(cs);
         // global state port, only one we need
         cs_model.add_port(global_state_channel, global_state_init);
 

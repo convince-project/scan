@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
 use report::Report;
-use scan_core::{CsModel, MtlOracle, Oracle, PmtlOracle, Scan, TransitionSystemGenerator};
+use scan_core::{MtlOracle, Oracle, PmtlOracle, Scan};
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -211,8 +211,7 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                run_verification::<CsModel, PmtlOracle>(model, &args, progress, json, &scan_def)
-                    .print(json);
+                run_verification::<PmtlOracle>(model, &args, progress, json, &scan_def).print(json);
             }
             Commands::Validate => {
                 let (_scan, _scxml_model) = load(&self.model, &[], true)?;
@@ -226,7 +225,7 @@ impl Cli {
                 args.properties = scxml_model.guarantees.clone();
                 let scxml_model = Arc::new(scxml_model);
                 let tracer = TracePrinter::new(&scxml_model);
-                args.trace::<CsModel, PmtlOracle, _>(&scan_def, tracer);
+                args.trace::<PmtlOracle, _>(&scan_def, tracer);
                 println!("trace computation for model '{model}' completed");
             }
         }
@@ -248,8 +247,7 @@ impl Cli {
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
-                run_verification::<CsModel, MtlOracle>(model, &args, progress, json, &scan)
-                    .print(json);
+                run_verification::<MtlOracle>(model, &args, progress, json, &scan).print(json);
             }
             Commands::Validate => {
                 let (_scan, _jani_model) = load(&self.model, &[])?;
@@ -260,7 +258,7 @@ impl Cli {
                 let (scan, jani_model) = load(&self.model, &[])?;
                 let jani_model = Arc::new(jani_model);
                 let tracer = TracePrinter::new(jani_model);
-                args.trace::<CsModel, MtlOracle, _>(&scan, tracer);
+                args.trace::<MtlOracle, _>(&scan, tracer);
                 println!("trace computation for model '{model}' completed");
             }
         }
@@ -279,8 +277,7 @@ impl Cli {
                 args.validate()?;
                 let properties = args.properties.clone();
                 let (scan, _promela_model) = load(&self.model, &properties, args.all)?;
-                run_verification::<CsModel, PmtlOracle>(model, &args, progress, json, &scan)
-                    .print(json);
+                run_verification::<PmtlOracle>(model, &args, progress, json, &scan).print(json);
             }
             Commands::Validate => {
                 let (_scan, _jani_model) = load(&self.model, &[], true)?;
@@ -306,17 +303,15 @@ fn validate_properties(props: &[String], all_props: &[String]) -> anyhow::Result
     }
 }
 
-fn run_verification<'a, Ts, O>(
+fn run_verification<'a, O>(
     model: &str,
     args: &VerifyArgs,
     progress: Option<Bar>,
     json: bool,
-    scan: &'a Scan<Ts, O>,
+    scan: &'a Scan<O>,
 ) -> Report
 where
-    Ts: 'a + TransitionSystemGenerator + Sync,
     O: 'a + Oracle + Clone + Sync,
-    Ts::Ts<'a>: Clone + Sync,
 {
     if !json {
         println!(
@@ -327,17 +322,17 @@ where
     if let Some(bar) = progress {
         std::thread::scope(|s| {
             s.spawn(|| {
-                bar.print_progress_bar::<Ts, O>(
+                bar.print_progress_bar::<O>(
                     args.confidence,
                     args.precision,
                     &args.properties,
                     scan,
                 );
             });
-            args.verify::<Ts, O>(model.to_owned(), scan)
+            args.verify::<O>(model.to_owned(), scan)
         })
     } else {
-        args.verify::<Ts, O>(model.to_owned(), scan)
+        args.verify::<O>(model.to_owned(), scan)
     }
 }
 

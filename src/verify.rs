@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time, TransitionSystemGenerator};
+use scan_core::{Oracle, Scan, Time};
 
 use super::report::Report;
 
@@ -80,9 +80,8 @@ impl VerifyArgs {
         }
     }
 
-    pub(crate) fn verify<'a, Ts, O>(&self, model: String, scan: &'a Scan<Ts, O>) -> Report
+    pub(crate) fn verify<'a, O>(&self, model: String, scan: &'a Scan<O>) -> Report
     where
-        Ts: TransitionSystemGenerator + Sync + 'a,
         O: Oracle + Sync + 'a,
     {
         if self.single_thread {

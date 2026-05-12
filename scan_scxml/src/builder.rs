@@ -85,7 +85,7 @@ impl ModelBuilder {
         mut parser: Parser,
         properties: &[String],
         all_properties: bool,
-    ) -> anyhow::Result<(CsModel, PmtlOracle, ScxmlModel)> {
+    ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder
             .prebuild_processes(&mut parser)
@@ -1415,8 +1415,8 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(self, parser: Parser) -> (CsModel, PmtlOracle, ScxmlModel) {
-        let mut model = CsModel::new(self.cs);
+    fn build_model(self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
+        let mut model = TransitionSystem::new(self.cs);
         let mut ports = Vec::new();
         for (channel, init) in self.atoms {
             model.add_port(channel, init);

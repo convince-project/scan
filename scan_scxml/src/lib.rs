@@ -10,9 +10,9 @@ pub use builder::ScxmlModel;
 use log::info;
 pub use print_trace::TracePrinter;
 pub use scan_core;
-use scan_core::{CsModel, PmtlOracle, Scan};
+use scan_core::{PmtlOracle, Scan};
 
-pub type ScxmlScan = Scan<CsModel, PmtlOracle>;
+pub type ScxmlScan = Scan<PmtlOracle>;
 
 pub fn load(
     path: &Path,

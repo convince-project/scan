@@ -281,7 +281,9 @@ pub enum EventType {
 /// The capacity type of a channel:
 #[derive(Debug, Clone, Copy)]
 pub enum ChannelCapacity {
+    /// A (in)finite-capacity FIFO queue.
     Queue(Option<usize>),
+    /// A channel that receives messages but never returns them.
     Sink,
 }
 
