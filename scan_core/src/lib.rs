@@ -7,16 +7,15 @@
 #![forbid(unsafe_code)]
 
 pub mod channel_system;
-mod cs_model;
 mod dummy_rng;
 mod grammar;
 mod oracle;
 pub mod program_graph;
 mod smc;
+mod tracer;
 mod transition_system;
 
 use core::marker::Sync;
-pub use cs_model::{Atom, CsModel, CsModelRun};
 use dummy_rng::DummyRng;
 pub use grammar::*;
 use log::{info, trace};
@@ -30,7 +29,10 @@ use std::{
     },
     time::Instant,
 };
-pub use transition_system::{Tracer, TransitionSystem, TransitionSystemGenerator};
+pub use tracer::Tracer;
+pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
+
+use crate::channel_system::Event;
 
 /// The type that represents time.
 pub type Time = u32;
@@ -46,11 +48,11 @@ pub enum RunOutcome {
 
 /// The main type to interface with the verification capabilities of SCAN.
 /// [`Scan`] holds the model, properties and other data necessary to run the verification process.
-/// The type of models and properties is abstracted through the [`TransitionSystem`] and [`Oracle`] traits,
+/// The type of models and properties is abstracted through the [`Oracle`] trait,
 /// to provide a unified interface.
 #[derive(Debug, Clone)]
-pub struct Scan<TsG, O> {
-    tsd: TsG,
+pub struct Scan<O> {
+    model: TransitionSystem,
     oracle: O,
     running: Arc<AtomicBool>,
     successes: Arc<AtomicU32>,
@@ -58,11 +60,11 @@ pub struct Scan<TsG, O> {
     violations: Arc<Mutex<Vec<u32>>>,
 }
 
-impl<TsG, O> Scan<TsG, O> {
+impl<O> Scan<O> {
     /// Create new [`Scan`] object.
-    pub fn new(tsd: TsG, oracle: O) -> Self {
+    pub fn new(tsd: TransitionSystem, oracle: O) -> Self {
         Scan {
-            tsd,
+            model: tsd,
             oracle,
             running: Arc::new(AtomicBool::new(false)),
             successes: Arc::new(AtomicU32::new(0)),
@@ -103,11 +105,11 @@ impl<TsG, O> Scan<TsG, O> {
     }
 }
 
-impl<TsG: TransitionSystemGenerator, O: Oracle> Scan<TsG, O> {
+impl<O: Oracle> Scan<O> {
     fn verification(&self, confidence: f64, precision: f64, duration: Time) {
         let local_successes;
         let local_failures;
-        let mut ts = self.tsd.generate();
+        let mut ts = self.model.new_run();
 
         let result = ts.experiment(duration, self.oracle.clone(), self.running.clone());
         if !self.running.load(Ordering::Relaxed) {
@@ -174,19 +176,19 @@ impl<TsG: TransitionSystemGenerator, O: Oracle> Scan<TsG, O> {
     }
 
     #[inline]
-    fn trace<'a, T>(&'a self, tracer: T, duration: Time)
+    fn trace<T>(&self, tracer: T, duration: Time)
     where
-        T: Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Tracer<Event>,
     {
-        let mut ts = self.tsd.generate();
+        let mut ts = self.model.new_run();
         ts.trace(duration, self.oracle.clone(), tracer)
     }
 
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`].
-    pub fn traces<'a, T>(&'a self, runs: usize, tracer: T, duration: Time)
+    pub fn traces<T>(&self, runs: usize, tracer: T, duration: Time)
     where
-        T: Clone + Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Clone + Tracer<Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
@@ -200,9 +202,8 @@ impl<TsG: TransitionSystemGenerator, O: Oracle> Scan<TsG, O> {
     }
 }
 
-impl<TsG, O> Scan<TsG, O>
+impl<O> Scan<O>
 where
-    TsG: TransitionSystemGenerator + Sync,
     O: Oracle + Sync,
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
@@ -231,11 +232,9 @@ where
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`],
     /// spawning multiple threads.
-    pub fn par_traces<'a, T>(&'a self, runs: usize, tracer: T, duration: Time)
+    pub fn par_traces<T>(&self, runs: usize, tracer: T, duration: Time)
     where
-        T: Clone
-            + Sync
-            + Tracer<<<TsG as TransitionSystemGenerator>::Ts<'a> as TransitionSystem>::Event>,
+        T: Clone + Sync + Tracer<Event>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");

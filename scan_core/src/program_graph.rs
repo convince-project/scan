@@ -81,7 +81,7 @@ mod builder;
 
 use crate::{DummyRng, Time, grammar::*};
 pub use builder::*;
-use rand::{Rng, SeedableRng, seq::IteratorRandom};
+use rand::Rng;
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -681,43 +681,6 @@ impl<'def> ProgramGraphRun<'def> {
         } else {
             Err(PgError::UnsatisfiedGuard)
         }
-    }
-
-    #[inline]
-    pub(crate) fn eval(&self, expr: &Expression<Var>) -> Val {
-        expr.eval(
-            &|v: Var| *self.vars.get(v.0 as usize).unwrap(),
-            &mut DummyRng,
-        )
-    }
-
-    #[inline]
-    pub(crate) fn val(&self, var: Var) -> Result<Val, PgError> {
-        self.vars
-            .get(var.0 as usize)
-            .copied()
-            .ok_or(PgError::MissingVar(var))
-    }
-}
-
-impl<'def> ProgramGraphRun<'def> {
-    pub(crate) fn montecarlo<R: Rng + SeedableRng>(&mut self, rng: &mut R) -> Option<Action> {
-        let mut rand = R::from_rng(rng);
-        if let Some((action, post_states)) = self
-            .possible_transitions()
-            .filter_map(|(action, post_state)| {
-                post_state
-                    .map(|locs| locs.choose(rng))
-                    .collect::<Option<SmallVec<[Location; 4]>>>()
-                    .map(|loc| (action, loc))
-            })
-            .choose(&mut rand)
-        {
-            self.transition(action, post_states.as_slice(), rng)
-                .expect("successful transition");
-            return Some(action);
-        }
-        None
     }
 }
 
