@@ -189,7 +189,7 @@ impl Cli {
                 .to_str()
                 .ok_or(anyhow!("file extension not recognized"))?
             {
-                "xml" => self.run_scxml(&model),
+                "xml" | "scxml" => self.run_scxml(&model),
                 "jani" => self.run_jani(&model),
                 "pml" | "prm" => self.run_promela(&model),
                 _ => bail!("unsupported file format"),
