@@ -10,7 +10,8 @@ pub use builder::ScxmlModel;
 use log::info;
 pub use print_trace::TracePrinter;
 pub use scan_core;
-use scan_core::{PmtlOracle, Scan};
+use scan_core::Scan;
+use scan_pmtl::PmtlOracle;
 
 pub type ScxmlScan = Scan<PmtlOracle>;
 

@@ -32,7 +32,7 @@ codegen-units = 1
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = ["scan_core", "scan_scxml", "scan_jani", "scan_promela"]
+members = ["scan_core", "scan_scxml", "scan_jani", "scan_promela", "scan_pmtl", "scan_mtl"]
 
 [workspace.dependencies]
 anyhow = "1.0.102"

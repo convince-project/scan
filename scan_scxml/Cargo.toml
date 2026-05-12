@@ -23,6 +23,7 @@ crate-type = ["lib"]  # The crate types to generate.
 
 [dependencies]
 smc_scan_core = { version = "0.1.1", path = "../scan_core" }
+smc_scan_pmtl = { version = "0.1.0", path = "../scan_pmtl" }
 anyhow = { workspace = true }
 boa_ast = "0.21.1"
 boa_interner = "0.21.1"

@@ -13,7 +13,8 @@ lrpar_mod!("spinv4.y");
 pub mod builder;
 pub use builder::*;
 use regex::Regex;
-use scan_core::{PmtlOracle, Scan, TransitionSystem};
+use scan_core::{Scan, TransitionSystem};
+use scan_pmtl::PmtlOracle;
 
 pub type PromelaScan = Scan<PmtlOracle>;
 

@@ -728,9 +728,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "heck"
@@ -833,7 +833,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "serde",
  "serde_core",
 ]
@@ -1302,9 +1302,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.39.4"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
+checksum = "0b7315c86b26aaef0321fba33c9dcc160da659c6a9d278f0f6a5656d6561c03b"
 dependencies = [
  "memchr",
 ]
@@ -1570,7 +1570,22 @@ dependencies = [
  "serde",
  "serde_json",
  "smc_scan_core",
+ "smc_scan_mtl",
  "thiserror",
+]
+
+[[package]]
+name = "smc_scan_mtl"
+version = "0.1.0"
+dependencies = [
+ "smc_scan_core",
+]
+
+[[package]]
+name = "smc_scan_pmtl"
+version = "0.1.0"
+dependencies = [
+ "smc_scan_core",
 ]
 
 [[package]]
@@ -1584,6 +1599,7 @@ dependencies = [
  "lrpar",
  "regex",
  "smc_scan_core",
+ "smc_scan_pmtl",
  "thiserror",
 ]
 
@@ -1602,6 +1618,7 @@ dependencies = [
  "logos",
  "quick-xml",
  "smc_scan_core",
+ "smc_scan_pmtl",
  "thiserror",
 ]
 

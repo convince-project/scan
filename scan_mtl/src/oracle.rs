@@ -1,4 +1,4 @@
-use crate::{Oracle, Time};
+use scan_core::{Oracle, Time};
 
 /// An Metric Temporal Logic (MTL) formula.
 #[derive(Debug, Clone)]

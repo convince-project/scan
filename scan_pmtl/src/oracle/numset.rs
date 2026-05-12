@@ -1,4 +1,4 @@
-use crate::Time;
+use scan_core::Time;
 
 // Represent union of closed intervals,
 // each interval being represented by lower and upper bounds.

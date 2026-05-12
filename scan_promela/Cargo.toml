@@ -9,11 +9,17 @@ repository = "https://github.com/convince-project/scan"
 license = "Apache-2.0"
 readme = "README.md"
 keywords = ["verification", "model-checking", "promela"]
-categories = ["compilers", "concurrency", "parser-implementations", "science::robotics", "simulation"]
+categories = [
+  "compilers",
+  "concurrency",
+  "parser-implementations",
+  "science::robotics",
+  "simulation"
+]
 
 [lib]
 name = "scan_promela"  # The name of the target.
-crate-type = ["lib"]   # The crate types to generate.
+crate-type = ["lib"]  # The crate types to generate.
 
 [build-dependencies]
 cfgrammar = "0.14"
@@ -26,6 +32,7 @@ lrlex = "0.14.1"
 lrpar = "0.14.1"
 regex = "1"
 smc_scan_core = { version = "0.1.1", path = "../scan_core" }
+smc_scan_pmtl = { version = "0.1.0", path = "../scan_pmtl" }
 anyhow = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }

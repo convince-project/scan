@@ -5,7 +5,7 @@ use boa_ast::scope::Scope;
 use boa_interner::Interner;
 use log::{error, info, trace};
 use quick_xml::{Reader, XmlVersion, events::Event};
-use scan_core::Pmtl;
+use scan_pmtl::Pmtl;
 use std::{
     collections::HashMap,
     io::{BufRead, Read},

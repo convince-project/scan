@@ -1,7 +1,7 @@
 mod numset;
 
-use crate::{Oracle, Time};
 use numset::NumSet;
+use scan_core::{Oracle, Time};
 use std::hash::Hash;
 
 /// A Past-time Metric Temporal Logic (PMTL) formula.

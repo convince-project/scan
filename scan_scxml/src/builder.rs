@@ -11,6 +11,7 @@ use anyhow::{Context, anyhow, bail};
 use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
+use scan_pmtl::{Pmtl, PmtlOracle};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 // TODO:
