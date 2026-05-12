@@ -11,7 +11,6 @@ mod cs_model;
 mod dummy_rng;
 mod grammar;
 mod oracle;
-mod pg_model;
 pub mod program_graph;
 mod smc;
 mod transition_system;
@@ -22,7 +21,6 @@ use dummy_rng::DummyRng;
 pub use grammar::*;
 use log::{info, trace};
 pub use oracle::*;
-pub use pg_model::{PgModel, PgModelRun};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
