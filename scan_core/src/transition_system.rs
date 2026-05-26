@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use log::trace;
 
 use crate::channel_system::{
-    Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
+    Action, Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
 use crate::{BooleanExpr, DummyRng, Oracle, RunOutcome, Time, Tracer, Val};
 
@@ -106,7 +106,7 @@ pub struct TransitionSystemRun<'def> {
     ports: &'def [Channel],
     vals: Vec<Vec<Val>>,
     predicates: &'def [BooleanExpr<Atom>],
-    last_event: Option<Event>,
+    last_event: Option<(Action, Event)>,
 }
 
 impl<'def> TransitionSystemRun<'def> {
@@ -115,7 +115,7 @@ impl<'def> TransitionSystemRun<'def> {
     /// Used to generate Montecarlo-like executions
     pub fn transition(&mut self) {
         self.last_event = self.cs.montecarlo_execution();
-        if let Some(ref event) = self.last_event
+        if let Some((_, ref event)) = self.last_event
             && let EventType::Send(ref vals) = event.event_type
             && let Ok(index) = self.ports.binary_search(&event.channel)
         {
@@ -128,7 +128,7 @@ impl<'def> TransitionSystemRun<'def> {
 
     /// Returns last event processed by model.
     #[inline]
-    pub fn last_event(&self) -> Option<&Event> {
+    pub fn last_event(&self) -> Option<&(Action, Event)> {
         self.last_event.as_ref()
     }
 
@@ -154,7 +154,7 @@ impl<'def> TransitionSystemRun<'def> {
                         self.vals[port_idx][idx]
                     }
                     Atom::Event(channel) => {
-                        Val::Boolean(self.last_event.as_ref().is_some_and(|e| {
+                        Val::Boolean(self.last_event.as_ref().is_some_and(|(_, e)| {
                             e.channel == channel && matches!(e.event_type, EventType::Send(..))
                         }))
                     }
@@ -209,7 +209,7 @@ impl<'def> TransitionSystemRun<'def> {
     /// and process the execution trace via the given [`Tracer`].
     pub(crate) fn trace<T, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: T)
     where
-        T: Tracer<Event>,
+        T: Tracer,
     {
         trace!("new run starting");
         // reuse vector to avoid allocations
@@ -217,8 +217,8 @@ impl<'def> TransitionSystemRun<'def> {
         tracer.init();
         while self.time() <= duration {
             self.transition();
-            if let Some(event) = self.last_event() {
-                tracer.trace(event, self.time(), self.state());
+            if let Some((action, event)) = self.last_event() {
+                tracer.trace(*action, event, self.time(), self.state());
                 labels.clear();
                 labels.extend(self.labels());
                 oracle.update_state(&labels);

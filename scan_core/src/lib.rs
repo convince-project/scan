@@ -32,8 +32,6 @@ use std::{
 pub use tracer::Tracer;
 pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
 
-use crate::channel_system::Event;
-
 /// The type that represents time.
 pub type Time = u32;
 
@@ -178,7 +176,7 @@ impl<O: Oracle> Scan<O> {
     #[inline]
     fn trace<T>(&self, tracer: T, duration: Time)
     where
-        T: Tracer<Event>,
+        T: Tracer,
     {
         let mut ts = self.model.new_run();
         ts.trace(duration, self.oracle.clone(), tracer)
@@ -188,7 +186,7 @@ impl<O: Oracle> Scan<O> {
     /// using the provided [`Tracer`].
     pub fn traces<T>(&self, runs: usize, tracer: T, duration: Time)
     where
-        T: Clone + Tracer<Event>,
+        T: Clone + Tracer,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
@@ -234,7 +232,7 @@ where
     /// spawning multiple threads.
     pub fn par_traces<T>(&self, runs: usize, tracer: T, duration: Time)
     where
-        T: Clone + Sync + Tracer<Event>,
+        T: Clone + Sync + Tracer,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");

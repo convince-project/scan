@@ -23,6 +23,7 @@ impl TracePrinter {
     const SUCCESSES: &str = "successes";
     const FAILURES: &str = "failures";
     const HEADER: [&str; 2] = ["Time", "Action"];
+    const UNKNOWN_ACTION: &str = "unknown action";
 
     pub fn new(model: Arc<JaniModelData>) -> Self {
         let mut path = current_dir().expect("current dir");
@@ -69,18 +70,22 @@ impl Clone for TracePrinter {
     }
 }
 
-impl Tracer<Event> for TracePrinter {
+impl Tracer for TracePrinter {
     fn init(&mut self) {
         let idx = self
             .index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let filename = format!("{idx:04}.csv.gz");
+        let filename = PathBuf::new()
+            .with_file_name(format!("{idx:04}"))
+            .with_extension("csv");
         self.path.push(Self::TEMP);
         self.path.push(&filename);
+        self.path.add_extension("gz");
         let file = File::create_new(&self.path).expect("create file");
         let enc = flate2::GzBuilder::new()
-            .filename(filename)
-            .write(file, flate2::Compression::fast());
+            .filename(filename.to_str().expect("file name"))
+            .comment("Scan-generated execution trace")
+            .write(file, flate2::Compression::best());
         let mut writer = csv::WriterBuilder::new().from_writer(enc);
         writer
             .write_record(
@@ -95,9 +100,20 @@ impl Tracer<Event> for TracePrinter {
         self.writer = Some(writer);
     }
 
-    fn trace<I: IntoIterator<Item = Val>>(&mut self, event: &Event, time: Time, ports: I) {
+    fn trace<I: IntoIterator<Item = Val>>(
+        &mut self,
+        action: Action,
+        _event: &Event,
+        time: Time,
+        ports: I,
+    ) {
         let time = time.to_string();
-        let action_name = String::from("TODO");
+        let action_name = self
+            .model
+            .actions
+            .get(&action)
+            .cloned()
+            .unwrap_or(Self::UNKNOWN_ACTION.to_string());
         // self.model.actions.get(event).cloned().unwrap_or_default();
 
         self.writer

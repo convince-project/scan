@@ -168,7 +168,7 @@ pub(crate) enum IntOp {
     #[serde(rename = "*")]
     Mult,
     #[serde(rename = "%")]
-    IntDiv,
+    Mod,
 }
 
 /// computes left + right / left - right / left * right / left modulo right

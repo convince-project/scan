@@ -1,5 +1,5 @@
 use super::{Expression, Identifier, Type};
-use serde::Deserialize;
+use serde::{Deserialize, de::IgnoredAny};
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -25,5 +25,5 @@ pub(crate) struct VariableDeclaration {
     pub(crate) initial_value: Option<Expression>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }

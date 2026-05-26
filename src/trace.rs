@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time, Tracer, channel_system::Event};
+use scan_core::{Oracle, Scan, Time, Tracer};
 
 const ALL_PROPS_ERR: &str =
     "the --all flag is incompatible with individually-specified properties.\n
@@ -52,7 +52,7 @@ impl TraceArgs {
     pub(crate) fn trace<'a, Od, Tr>(&self, scan: &'a Scan<Od>, tracer: Tr)
     where
         Od: Oracle + Sync + 'a,
-        Tr: Clone + Sync + Tracer<Event>,
+        Tr: Clone + Sync + Tracer,
     {
         if self.single_thread {
             scan.traces::<Tr>(self.traces, tracer, self.duration);

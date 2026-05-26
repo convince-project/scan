@@ -1,7 +1,7 @@
 use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
 
 use super::ScxmlModel;
-use scan_core::channel_system::{Event, EventType};
+use scan_core::channel_system::{Action, Event, EventType};
 use scan_core::{RunOutcome, Time, Tracer, Val};
 use std::{
     env::current_dir,
@@ -23,7 +23,7 @@ impl<'a> TracePrinter<'a> {
     const TEMP: &'static str = ".temp";
     const SUCCESSES: &'static str = "successes";
     const FAILURES: &'static str = "failures";
-    const HEADER: [&'static str; 5] = ["Time", "Origin", "Target", "Event", "Values"];
+    const HEADER: [&'static str; 5] = ["Time", "Event", "Origin", "Target", "Values"];
 
     pub fn new(model: &'a ScxmlModel) -> Self {
         let mut path = current_dir().expect("current dir");
@@ -88,7 +88,7 @@ impl<'a> Clone for TracePrinter<'a> {
     }
 }
 
-impl<'a> Tracer<Event> for TracePrinter<'a> {
+impl<'a> Tracer for TracePrinter<'a> {
     fn init(&mut self) {
         let idx = self
             .index
@@ -117,7 +117,13 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
         self.writer = Some(writer);
     }
 
-    fn trace<I: IntoIterator<Item = Val>>(&mut self, event: &Event, time: Time, ports: I) {
+    fn trace<I: IntoIterator<Item = Val>>(
+        &mut self,
+        _action: Action,
+        event: &Event,
+        time: Time,
+        ports: I,
+    ) {
         let mut fields = Vec::new();
         let time = time.to_string();
         let origin_name;
@@ -192,7 +198,7 @@ impl<'a> Tracer<Event> for TracePrinter<'a> {
             .as_mut()
             .unwrap()
             .write_record(
-                [time, origin_name, target_name, event_name, params]
+                [time, event_name, origin_name, target_name, params]
                     .into_iter()
                     .chain(state),
             )

@@ -1,5 +1,5 @@
 use super::Identifier;
-use serde::Deserialize;
+use serde::{Deserialize, de::IgnoredAny};
 
 /// Automata composition
 #[derive(Deserialize)]
@@ -10,7 +10,7 @@ pub(crate) struct Composition {
     pub(crate) syncs: Vec<Sync>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Deserialize)]
@@ -25,7 +25,7 @@ pub(crate) struct Element {
     pub(crate) input_enable: Vec<Identifier>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Deserialize)]
@@ -38,5 +38,5 @@ pub(crate) struct Sync {
     pub(crate) result: Option<Identifier>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }

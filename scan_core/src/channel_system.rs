@@ -430,7 +430,7 @@ impl<'def> ChannelSystemRun<'def> {
             })
     }
 
-    pub(crate) fn montecarlo_execution(&mut self) -> Option<Event> {
+    pub(crate) fn montecarlo_execution(&mut self) -> Option<(Action, Event)> {
         let mut rand1 = SmallRng::from_rng(&mut self.rng);
         let mut rand2 = SmallRng::from_rng(&mut self.rng);
         // Setting pgs_left as length resets the queue
@@ -445,6 +445,8 @@ impl<'def> ChannelSystemRun<'def> {
             self.pg_list.swap(pg_select, pgs_left);
             // Execute randomly chosen transitions on the picked PG until an event is generated,
             // or no more transition is possible
+            // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
+            // Hopefully it will be possible to treat all cases in a general way eventually.
             if self.program_graphs[pg_id.0 as usize].current_states().len() == 1 {
                 while let Some((action, post_state)) = self.program_graphs[pg_id.0 as usize]
                     .nosync_possible_transitions()
@@ -464,7 +466,7 @@ impl<'def> ChannelSystemRun<'def> {
                         .transition(pg_id, Action(pg_id, action), &[post_state])
                         .expect("successful transition");
                     if event.is_some() {
-                        return event;
+                        return event.map(|ev| (Action(pg_id, action), ev));
                     }
                 }
             } else {
@@ -487,7 +489,7 @@ impl<'def> ChannelSystemRun<'def> {
                         .transition(pg_id, Action(pg_id, action), post_states.as_slice())
                         .expect("successful transition");
                     if event.is_some() {
-                        return event;
+                        return event.map(|ev| (Action(pg_id, action), ev));
                     }
                 }
             }

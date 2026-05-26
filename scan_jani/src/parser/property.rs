@@ -2,7 +2,7 @@ use super::{
     BoolOp, ConstantValue, EqCompOp, Expression, Identifier, IntOp, IteOp, NegOp, NumCompOp,
     Real2IntOp, RealOp,
 };
-use serde::Deserialize;
+use serde::{Deserialize, de::IgnoredAny};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -13,7 +13,7 @@ pub(crate) struct Property {
     pub(crate) expression: PropertyExpression,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Deserialize)]

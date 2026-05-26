@@ -71,7 +71,7 @@ pub(crate) struct Action {
     pub(crate) name: Identifier,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: (),
 }
 
 #[derive(Deserialize)]
@@ -138,5 +138,5 @@ pub(crate) struct RestrictInitial {
     pub(crate) exp: Expression,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: (),
 }
