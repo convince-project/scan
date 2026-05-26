@@ -1,16 +1,17 @@
 use super::Model;
 use crate::parser::{
-    self, BoolOp, ConstantDeclaration, Expression, PropertyExpression, VariableDeclaration,
+    self, Automaton, BoolOp, ConstantDeclaration, Destination, Edge, Expression,
+    PropertyExpression, Sync, VariableDeclaration,
 };
 use anyhow::{Context, anyhow, bail};
 use either::Either;
-use log::trace;
 use scan_core::{
-    Atom, BooleanExpr, Float, FloatExpr, Integer, IntegerExpr, Natural, TransitionSystem, Type,
-    TypeError, Val,
+    Atom, BooleanExpr, Float, FloatExpr, Integer, IntegerExpr, Natural, NaturalExpr,
+    TransitionSystem, Type, TypeError, Val,
     channel_system::{Action, Channel, ChannelSystemBuilder, CsExpression, Location, PgId, Var},
 };
 use scan_mtl::{Mtl, MtlOracle};
+use serde::de::IgnoredAny;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -42,8 +43,10 @@ struct JaniBuilder {
 #[derive(Debug, Clone)]
 struct AutomatonBuilder {
     // tracks locations and their "idle" side-location
-    locations: HashMap<String, (Location, Location)>,
+    locations: HashMap<String, (Location, Natural)>,
     local_vars: HashMap<String, (Var, Val, Type)>,
+    idle_locations: HashMap<Action, Location>,
+    return_location: Location,
     // assign action name -> cs base action + destination actions
     dest_actions: HashMap<
         // triggering sync action
@@ -56,21 +59,36 @@ struct AutomatonBuilder {
         )>,
     >,
     rng: Var,
+    current_loc: Var,
 }
 
 impl AutomatonBuilder {
-    fn new(rng: Var) -> Self {
+    fn new(rng: Var, current_loc: Var, return_location: Location) -> Self {
         AutomatonBuilder {
             locations: HashMap::new(),
             local_vars: HashMap::new(),
             dest_actions: HashMap::new(),
             rng,
+            current_loc,
+            idle_locations: HashMap::new(),
+            return_location,
         }
     }
 }
 
+// TRANSITIONS DECOMPOSITION
+//
+// [pre_location]
+//     | edge guard | sync_action: unset transient vars
+// [edge_location] <> previous automata dest_actions
+//     | dest probability guard | dest_action: set current_location + dest assignments + set transient_vars
+// [dest_location] <> successive automata dest_actions
+//     | system_action: send global vars
+// [post_location]
+
 impl JaniBuilder {
     const SILENT: &str = "__SILENT__";
+    const INITIAL: &str = "__INITIAL__";
 
     pub(crate) fn build(
         mut self,
@@ -79,16 +97,21 @@ impl JaniBuilder {
     ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
         let mut cs = ChannelSystemBuilder::new();
         let pg_id = cs.new_program_graph();
+        let automata: HashMap<&str, &Automaton> = jani_model
+            .automata
+            .iter()
+            .map(|automaton| (automaton.name.as_str(), automaton))
+            .collect();
 
         jani_model
             .constants
             .iter()
             .try_for_each(|c| self.add_global_constant(c))?;
 
-        let len = jani_model.variables.len();
-        let mut global_state_init = Vec::with_capacity(len);
-        let mut global_state_type = Vec::with_capacity(len);
-        let mut global_state_expr = Vec::with_capacity(len);
+        let global_state_len = jani_model.variables.len();
+        let mut global_state_init = Vec::with_capacity(global_state_len);
+        let mut global_state_type = Vec::with_capacity(global_state_len);
+        let mut global_state_expr = Vec::with_capacity(global_state_len);
 
         // Create global variables
         for variable_dec in jani_model.variables.iter() {
@@ -96,10 +119,8 @@ impl JaniBuilder {
             let init = variable_dec
                 .initial_value
                 .as_ref()
-                .and_then(|expr| {
-                    self.build_expression(expr, Some(var_type), &self.global_vars)
-                        .ok()
-                })
+                .map(|expr| self.build_expression(expr, Some(var_type), &self.global_vars))
+                .transpose()?
                 .unwrap_or_else(|| CsExpression::from(var_type.default_value()));
             let val = init.eval_constant()?;
             if var_type != val.r#type() {
@@ -122,64 +143,53 @@ impl JaniBuilder {
         let global_state_channel = cs.new_sink(global_state_type);
         self.global_state_channel = Some(global_state_channel);
 
-        // for every system action (including silent one),
-        // create action which send global state to channel
-        let silent_system_action =
-            cs.new_send(pg_id, global_state_channel, global_state_expr.clone())?;
+        // for every system action (including silent ones),
+        // create action which sends global state to channel
         for system_action in &jani_model.actions {
             let system_action_id =
                 cs.new_send(pg_id, global_state_channel, global_state_expr.clone())?;
             self.system_actions
                 .insert(system_action.name.clone(), system_action_id);
         }
+        let silent_system_action =
+            cs.new_send(pg_id, global_state_channel, global_state_expr.clone())?;
+        // Add initialization action
+        let system_initial_action_id =
+            cs.new_send(pg_id, global_state_channel, global_state_expr)?;
+        self.system_actions
+            .insert(Self::INITIAL.to_string(), system_initial_action_id);
 
-        for (element_idx, element) in jani_model.system.elements.iter().enumerate() {
+        for element in jani_model.system.elements.iter() {
             let rng = cs.new_var(pg_id, Val::from(0.)).expect("new var");
+            let current_loc = cs.new_var(pg_id, Val::from(0 as Natural)).expect("new var");
+            let return_location = cs.new_location(pg_id).expect("new location");
 
-            let mut automaton_builder = AutomatonBuilder::new(rng);
-            let automaton = jani_model
-                .automata
-                .iter()
-                .find(|aut| aut.name == element.automaton)
+            let mut automaton_builder = AutomatonBuilder::new(rng, current_loc, return_location);
+            let automaton = automata
+                .get(element.automaton.as_str())
                 .ok_or_else(|| anyhow!("missing automaton {}", element.automaton))?;
+
+            // initial locations
+            let initial = cs.new_initial_location(pg_id).expect("initial location");
+            assert!(automaton_builder.locations.is_empty());
+            automaton_builder
+                .locations
+                .insert(Self::INITIAL.to_string(), (initial, 0));
 
             // create locations
             for location in &automaton.locations {
                 let loc = cs.new_location(pg_id).expect("new location");
-                let idle_loc = cs.new_location(pg_id).expect("new location");
-                // elements must return to non-idle states upon system actions in every location
-                cs.add_transition(pg_id, idle_loc, silent_system_action, loc, None)
-                    .expect("add transition");
-                for (action_name, system_action) in self.system_actions.iter() {
-                    // (OPTIMIZATION: only if said system action MAY NOT involve the element automaton)
-                    if jani_model
-                        .system
-                        .syncs
-                        .iter()
-                        .filter(|sync| {
-                            sync.result
-                                .as_ref()
-                                .is_some_and(|result| result == action_name)
-                        })
-                        .any(|sync| sync.synchronise[element_idx].is_none())
-                    {
-                        cs.add_transition(pg_id, idle_loc, *system_action, loc, None)
-                            .expect("add transition");
-                    }
-                }
+                // Give every location an ID unique within the automaton
+                // (not necessarily globally unique)
+                let loc_id = automaton_builder.locations.len() as Natural;
                 automaton_builder
                     .locations
-                    .insert(location.name.clone(), (loc, idle_loc));
-            }
-
-            // initial locations
-            let initial = cs.new_initial_location(pg_id).expect("initial location");
-            for loc in &automaton.initial_locations {
-                let (loc, _) = *automaton_builder
-                    .locations
-                    .get(loc)
-                    .ok_or_else(|| anyhow!("initial location {loc} missing"))?;
-                cs.add_autonomous_transition(pg_id, initial, loc, None)
+                    .insert(location.name.clone(), (loc, loc_id));
+                let dest_guard = BooleanExpr::NatEqual(
+                    scan_core::NaturalExpr::from(loc_id),
+                    scan_core::NaturalExpr::Var(current_loc),
+                );
+                cs.add_autonomous_transition(pg_id, return_location, loc, Some(dest_guard))
                     .expect("add transition");
             }
 
@@ -195,66 +205,92 @@ impl JaniBuilder {
             self.automaton_builders.push(automaton_builder);
         }
 
-        // Extend system syncs with async silent actions for each element
-        let num_elements = self.automaton_builders.len();
-        let silent_syncs = (0..num_elements).map(|n| {
-            let mut synchronise = vec![None; num_elements];
-            synchronise[n] = Some(Self::SILENT.to_string());
-            parser::Sync {
-                synchronise,
-                result: None,
-                _comment: String::new(),
-            }
-        });
+        // Extend system syncs with async silent actions
+        // for each element that has an edge activated by silent action
+        let num_elements = jani_model.system.elements.len();
+        assert_eq!(self.automaton_builders.len(), num_elements);
+        let silent_syncs = (0..num_elements)
+            .filter(|&n| {
+                let element = jani_model.system.elements.get(n).unwrap();
+                let automaton = automata.get(element.automaton.as_str()).expect("automaton");
+                automaton.edges.iter().any(|edge| edge.action.is_none())
+            })
+            .map(|n| {
+                let mut synchronise = vec![None; num_elements];
+                synchronise[n] = Some(Self::SILENT.to_string());
+                parser::Sync {
+                    synchronise,
+                    result: None,
+                    _comment: IgnoredAny,
+                }
+            });
+        // Sync calling initial action on all elements
+        let initial_sync = Sync {
+            synchronise: vec![Some(Self::INITIAL.to_string()); jani_model.system.elements.len()],
+            result: Some(Self::INITIAL.to_string()),
+            _comment: IgnoredAny,
+        };
 
         // for every sync, create sync action
-        for sync in silent_syncs.chain(jani_model.system.syncs) {
+        for sync in silent_syncs
+            .chain(jani_model.system.syncs)
+            .chain(std::iter::once(initial_sync))
+        {
             let sync_action = cs.new_action(pg_id).expect("new action");
-            trace!(
-                "building sync action {}",
-                sync.result.as_deref().unwrap_or(Self::SILENT)
-            );
+            let system_action = sync
+                .result
+                .as_ref()
+                .map(|result| {
+                    self.system_actions
+                        .get(result)
+                        .ok_or_else(|| anyhow!("sync result {result} unknown"))
+                })
+                .transpose()?
+                .copied()
+                .unwrap_or(silent_system_action);
 
             // elements unaffected by sync must ignore the sync action in every location
             // by moving to idle location
-            for (element_idx, (element, _)) in jani_model
-                .system
-                .elements
+            let mut any_unaffected = false;
+            for (element_idx, _) in sync
+                .synchronise
                 .iter()
-                .zip(&sync.synchronise)
                 .enumerate()
-                .filter(|(_, (_, action))| action.is_none())
+                .filter(|(_, action)| action.is_none())
             {
-                let automaton = jani_model
-                    .automata
-                    .iter()
-                    .find(|aut| aut.name == element.automaton)
-                    .ok_or_else(|| anyhow!("missing automaton {}", element.automaton))?;
-
+                any_unaffected = true;
                 let automaton_builder = self
                     .automaton_builders
-                    .get(element_idx)
+                    .get_mut(element_idx)
                     .expect("automaton builder");
 
-                for location in &automaton.locations {
-                    let (loc, idle_loc) = *automaton_builder
-                        .locations
-                        .get(&location.name)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "missing location {} in automaton {}",
-                                location.name,
-                                element.automaton
-                            )
-                        })?;
-                    cs.add_transition(pg_id, loc, sync_action, idle_loc, None)
+                // Create idle location for this sync/automaton
+                let sync_idle_location = cs.new_location(pg_id).expect("new location");
+                automaton_builder
+                    .idle_locations
+                    .insert(sync_action, sync_idle_location);
+                cs.add_transition(
+                    pg_id,
+                    sync_idle_location,
+                    system_action,
+                    automaton_builder.return_location,
+                    None,
+                )
+                .expect("add transition");
+
+                for (location, loc_id) in automaton_builder.locations.values() {
+                    // Skip initial location (not needed)
+                    if *loc_id == 0 {
+                        continue;
+                    }
+                    cs.add_transition(pg_id, *location, sync_action, sync_idle_location, None)
                         .expect("add transition");
                 }
             }
 
             // For every element involved in the sync action,
             // build transitions associated to relevant edges
-            for (element_idx, element, action) in jani_model
+            for (element_idx, element, automaton_action) in jani_model
                 .system
                 .elements
                 .iter()
@@ -264,10 +300,8 @@ impl JaniBuilder {
                     action.as_ref().map(|action| (element_idx, element, action))
                 })
             {
-                let automaton = jani_model
-                    .automata
-                    .iter()
-                    .find(|aut| aut.name == element.automaton)
+                let automaton = automata
+                    .get(element.automaton.as_str())
                     .ok_or_else(|| anyhow!("missing automaton {}", element.automaton))?;
 
                 let automaton_builder = self
@@ -287,11 +321,37 @@ impl JaniBuilder {
                 )
                 .expect("add effect");
 
+                let initial_edge = Edge {
+                    location: Self::INITIAL.to_string(),
+                    action: Some(Self::INITIAL.to_string()),
+                    guard: None,
+                    destinations: automaton
+                        .initial_locations
+                        .iter()
+                        .map(|location| Destination {
+                            location: location.clone(),
+                            probability: None,
+                            assignments: Vec::new(),
+                            _comment: IgnoredAny,
+                        })
+                        .collect(),
+                    _comment: IgnoredAny,
+                };
+
+                let initial_location = parser::Location {
+                    name: Self::INITIAL.to_string(),
+                    transient_values: Vec::new(),
+                    _comment: IgnoredAny,
+                };
+
                 // create edges for the automaton action corresponding to the sync action
                 for edge in automaton
                     .edges
                     .iter()
-                    .filter(|edge| edge.action.as_deref().unwrap_or(Self::SILENT) == action)
+                    .chain(std::iter::once(&initial_edge))
+                    .filter(|edge| {
+                        edge.action.as_deref().unwrap_or(Self::SILENT) == automaton_action
+                    })
                 {
                     let automaton_builder = self
                         .automaton_builders
@@ -314,23 +374,19 @@ impl JaniBuilder {
                     for transient in &automaton
                         .locations
                         .iter()
+                        .chain(std::iter::once(&initial_location))
                         .find(|loc| loc.name == edge.location)
                         .ok_or_else(|| anyhow!("edge location {} not found", edge.location))?
                         .transient_values
                     {
-                        let (var, _init, r#type) = automaton_builder
+                        let (var, init, _) = automaton_builder
                             .local_vars
                             .get(&transient.r#ref)
                             .or_else(|| self.global_vars.get(&transient.r#ref))
                             .ok_or_else(|| {
                                 anyhow!("transient value {} not found", transient.r#ref)
                             })?;
-                        let effect = self.build_expression(
-                            &transient.value,
-                            Some(*r#type),
-                            &automaton_builder.local_vars,
-                        )?;
-                        cs.add_effect(pg_id, sync_action, *var, effect)
+                        cs.add_effect(pg_id, sync_action, *var, CsExpression::from(*init))
                             .expect("set transient value");
                     }
 
@@ -361,6 +417,8 @@ impl JaniBuilder {
                             )
                         })?;
 
+                    // NOTE: different edges can have the same sync action
+                    // and a non-deterministic choice of edge location
                     cs.add_transition(pg_id, pre_loc, sync_action, edge_location, guard)
                         .expect("add transition");
 
@@ -426,7 +484,7 @@ impl JaniBuilder {
                             })?
                             .transient_values
                         {
-                            let (var, _init, r#type) = automaton_builder
+                            let (var, _, r#type) = automaton_builder
                                 .local_vars
                                 .get(&transient.r#ref)
                                 .or_else(|| self.global_vars.get(&transient.r#ref))
@@ -457,7 +515,7 @@ impl JaniBuilder {
                             if let Some(prob_lower_bound) = prob_lower_bound.as_mut() {
                                 let prob_upper_bound = prob_lower_bound.clone() + probability;
                                 prob_expr = Some(
-                                    BooleanExpr::FloatLess(
+                                    BooleanExpr::FloatLessEq(
                                         prob_lower_bound.clone(),
                                         FloatExpr::Var(automaton_builder.rng),
                                     ) & BooleanExpr::FloatLess(
@@ -475,7 +533,7 @@ impl JaniBuilder {
                             }
                         } else {
                             if let Some(prob_lower_bound) = prob_lower_bound.as_mut() {
-                                prob_expr = Some(BooleanExpr::FloatLess(
+                                prob_expr = Some(BooleanExpr::FloatLessEq(
                                     prob_lower_bound.clone(),
                                     FloatExpr::Var(automaton_builder.rng),
                                 ));
@@ -511,41 +569,18 @@ impl JaniBuilder {
                         }
 
                         // elements unaffected by sync must ignore the dest action in every idle location
-                        for (element_idx, (element, _)) in jani_model
-                            .system
-                            .elements
+                        for (automaton_builder, _) in self
+                            .automaton_builders
                             .iter()
                             .zip(&sync.synchronise)
-                            .enumerate()
-                            .filter(|(_, (_, action))| action.is_none())
+                            .filter(|(_, action)| action.is_none())
                         {
-                            let automaton = jani_model
-                                .automata
-                                .iter()
-                                .find(|automaton| automaton.name == element.automaton)
-                                .ok_or_else(|| {
-                                    anyhow!("missing automaton {}", element.automaton)
-                                })?;
-
-                            let automaton_builder = self
-                                .automaton_builders
-                                .get(element_idx)
-                                .expect("automaton builder");
-
-                            for location in &automaton.locations {
-                                let (_, idle_loc) = *automaton_builder
-                                    .locations
-                                    .get(&location.name)
-                                    .ok_or_else(|| {
-                                        anyhow!(
-                                            "missing location {} in automaton {}",
-                                            location.name,
-                                            element.automaton
-                                        )
-                                    })?;
-                                cs.add_transition(pg_id, idle_loc, dest_action, idle_loc, None)
-                                    .expect("add transition");
-                            }
+                            let idle_loc = *automaton_builder
+                                .idle_locations
+                                .get(&sync_action)
+                                .expect("idle location");
+                            cs.add_transition(pg_id, idle_loc, dest_action, idle_loc, None)
+                                .expect("add transition");
                         }
 
                         // need to borrow mutably now
@@ -560,7 +595,7 @@ impl JaniBuilder {
                             .or_default()
                             .push((dest_action, dest_location));
 
-                        let (post_loc, _) = *automaton_builder
+                        let (post_loc, post_loc_idx) = *automaton_builder
                             .locations
                             .get(&dest.location)
                             .ok_or_else(|| {
@@ -571,20 +606,30 @@ impl JaniBuilder {
                                 )
                             })?;
 
-                        let system_action = sync
-                            .result
-                            .as_ref()
-                            .map(|result| {
-                                self.system_actions
-                                    .get(result)
-                                    .ok_or_else(|| anyhow!("sync result {result} unknown"))
-                            })
-                            .transpose()?
-                            .copied()
-                            .unwrap_or(silent_system_action);
+                        cs.add_effect(
+                            pg_id,
+                            dest_action,
+                            automaton_builder.current_loc,
+                            CsExpression::from(post_loc_idx),
+                        )
+                        .expect("set current location");
+
                         // Send global state to channel and transition to post location
-                        cs.add_transition(pg_id, dest_location, system_action, post_loc, None)
+                        if any_unaffected {
+                            cs.add_transition(
+                                pg_id,
+                                dest_location,
+                                system_action,
+                                dest_location,
+                                None,
+                            )
                             .expect("add location");
+                            cs.add_autonomous_transition(pg_id, dest_location, post_loc, None)
+                                .expect("add location");
+                        } else {
+                            cs.add_transition(pg_id, dest_location, system_action, post_loc, None)
+                                .expect("add location");
+                        }
                     }
                 }
             }
@@ -814,7 +859,22 @@ impl JaniBuilder {
                     parser::IntOp::Plus => left + right,
                     parser::IntOp::Minus => left + (-right)?,
                     parser::IntOp::Mult => left * right,
-                    parser::IntOp::IntDiv => left / right,
+                    parser::IntOp::Mod
+                        if type_hint.is_some_and(|hint| matches!(hint, Type::Natural)) =>
+                    {
+                        let left = NaturalExpr::try_from(left)?;
+                        let right = NaturalExpr::try_from(right)?;
+                        Ok(CsExpression::Natural(NaturalExpr::Rem(Box::new((
+                            left, right,
+                        )))))
+                    }
+                    parser::IntOp::Mod => {
+                        let left = IntegerExpr::try_from(left)?;
+                        let right = IntegerExpr::try_from(right)?;
+                        Ok(CsExpression::Integer(IntegerExpr::Rem(Box::new((
+                            left, right,
+                        )))))
+                    }
                 }
                 .map_err(anyhow::Error::from)
             }
@@ -959,7 +1019,7 @@ impl JaniBuilder {
                     parser::IntOp::Plus => left + right,
                     parser::IntOp::Minus => left + (-right)?,
                     parser::IntOp::Mult => left * right,
-                    parser::IntOp::IntDiv => left / right,
+                    parser::IntOp::Mod => left / right,
                 }
                 .map(Either::Left)
                 .map_err(anyhow::Error::from)

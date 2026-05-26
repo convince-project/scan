@@ -9,11 +9,17 @@ repository = "https://github.com/convince-project/scan"
 license = "Apache-2.0"
 readme = "README.md"
 keywords = ["verification", "model-checking"]
-categories = ["compilers", "concurrency", "parser-implementations", "science::robotics", "simulation"]
+categories = [
+  "compilers",
+  "concurrency",
+  "parser-implementations",
+  "science::robotics",
+  "simulation"
+]
 
 [lib]
-name = "scan_core"     # The name of the target.
-crate-type = ["lib"]   # The crate types to generate.
+name = "scan_core"  # The name of the target.
+crate-type = ["lib"]  # The crate types to generate.
 
 [dependencies]
 thiserror = { workspace = true }

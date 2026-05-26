@@ -1,5 +1,5 @@
 use super::{Expression, Identifier, LValue, RestrictInitial, VariableDeclaration};
-use serde::Deserialize;
+use serde::{Deserialize, de::IgnoredAny};
 
 /// all expressions and assignments inside an automaton can only reference its own local
 /// variables and the global variables of the enclosing model
@@ -24,7 +24,7 @@ pub(crate) struct Automaton {
     pub(crate) edges: Vec<Edge>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Deserialize)]
@@ -38,7 +38,7 @@ pub(crate) struct Location {
     pub(crate) transient_values: Vec<TransientValue>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
     // TODO
     // "?time-progress": { // the location's time progress condition, not allowed except TA, PTA, STA, HA, PHA and STA,
     //                     // type bool; if omitted in TA, PTA, STA, HA, PHA or SHA, it is true
@@ -58,7 +58,7 @@ pub(crate) struct TransientValue {
     pub(crate) value: Expression,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Clone, Deserialize)]
@@ -82,7 +82,7 @@ pub(crate) struct Edge {
     pub(crate) destinations: Vec<Destination>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Clone, Deserialize)]
@@ -92,7 +92,7 @@ pub(crate) struct Guard {
     pub(crate) exp: Expression,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Clone, Deserialize)]
@@ -108,7 +108,7 @@ pub(crate) struct Destination {
     pub(crate) assignments: Vec<Assignment>,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Clone, Deserialize)]
@@ -123,7 +123,7 @@ pub(crate) struct Assignment {
     // "?index": Number.step(1), // the index, to create sequences of atomic assignment sets, default 0
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }
 
 #[derive(Clone, Deserialize)]
@@ -133,5 +133,5 @@ pub(crate) struct Probability {
     pub(crate) exp: Expression,
     /// an optional comment
     #[serde(skip)]
-    pub(crate) _comment: String,
+    pub(crate) _comment: IgnoredAny,
 }

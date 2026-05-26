@@ -292,6 +292,54 @@ impl ProgramGraph {
     }
 }
 
+// WARN: This iterator allocates a [`Vec`] every time `next` is called.
+// To avoid this, one way would be to allocate a vector at creation and return a reference to it
+// for every iteration of next, but this requires "streaming iterators" or analogous solution.
+// TODO: Find a way to implement preallocation (or no allocation).
+struct TransitionsIterator<'a, I: Iterator<Item = (Action, &'a [Transition])>> {
+    iters: Vec<I>,
+    // vals: Vec<&'a [Transition]>,
+}
+
+impl<'a, I: Iterator<Item = (Action, &'a [Transition])>> TransitionsIterator<'a, I> {
+    fn new(iters: Vec<I>) -> Self {
+        Self {
+            // vals: Vec::with_capacity(iters.len()),
+            iters,
+        }
+    }
+}
+
+impl<'a, I: Iterator<Item = (Action, &'a [Transition])>> Iterator for TransitionsIterator<'a, I> {
+    type Item = (Action, Vec<&'a [Transition]>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let len = self.iters.len();
+        let (first_a, first_t) = self.iters.first_mut().and_then(|it| it.next())?;
+        let mut first_a = first_a;
+        let mut vals = vec![first_t; len];
+
+        let mut total = 1;
+        let mut i = 0;
+        while total < len {
+            i = (i + 1) % len;
+            let (next_a, next_t) = self
+                .iters
+                .get_mut(i)
+                .expect("i < len")
+                .find(|(a, _)| *a >= first_a)?;
+            if next_a > first_a {
+                first_a = next_a;
+                total = 1;
+            } else {
+                total += 1;
+            }
+            vals[i] = next_t;
+        }
+        Some((first_a, vals))
+    }
+}
+
 /// Representation of a PG that can be executed transition-by-transition.
 ///
 /// The structure of the PG cannot be changed,
@@ -338,84 +386,78 @@ impl<'def> ProgramGraphRun<'def> {
     pub fn possible_transitions(
         &self,
     ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
-        self.current_states
-            .first()
-            .into_iter()
-            .flat_map(|loc| {
+        let mut last_post_state: Option<Location> = None;
+        let iters = self
+            .current_states
+            .iter()
+            .map(|loc| {
                 self.def.locations[loc.0 as usize]
                     .0
                     .iter()
-                    .map(|&(action, ..)| action)
+                    .map(|(action, transitions)| (*action, transitions.as_slice()))
             })
-            .chain(
-                self.current_states
-                    .is_empty()
-                    .then(|| (0..self.def.effects.len() as ActionIdx).map(Action))
-                    .into_iter()
-                    .flatten(),
-            )
-            .map(|action| (action, self.possible_transitions_action(action)))
-    }
-
-    #[inline]
-    fn possible_transitions_action(
-        &self,
-        action: Action,
-    ) -> impl Iterator<Item = impl Iterator<Item = Location>> {
-        self.current_states
-            .iter()
-            .map(move |&loc| self.possible_transitions_action_loc(action, loc))
-    }
-
-    fn possible_transitions_action_loc(
-        &self,
-        action: Action,
-        current_state: Location,
-    ) -> impl Iterator<Item = Location> {
-        let mut last_post_state: Option<Location> = None;
-        self.def.locations[current_state.0 as usize]
-            .0
-            .binary_search_by_key(&action, |&(a, ..)| a)
-            .into_iter()
-            .flat_map(move |action_idx| {
-                self.def.locations[current_state.0 as usize].0[action_idx]
-                    .1
-                    .iter()
-                    .filter_map(move |(post_state, guard, constraints)| {
-                        // prevent post_states to be duplicated wastefully
-                        if last_post_state.is_some_and(|s| s == *post_state) {
-                            return None;
-                        }
-                        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-                        if if action == EPSILON {
-                            self.active_autonomous_transition(
-                                guard.as_ref(),
-                                constraints,
-                                invariants,
-                            )
-                        } else {
-                            match self.def.effects[action.0 as usize] {
-                                Effect::Effects(_, ref resets) => self.active_transition(
+            .collect::<Vec<_>>();
+        TransitionsIterator::new(iters).map(move |(action, loc_transitions)| {
+            (
+                action,
+                loc_transitions.into_iter().map(move |transitions| {
+                    transitions
+                        .iter()
+                        .filter_map(move |(post_state, guard, constraints)| {
+                            // prevent post_states to be duplicated wastefully
+                            if last_post_state.is_some_and(|s| s == *post_state) {
+                                return None;
+                            }
+                            let (_, ref invariants) = self.def.locations[post_state.0 as usize];
+                            if if action == EPSILON {
+                                self.active_autonomous_transition(
                                     guard.as_ref(),
                                     constraints,
                                     invariants,
-                                    resets,
-                                ),
-                                Effect::Send(_) | Effect::Receive(_) => self
-                                    .active_autonomous_transition(
+                                )
+                            } else {
+                                match self.def.effects[action.0 as usize] {
+                                    Effect::Effects(_, ref resets) => self.active_transition(
                                         guard.as_ref(),
                                         constraints,
                                         invariants,
+                                        resets,
                                     ),
+                                    Effect::Send(_) | Effect::Receive(_) => self
+                                        .active_autonomous_transition(
+                                            guard.as_ref(),
+                                            constraints,
+                                            invariants,
+                                        ),
+                                }
+                            } {
+                                last_post_state = Some(*post_state);
+                                last_post_state
+                                // Some(*post_state)
+                            } else {
+                                None
                             }
-                        } {
-                            last_post_state = Some(*post_state);
-                            last_post_state
-                        } else {
-                            None
-                        }
-                    })
-            })
+                        })
+                }),
+            )
+        })
+        // self.current_states
+        //     .first()
+        //     .into_iter()
+        //     .flat_map(|loc| {
+        //         self.def.locations[loc.0 as usize]
+        //             .0
+        //             .iter()
+        //             .map(|&(action, ..)| action)
+        //     })
+        //     .chain(
+        //         self.current_states
+        //             .is_empty()
+        //             .then(|| (0..self.def.effects.len() as ActionIdx).map(Action))
+        //             .into_iter()
+        //             .flatten(),
+        //     )
+        // .map(|action| (action, self.possible_transitions_action(action)))
     }
 
     pub(crate) fn nosync_possible_transitions(
