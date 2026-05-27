@@ -124,7 +124,7 @@ where
     ///
     /// - If a variable is not included in the evaluation;
     /// - If a variable included in the evaluation is not of Boolean type.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> bool {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> bool {
         match self {
             BooleanExpr::Const(b) => *b,
             BooleanExpr::Var(var) => {
@@ -136,7 +136,7 @@ where
             }
             BooleanExpr::Rand(float_expr) => {
                 let bernoulli = float_expr.eval(vars, rng);
-                rng.random_bool(bernoulli)
+                rng.as_mut().expect("rng").random_bool(bernoulli)
             }
             BooleanExpr::And(boolean_exprs) => boolean_exprs
                 .iter()

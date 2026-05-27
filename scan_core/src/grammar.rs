@@ -17,8 +17,6 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::dummy_rng::DummyRng;
-
 pub use boolean::*;
 pub use float::*;
 pub use integer::*;
@@ -214,7 +212,7 @@ where
     ///
     /// Will assume the expression (with the variable assignment) is well-typed,
     /// and may panic if producing an unexpected type.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Val {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Val {
         match self {
             Expression::Boolean(boolean_expr) => Val::Boolean(boolean_expr.eval(vars, rng)),
             Expression::Natural(natural_expr) => Val::Natural(natural_expr.eval(vars, rng)),
@@ -238,7 +236,7 @@ where
     /// Returns an error if expression contains variables.
     pub fn eval_constant(&self) -> Result<Val, TypeError> {
         if self.is_constant() {
-            Ok(self.eval(&|_| panic!("no vars"), &mut DummyRng))
+            Ok(self.eval::<rand::rngs::SmallRng>(&|_| panic!("no vars"), &mut None))
         } else {
             Err(TypeError::UnknownVar)
         }

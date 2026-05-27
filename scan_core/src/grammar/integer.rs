@@ -92,7 +92,7 @@ where
     /// - If a variable included in the evaluation is not of [`Integer`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Integer {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Integer {
         match self {
             IntegerExpr::Const(int) => *int,
             IntegerExpr::Var(var) => {
@@ -107,7 +107,9 @@ where
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
                 let lower_bound = lower_bound_expr.eval(vars, rng);
                 let upper_bound = upper_bound_expr.eval(vars, rng);
-                rng.random_range(lower_bound..upper_bound)
+                rng.as_mut()
+                    .expect("rng")
+                    .random_range(lower_bound..upper_bound)
             }
             IntegerExpr::Opposite(integer_expr) => integer_expr.eval(vars, rng).strict_neg(),
             IntegerExpr::Sum(integer_exprs) => integer_exprs

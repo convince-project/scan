@@ -79,9 +79,9 @@
 
 mod builder;
 
-use crate::{DummyRng, Time, grammar::*};
+use crate::{Time, grammar::*};
 pub use builder::*;
-use rand::Rng;
+use rand::{Rng, rngs::SmallRng};
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -522,7 +522,7 @@ impl<'def> ProgramGraphRun<'def> {
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
+            guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None)
         }) && constraints.iter().all(|(c, l, u)| {
             let time = self.clocks[c.0 as usize];
             l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
@@ -545,7 +545,7 @@ impl<'def> ProgramGraphRun<'def> {
     ) -> bool {
         guard.is_none_or(|guard| {
             // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            guard.eval(&|var| self.vars[var.0 as usize], &mut DummyRng)
+            guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None)
         }) && constraints.iter().chain(invariants).all(|(c, l, u)| {
             let time = self.clocks[c.0 as usize];
             l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
@@ -620,6 +620,7 @@ impl<'def> ProgramGraphRun<'def> {
         } else if let Effect::Effects(ref effects, ref resets) = self.def.effects[action.0 as usize]
         {
             if self.active_transitions(action, post_states, resets) {
+                let rng = &mut Some(rng);
                 effects.iter().for_each(|(var, effect)| {
                     self.vars[var.0 as usize] = effect.eval(&|var| self.vars[var.0 as usize], rng)
                 });
@@ -673,6 +674,7 @@ impl<'def> ProgramGraphRun<'def> {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
             if let Effect::Send(effects) = &self.def.effects[action.0 as usize] {
+                let rng = &mut Some(rng);
                 let vals = effects
                     .iter()
                     .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], rng))

@@ -82,7 +82,7 @@ where
     /// - If a variable included in the evaluation is not of [`Natural`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Natural {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Natural {
         match self {
             NaturalExpr::Const(nat) => *nat,
             NaturalExpr::Var(var) => {
@@ -96,7 +96,9 @@ where
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
                 let lower_bound = lower_bound_expr.eval(vars, rng);
                 let upper_bound = upper_bound_expr.eval(vars, rng);
-                rng.random_range(lower_bound..upper_bound)
+                rng.as_mut()
+                    .expect("rng")
+                    .random_range(lower_bound..upper_bound)
             }
             NaturalExpr::Sum(natural_exprs) => natural_exprs
                 .iter()
