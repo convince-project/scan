@@ -7,7 +7,6 @@
 #![forbid(unsafe_code)]
 
 pub mod channel_system;
-mod dummy_rng;
 mod grammar;
 mod oracle;
 pub mod program_graph;
@@ -16,7 +15,6 @@ mod tracer;
 mod transition_system;
 
 use core::marker::Sync;
-use dummy_rng::DummyRng;
 pub use grammar::*;
 use log::{info, trace};
 pub use oracle::*;

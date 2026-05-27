@@ -87,7 +87,7 @@ where
     /// - If a variable included in the evaluation is not of [`Float`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut R) -> Float {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Float {
         match self {
             FloatExpr::Const(float) => *float,
             FloatExpr::Var(var) => {
@@ -105,7 +105,9 @@ where
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
                 let lower_bound = lower_bound_expr.eval(vars, rng);
                 let upper_bound = upper_bound_expr.eval(vars, rng);
-                rng.random_range(lower_bound..upper_bound)
+                rng.as_mut()
+                    .expect("rng")
+                    .random_range(lower_bound..upper_bound)
             }
             FloatExpr::Opposite(float_expr) => -float_expr.eval(vars, rng),
             FloatExpr::Sum(float_exprs) => {

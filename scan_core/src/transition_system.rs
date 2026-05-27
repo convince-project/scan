@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::trace;
+use rand::rngs::SmallRng;
 
 use crate::channel_system::{
     Action, Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
 };
-use crate::{BooleanExpr, DummyRng, Oracle, RunOutcome, Time, Tracer, Val};
+use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
 
 /// An atomic variable exposed by the [`ChannelSystem to the TransitionSystem`].
 #[derive(Debug, Clone, Copy)]
@@ -59,7 +60,7 @@ impl TransitionSystem {
     /// which is an expression over the CS's channels.
     pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) {
         // Make sure predicate type-checks
-        let _ = predicate.eval(
+        let _ = predicate.eval::<SmallRng>(
             &|port| match port {
                 Atom::State(channel, idx) => {
                     let index = self
@@ -70,7 +71,7 @@ impl TransitionSystem {
                 }
                 Atom::Event(..) => Val::Boolean(false),
             },
-            &mut DummyRng,
+            &mut None,
         );
         self.predicates.push(predicate);
     }
@@ -144,7 +145,7 @@ impl<'def> TransitionSystemRun<'def> {
 
     fn labels(&self) -> impl Iterator<Item = bool> {
         self.predicates.iter().map(|prop| {
-            prop.eval(
+            prop.eval::<SmallRng>(
                 &|port| match port {
                     Atom::State(channel, idx) => {
                         let port_idx = self
@@ -159,7 +160,7 @@ impl<'def> TransitionSystemRun<'def> {
                         }))
                     }
                 },
-                &mut DummyRng,
+                &mut None,
             )
         })
     }
