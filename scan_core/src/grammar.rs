@@ -34,9 +34,6 @@ pub enum TypeError {
     /// The variable's type is unknown.
     #[error("the type of variable is unknown")]
     UnknownVar,
-    /// Bounds violate some constraint.
-    #[error("the bounds violate some constraint")]
-    BadBounds,
     /// Probability violates some constraint.
     #[error("the probability violates some constraint")]
     BadProbability,
