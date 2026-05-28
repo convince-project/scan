@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Statistical model checker for large concurrent systems."
 documentation = "https://convince-project.github.io/scan/crates/scan/index.html"
@@ -57,9 +57,9 @@ env_logger = "0.11.10"
 human-panic = "2.0.8"
 indicatif = { version = "0.18.4", features = ["improved_unicode"] }
 log = { workspace = true }
-smc_scan_core = { version = "0.1.1", path = "scan_core" }
-smc_scan_jani = { version = "0.1.1", path = "scan_jani" }
-smc_scan_scxml = { version = "0.2.0", path = "scan_scxml" }
-smc_scan_promela = { version = "0.1.1", path = "scan_promela" }
+smc_scan_core = { version = "0.2.0", path = "scan_core" }
+smc_scan_jani = { version = "0.2.0", path = "scan_jani" }
+smc_scan_scxml = { version = "0.3.0", path = "scan_scxml" }
+smc_scan_promela = { version = "0.2.0", path = "scan_promela" }
 serde = { workspace = true }
 serde_json = { workspace = true }

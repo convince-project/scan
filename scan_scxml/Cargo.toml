@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan_scxml"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "SCXML frontend for the Scan model checker."
 documentation = "https://convince-project.github.io/scan/crates/scan_scxml/index.html"
@@ -22,7 +22,7 @@ name = "scan_scxml"  # The name of the target.
 crate-type = ["lib"]  # The crate types to generate.
 
 [dependencies]
-smc_scan_core = { version = "0.1.1", path = "../scan_core" }
+smc_scan_core = { version = "0.2.0", path = "../scan_core" }
 smc_scan_pmtl = { version = "0.1.0", path = "../scan_pmtl" }
 anyhow = { workspace = true }
 boa_ast = "0.21.1"
