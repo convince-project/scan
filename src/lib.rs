@@ -224,7 +224,7 @@ impl Cli {
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
                 let path = create_trace_dirs();
-                args.trace::<_, TracePrinter<_>>(&scan_def, path, &scxml_model);
+                args.trace::<_, TracePrinter>(&scan_def, path, &scxml_model);
                 println!("trace computation for model '{model}' completed");
             }
         }
@@ -256,7 +256,7 @@ impl Cli {
                 args.validate()?;
                 let (scan, jani_model) = load(&self.model, &[])?;
                 let path = create_trace_dirs();
-                args.trace::<_, TracePrinter<_>>(&scan, path, &jani_model);
+                args.trace::<_, TracePrinter>(&scan, path, &jani_model);
                 println!("trace computation for model '{model}' completed");
             }
         }

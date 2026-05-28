@@ -14,7 +14,6 @@ mod smc;
 mod tracer;
 mod transition_system;
 
-use flate2::write::GzEncoder;
 pub use grammar::*;
 use log::{info, trace};
 pub use oracle::*;
@@ -29,7 +28,7 @@ use std::{
     },
     time::Instant,
 };
-pub use tracer::Tracer;
+pub use tracer::{TraceWriter, Tracer};
 pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
 
 const TEMP: &str = ".temp";
@@ -182,7 +181,7 @@ impl<O: Oracle> Scan<O> {
     /// using the provided [`Tracer`].
     pub fn traces<T>(&self, runs: usize, duration: Time, path: PathBuf, model_data: &T::ModelData)
     where
-        T: Tracer<GzEncoder<File>>,
+        T: Tracer,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
@@ -254,7 +253,7 @@ where
         path: PathBuf,
         model_data: &T::ModelData,
     ) where
-        T: Sync + Tracer<GzEncoder<File>>,
+        T: Tracer,
         T::ModelData: Sync,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.

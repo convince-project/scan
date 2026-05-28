@@ -1,26 +1,24 @@
 use super::JaniModelData;
 use scan_core::{
-    Time, Tracer, Val,
+    Time, TraceWriter, Tracer, Val,
     channel_system::{Action, Event},
 };
-use std::io::Write;
 
-pub struct TracePrinter<W: Write> {
-    writer: csv::Writer<W>,
-    // model: &'a JaniModelData,
+pub struct TracePrinter {
+    writer: csv::Writer<TraceWriter>,
 }
 
-impl<W: Write> TracePrinter<W> {
+impl TracePrinter {
     const HEADER: [&'static str; 2] = ["Time", "Action"];
     const UNKNOWN_ACTION: &'static str = "unknown action";
 }
 
-impl<W: Write> Tracer<W> for TracePrinter<W> {
+impl Tracer for TracePrinter {
     const EXTENSION: &'static str = "csv";
 
     type ModelData = JaniModelData;
 
-    fn init(writer: W, data: &Self::ModelData) -> Self {
+    fn init(writer: TraceWriter, data: &Self::ModelData) -> Self {
         let mut writer = csv::Writer::from_writer(writer);
         writer
             .write_record(

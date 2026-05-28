@@ -1,8 +1,7 @@
-use std::{fs::File, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::anyhow;
 use clap::Parser;
-use flate2::write::GzEncoder;
 use scan_core::{Oracle, Scan, Time, Tracer};
 
 const ALL_PROPS_ERR: &str =
@@ -55,7 +54,7 @@ impl TraceArgs {
     pub(crate) fn trace<'a, Od, Tr>(&self, scan: &'a Scan<Od>, path: PathBuf, model: &Tr::ModelData)
     where
         Od: Oracle + Sync + 'a,
-        Tr: Sync + Tracer<GzEncoder<File>>,
+        Tr: Tracer,
         Tr::ModelData: Sync,
     {
         if self.single_thread {
