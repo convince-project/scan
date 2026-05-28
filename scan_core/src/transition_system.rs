@@ -1,5 +1,3 @@
-use std::fs::{create_dir_all, exists, rename};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -216,14 +214,18 @@ impl<'def> TransitionSystemRun<'def> {
         duration: Time,
         mut oracle: O,
         mut tracer: T,
-        path: PathBuf,
         model_data: &T::ModelData,
-    ) where
+    ) -> RunOutcome
+    where
         T: Tracer,
     {
         trace!("new run starting");
         // reuse vector to avoid allocations
-        let mut labels = Vec::new();
+        let mut labels = Vec::from_iter(self.labels());
+        // Initialize oracle with TS initial state
+        oracle.update_state(&labels);
+        // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
+        // Same issue for time-tick events
         while self.time() <= duration {
             self.transition();
             if let Some((action, event)) = self.last_event() {
@@ -238,24 +240,6 @@ impl<'def> TransitionSystemRun<'def> {
         }
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
-        // writer.try_finish().expect("finish");
-
-        let mut new_path = path.clone();
-        // pop file name
-        new_path.pop();
-        // pop temp folder
-        new_path.pop();
-        if verified.iter().all(|b| *b) {
-            new_path.push(crate::SUCCESSES);
-        } else {
-            new_path.push(crate::FAILURES);
-            // This path might not exist yet
-            if !exists(new_path.as_path()).expect("check folder") {
-                create_dir_all(new_path.clone()).expect("create missing folder");
-            }
-        }
-
-        new_path.push(path.file_name().expect("file name"));
-        rename(&path, new_path).expect("renaming");
+        RunOutcome::Verified(verified)
     }
 }
