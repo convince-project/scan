@@ -20,7 +20,7 @@ pub use oracle::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
-    fs::File,
+    fs::{File, create_dir, create_dir_all, rename},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -185,35 +185,50 @@ impl<O: Oracle> Scan<O> {
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
-        assert!(path.is_dir());
         let start_time = Instant::now();
+        create_traces_dirs_tree(path.clone());
 
         (0..runs).for_each(|idx| {
-            let mut ts = self.model.new_run();
-            let mut path = path.clone();
-            let filename = PathBuf::new()
-                .with_file_name(format!("{idx:04}"))
-                .with_extension(T::EXTENSION);
-            path.push(crate::TEMP);
-            path.push(&filename);
-            path.add_extension("gz");
-            let file = File::create_new(&path).expect("create file");
-            let writer = flate2::GzBuilder::new()
-                .filename(filename.to_str().expect("file name"))
-                .comment("Scan-generated execution trace")
-                .write(file, flate2::Compression::best());
-            let tracer = T::init(writer, model_data);
-            ts.trace::<T, _>(
-                duration,
-                self.oracle.clone(),
-                tracer,
-                path.clone(),
-                model_data,
-            )
+            self.trace::<T>(duration, path.clone(), model_data, idx);
         });
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
+    }
+
+    fn trace<T>(&self, duration: u32, mut path: PathBuf, model_data: &T::ModelData, idx: usize)
+    where
+        T: Tracer,
+    {
+        let mut ts = self.model.new_run();
+        let filename = PathBuf::new()
+            .with_file_name(format!("{idx:04}"))
+            .with_extension(T::EXTENSION);
+        path.push(crate::TEMP);
+        path.push(&filename);
+        path.add_extension("gz");
+        let file = File::create_new(&path).expect("create file");
+        let writer = flate2::GzBuilder::new()
+            .filename(filename.to_str().expect("file name"))
+            .comment("Scan-generated execution trace")
+            .write(file, flate2::Compression::best());
+        let tracer = T::init(writer, model_data);
+        if let RunOutcome::Verified(verified) =
+            ts.trace::<T, _>(duration, self.oracle.clone(), tracer, model_data)
+        {
+            let mut new_path = path.clone();
+            // pop file name
+            new_path.pop();
+            // pop temp folder
+            new_path.pop();
+            if verified.iter().all(|b| *b) {
+                new_path.push(crate::SUCCESSES);
+            } else {
+                new_path.push(crate::FAILURES);
+            }
+            new_path.push(path.file_name().expect("file name"));
+            rename(&path, new_path).expect("renaming");
+        }
     }
 }
 
@@ -259,32 +274,25 @@ where
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
         let start_time = Instant::now();
+        create_traces_dirs_tree(path.clone());
 
         (0..runs).into_par_iter().for_each(|idx| {
-            let mut ts = self.model.new_run();
-            let mut path = path.clone();
-            let filename = PathBuf::new()
-                .with_file_name(format!("{idx:04}"))
-                .with_extension(T::EXTENSION);
-            path.push(crate::TEMP);
-            path.push(&filename);
-            path.add_extension("gz");
-            let file = File::create_new(&path).expect("create file");
-            let writer = flate2::GzBuilder::new()
-                .filename(filename.to_str().expect("file name"))
-                .comment("Scan-generated execution trace")
-                .write(file, flate2::Compression::best());
-            let tracer = T::init(writer, model_data);
-            ts.trace::<T, _>(
-                duration,
-                self.oracle.clone(),
-                tracer,
-                path.clone(),
-                model_data,
-            )
+            self.trace::<T>(duration, path.clone(), model_data, idx);
         });
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
     }
+}
+
+fn create_traces_dirs_tree(mut path: PathBuf) {
+    create_dir_all(&path).expect("create base dir");
+    path.push(TEMP);
+    create_dir(&path).expect("create temp dir");
+    assert!(path.pop());
+    path.push(SUCCESSES);
+    create_dir(&path).expect("create successes dir");
+    assert!(path.pop());
+    path.push(FAILURES);
+    create_dir(&path).expect("create failures dir");
 }

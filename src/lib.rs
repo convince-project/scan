@@ -21,7 +21,7 @@ mod report;
 mod trace;
 mod verify;
 
-use std::{env::current_dir, fs::create_dir, path::PathBuf};
+use std::{env::current_dir, path::PathBuf};
 
 use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -223,7 +223,7 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                let path = create_trace_dirs();
+                let path = new_traces_dir();
                 args.trace::<_, TracePrinter>(&scan_def, path, &scxml_model);
                 println!("trace computation for model '{model}' completed");
             }
@@ -255,7 +255,7 @@ impl Cli {
             Commands::Trace(args) => {
                 args.validate()?;
                 let (scan, jani_model) = load(&self.model, &[])?;
-                let path = create_trace_dirs();
+                let path = new_traces_dir();
                 args.trace::<_, TracePrinter>(&scan, path, &jani_model);
                 println!("trace computation for model '{model}' completed");
             }
@@ -334,25 +334,13 @@ where
     }
 }
 
-const FOLDER: &str = "traces";
-const TEMP: &str = ".temp";
-const SUCCESSES: &str = "successes";
-const FAILURES: &str = "failures";
+fn new_traces_dir() -> std::path::PathBuf {
+    const FOLDER: &str = "traces";
 
-fn create_trace_dirs() -> std::path::PathBuf {
     let mut path = current_dir().expect("current dir");
     for i in 0.. {
         path.push(format!("{}_{i:02}", FOLDER));
-        if std::fs::create_dir(&path).is_ok() {
-            path.push(TEMP);
-            create_dir(&path).expect("create temp dir");
-            assert!(path.pop());
-            path.push(SUCCESSES);
-            create_dir(&path).expect("create temp dir");
-            assert!(path.pop());
-            path.push(FAILURES);
-            create_dir(&path).expect("create temp dir");
-            assert!(path.pop());
+        if std::fs::exists(&path).is_ok_and(|exists| !exists) {
             break;
         } else {
             assert!(path.pop());
