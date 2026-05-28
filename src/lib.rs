@@ -21,7 +21,7 @@ mod report;
 mod trace;
 mod verify;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{env::current_dir, fs::create_dir, path::PathBuf};
 
 use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -223,9 +223,8 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                let scxml_model = Arc::new(scxml_model);
-                let tracer = TracePrinter::new(&scxml_model);
-                args.trace::<_, _>(&scan_def, tracer);
+                let path = create_trace_dirs();
+                args.trace::<_, TracePrinter<_>>(&scan_def, path, &scxml_model);
                 println!("trace computation for model '{model}' completed");
             }
         }
@@ -256,9 +255,8 @@ impl Cli {
             Commands::Trace(args) => {
                 args.validate()?;
                 let (scan, jani_model) = load(&self.model, &[])?;
-                let jani_model = Arc::new(jani_model);
-                let tracer = TracePrinter::new(jani_model);
-                args.trace::<_, _>(&scan, tracer);
+                let path = create_trace_dirs();
+                args.trace::<_, TracePrinter<_>>(&scan, path, &jani_model);
                 println!("trace computation for model '{model}' completed");
             }
         }
@@ -334,6 +332,33 @@ where
     } else {
         args.verify::<O>(model.to_owned(), scan)
     }
+}
+
+const FOLDER: &str = "traces";
+const TEMP: &str = ".temp";
+const SUCCESSES: &str = "successes";
+const FAILURES: &str = "failures";
+
+fn create_trace_dirs() -> std::path::PathBuf {
+    let mut path = current_dir().expect("current dir");
+    for i in 0.. {
+        path.push(format!("{}_{i:02}", FOLDER));
+        if std::fs::create_dir(&path).is_ok() {
+            path.push(TEMP);
+            create_dir(&path).expect("create temp dir");
+            assert!(path.pop());
+            path.push(SUCCESSES);
+            create_dir(&path).expect("create temp dir");
+            assert!(path.pop());
+            path.push(FAILURES);
+            create_dir(&path).expect("create temp dir");
+            assert!(path.pop());
+            break;
+        } else {
+            assert!(path.pop());
+        }
+    }
+    path
 }
 
 // From Clap tutorial <https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html#testing>

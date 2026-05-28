@@ -14,13 +14,15 @@ mod smc;
 mod tracer;
 mod transition_system;
 
-use core::marker::Sync;
+use flate2::write::GzEncoder;
 pub use grammar::*;
 use log::{info, trace};
 pub use oracle::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
+    fs::File,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -29,6 +31,10 @@ use std::{
 };
 pub use tracer::Tracer;
 pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
+
+const TEMP: &str = ".temp";
+const SUCCESSES: &str = "successes";
+const FAILURES: &str = "failures";
 
 /// The type that represents time.
 pub type Time = u32;
@@ -105,9 +111,11 @@ impl<O: Oracle> Scan<O> {
     fn verification(&self, confidence: f64, precision: f64, duration: Time) {
         let local_successes;
         let local_failures;
-        let mut ts = self.model.new_run();
 
-        let result = ts.experiment(duration, self.oracle.clone(), self.running.clone());
+        let result =
+            self.model
+                .new_run()
+                .experiment(duration, self.oracle.clone(), self.running.clone());
         if !self.running.load(Ordering::Relaxed) {
             return;
         }
@@ -167,34 +175,46 @@ impl<O: Oracle> Scan<O> {
             .count();
 
         let elapsed = start_time.elapsed();
-        info!("verification time elapsed: {elapsed:0.2?}");
-        info!("verification terminating");
-    }
-
-    #[inline]
-    fn trace<T>(&self, tracer: T, duration: Time)
-    where
-        T: Tracer,
-    {
-        let mut ts = self.model.new_run();
-        ts.trace(duration, self.oracle.clone(), tracer)
+        info!("verification completed in {elapsed:0.2?}");
     }
 
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`].
-    pub fn traces<T>(&self, runs: usize, tracer: T, duration: Time)
+    pub fn traces<T>(&self, runs: usize, duration: Time, path: PathBuf, model_data: &T::ModelData)
     where
-        T: Clone + Tracer,
+        T: Tracer<GzEncoder<File>>,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
+        assert!(path.is_dir());
         let start_time = Instant::now();
 
-        (0..runs).for_each(|_| self.trace::<T>(tracer.clone(), duration));
+        (0..runs).for_each(|idx| {
+            let mut ts = self.model.new_run();
+            let mut path = path.clone();
+            let filename = PathBuf::new()
+                .with_file_name(format!("{idx:04}"))
+                .with_extension(T::EXTENSION);
+            path.push(crate::TEMP);
+            path.push(&filename);
+            path.add_extension("gz");
+            let file = File::create_new(&path).expect("create file");
+            let writer = flate2::GzBuilder::new()
+                .filename(filename.to_str().expect("file name"))
+                .comment("Scan-generated execution trace")
+                .write(file, flate2::Compression::best());
+            let tracer = T::init(writer, model_data);
+            ts.trace::<T, _>(
+                duration,
+                self.oracle.clone(),
+                tracer,
+                path.clone(),
+                model_data,
+            )
+        });
 
         let elapsed = start_time.elapsed();
-        info!("tracing time elapsed: {elapsed:0.2?}");
-        info!("tracing terminating");
+        info!("tracing completed in {elapsed:0.2?}");
     }
 }
 
@@ -221,27 +241,51 @@ where
             .count();
 
         let elapsed = start_time.elapsed();
-        info!("verification time elapsed: {elapsed:0.2?}");
-        info!("verification terminating");
+        info!("verification completed in {elapsed:0.2?}");
     }
 
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`],
     /// spawning multiple threads.
-    pub fn par_traces<T>(&self, runs: usize, tracer: T, duration: Time)
-    where
-        T: Clone + Sync + Tracer,
+    pub fn par_traces<T>(
+        &self,
+        runs: usize,
+        duration: Time,
+        path: PathBuf,
+        model_data: &T::ModelData,
+    ) where
+        T: Sync + Tracer<GzEncoder<File>>,
+        T::ModelData: Sync,
     {
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
         let start_time = Instant::now();
 
-        (0..runs)
-            .into_par_iter()
-            .for_each(|_| self.trace::<T>(tracer.clone(), duration));
+        (0..runs).into_par_iter().for_each(|idx| {
+            let mut ts = self.model.new_run();
+            let mut path = path.clone();
+            let filename = PathBuf::new()
+                .with_file_name(format!("{idx:04}"))
+                .with_extension(T::EXTENSION);
+            path.push(crate::TEMP);
+            path.push(&filename);
+            path.add_extension("gz");
+            let file = File::create_new(&path).expect("create file");
+            let writer = flate2::GzBuilder::new()
+                .filename(filename.to_str().expect("file name"))
+                .comment("Scan-generated execution trace")
+                .write(file, flate2::Compression::best());
+            let tracer = T::init(writer, model_data);
+            ts.trace::<T, _>(
+                duration,
+                self.oracle.clone(),
+                tracer,
+                path.clone(),
+                model_data,
+            )
+        });
 
         let elapsed = start_time.elapsed();
-        info!("tracing time elapsed: {elapsed:0.2?}");
-        info!("tracing terminating");
+        info!("tracing completed in {elapsed:0.2?}");
     }
 }

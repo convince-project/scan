@@ -28,7 +28,8 @@ pub struct ScxmlModel {
     pub int_queues: HashSet<Channel>,
     pub ext_queues: HashMap<Channel, PgId>,
     pub events: Vec<(String, Option<OmgTypeDef>)>,
-    pub ports: Vec<(String, OmgType, Vec<Type>)>,
+    pub port_vars: Vec<(String, OmgType, Vec<Expression<Atom>>)>,
+    pub ports: Vec<Channel>,
     pub assumes: Vec<String>,
     pub guarantees: Vec<String>,
     pub omg_types: OmgTypes,
@@ -70,8 +71,10 @@ pub struct ModelBuilder {
     guarantees: Vec<(String, Pmtl<usize>)>,
     assumes: Vec<(String, Pmtl<usize>)>,
     predicates: Vec<BooleanExpr<Atom>>,
-    ports: HashMap<String, (OmgType, Vec<Expression<Atom>>)>,
-    atoms: Vec<(Channel, Vec<Val>)>,
+    // port vars are (in general) expressions over atoms on the same channel
+    port_vars: HashMap<String, (OmgType, Vec<Expression<Atom>>)>,
+    // ports are defined by a channel and a vec of init values.
+    ports: Vec<(Channel, Vec<Val>)>,
     // extra data
     int_queues: HashSet<Channel>,
 }
@@ -1287,7 +1290,7 @@ impl ModelBuilder {
                     .parameter_channels
                     .get(&(origin, target, event_id))
                     .expect("parameters' channel for event in port");
-                self.ports.insert(
+                self.port_vars.insert(
                     port_id.to_owned(),
                     (
                         param_type.ok_or_else(|| {
@@ -1305,7 +1308,7 @@ impl ModelBuilder {
                     ),
                 );
 
-                let index = match self.atoms.binary_search_by_key(channel, |(ch, _)| *ch) {
+                let index = match self.ports.binary_search_by_key(channel, |(ch, _)| *ch) {
                     Ok(index) => index,
                     Err(index) => {
                         let default = event_builder
@@ -1326,19 +1329,19 @@ impl ModelBuilder {
                                     .map(|t| t.default_value())
                             })
                             .collect::<Vec<Val>>();
-                        self.atoms.insert(index, (*channel, default));
+                        self.ports.insert(index, (*channel, default));
                         index
                     }
                 };
                 init.iter().enumerate().for_each(|(param_idx, init)| {
-                    self.atoms[index].1[param_start_idx + param_idx] = *init
+                    self.ports[index].1[param_start_idx + param_idx] = *init
                 });
             } else {
                 // If the event has params,
                 // we consider the receiving of a message in the dedicated param channel;
                 // otherwise, we consider every event on the external queue and test for the event/origin to match.
                 if let Some(&channel) = self.parameter_channels.get(&(origin, target, event_id)) {
-                    self.ports.insert(
+                    self.port_vars.insert(
                         port_id.to_owned(),
                         (
                             OmgType::Base(OmgBaseType::Boolean),
@@ -1347,7 +1350,7 @@ impl ModelBuilder {
                     );
                 } else {
                     let ext_queue = target_builder.ext_queue;
-                    self.ports.insert(
+                    self.port_vars.insert(
                         port_id.to_owned(),
                         (
                             OmgType::Base(OmgBaseType::Boolean),
@@ -1365,8 +1368,8 @@ impl ModelBuilder {
                         ),
                     );
                     // Default values represent a non-existing event/origin
-                    if let Err(index) = self.atoms.binary_search_by_key(&ext_queue, |(ch, _)| *ch) {
-                        self.atoms.insert(
+                    if let Err(index) = self.ports.binary_search_by_key(&ext_queue, |(ch, _)| *ch) {
+                        self.ports.insert(
                             index,
                             (
                                 ext_queue,
@@ -1390,7 +1393,7 @@ impl ModelBuilder {
             let predicate = expression(
                 predicate,
                 &parser.interner,
-                &self.ports,
+                &self.port_vars,
                 Some(&OmgType::Base(OmgBaseType::Boolean)),
                 &mut parser.types,
             )
@@ -1416,41 +1419,18 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
+    fn build_model(mut self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
         let mut model = TransitionSystem::new(self.cs);
-        let mut ports = Vec::new();
-        for (channel, init) in self.atoms {
-            model.add_port(channel, init);
+        let port_vars = self
+            .port_vars
+            .into_iter()
+            .map(|(name, (omg_type, exprs))| (name, omg_type, exprs))
+            .collect::<Vec<_>>();
+        self.ports.sort_unstable_by_key(|(c, _)| *c);
+        for (channel, init) in &self.ports {
+            model.add_port(*channel, init.clone());
         }
-        for (port_name, (omg_type, exprs)) in self.ports {
-            ports.push((
-                port_name,
-                omg_type,
-                exprs.iter().map(|expr| expr.r#type()).collect(),
-            ));
-        }
-        //         let (param_idxs, types): (Vec<usize>, _) = init
-        //             .into_iter()
-        //             .map(|(atom, init)| {
-        //                 if let Atom::State(c, param_idx) = atom {
-        //                     assert_eq!(channel, c);
-        //                     model.add_port(channel, param_idx, init);
-        //                     (param_idx, init.r#type())
-        //                 } else {
-        //                     panic!("all atoms are of state type")
-        //                 }
-        //             })
-        //             .unzip();
-        //     }
-        // }
-        // Ports need to be sorted by channel or will not match state iterator
-        // ports.sort_by_key(|(c, idxs, ..)| (*c, *idxs.first().expect("at least a value")));
-        // let ports = ports
-        //     .into_iter()
-        //     .map(|(_, _, name, omg_type, types)| (name, omg_type, types))
-        //     .collect();
         for pred_expr in self.predicates {
-            // TODO FIXME handle error.
             model.add_predicate(pred_expr);
         }
         // Shrink model storage (just an optimization);
@@ -1493,10 +1473,11 @@ impl ModelBuilder {
                     .collect(),
                 int_queues: self.int_queues,
                 events,
-                ports,
+                port_vars,
                 assumes: assume_names,
                 guarantees: guarantee_names,
                 omg_types: parser.types,
+                ports: self.ports.iter().map(|(c, _)| *c).collect(),
             },
         )
     }

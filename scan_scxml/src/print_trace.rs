@@ -2,127 +2,85 @@ use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
 
 use super::ScxmlModel;
 use scan_core::channel_system::{Action, Event, EventType};
-use scan_core::{RunOutcome, Time, Tracer, Val};
-use std::{
-    env::current_dir,
-    fs::{File, create_dir, create_dir_all, exists, remove_file, rename},
-    path::PathBuf,
-    sync::{Arc, atomic::AtomicU32},
-};
+use scan_core::{Time, Tracer, Val};
+use std::io::Write;
 
 #[derive(Debug)]
-pub struct TracePrinter<'a> {
-    index: Arc<AtomicU32>,
-    path: PathBuf,
-    writer: Option<csv::Writer<flate2::write::GzEncoder<File>>>,
-    model: &'a ScxmlModel,
+pub struct TracePrinter<W: Write> {
+    writer: csv::Writer<W>,
 }
 
-impl<'a> TracePrinter<'a> {
-    const FOLDER: &'static str = "traces";
-    const TEMP: &'static str = ".temp";
-    const SUCCESSES: &'static str = "successes";
-    const FAILURES: &'static str = "failures";
+impl<W: Write> Drop for TracePrinter<W> {
+    fn drop(&mut self) {
+        self.writer.flush().expect("flush writer");
+    }
+}
+
+impl<W: Write> TracePrinter<W> {
     const HEADER: [&'static str; 5] = ["Time", "Event", "Origin", "Target", "Values"];
 
-    pub fn new(model: &'a ScxmlModel) -> Self {
-        let mut path = current_dir().expect("current dir");
-        for i in 0.. {
-            path.push(format!("{}_{i:02}", Self::FOLDER));
-            if std::fs::create_dir(&path).is_ok() {
-                path.push(Self::TEMP);
-                create_dir(&path).expect("create temp dir");
-                assert!(path.pop());
-                path.push(Self::SUCCESSES);
-                create_dir(&path).expect("create temp dir");
-                assert!(path.pop());
-                path.push(Self::FAILURES);
-                create_dir(&path).expect("create temp dir");
-                assert!(path.pop());
-                break;
-            } else {
-                assert!(path.pop());
-            }
-        }
-
-        Self {
-            index: Arc::new(AtomicU32::new(0)),
-            path,
-            writer: None,
-            model,
-        }
-    }
-
-    fn format_state<I: IntoIterator<Item = Val>>(&self, ports: I) -> Vec<String> {
-        let mut iter = ports.into_iter();
-        self.model
-            .ports
+    fn format_state(&self, model: &ScxmlModel, event: &Event, ports: &[Vec<Val>]) -> Vec<String> {
+        // Assumes model.port_vals are ordered
+        model
+            .port_vars
             .iter()
-            .map(move |(_, omg_type, types)| {
+            .map(move |(_, omg_type, exprs)| {
                 format_val(
-                    iter.by_ref()
-                        .take(types.len())
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            expr.eval_deterministic(&|atom| match atom {
+                                scan_core::Atom::State(channel, i) => ports
+                                    .get(model.ports.binary_search(&channel).unwrap())
+                                    .unwrap()[i],
+                                scan_core::Atom::Event(channel) => {
+                                    if event.channel == channel
+                                        && let EventType::Send(_) = event.event_type
+                                    {
+                                        Val::from(true)
+                                    } else {
+                                        Val::from(false)
+                                    }
+                                }
+                            })
+                        })
                         .collect::<Vec<_>>()
                         .as_slice(),
                     omg_type,
-                    &self.model.omg_types,
+                    &model.omg_types,
                 )
             })
             .collect()
     }
 }
 
-impl<'a> Clone for TracePrinter<'a> {
-    fn clone(&self) -> Self {
-        // Get the temp folder
-        let mut path = self.path.clone();
-        if path.is_file() {
-            path.pop();
-        }
-        Self {
-            index: Arc::clone(&self.index),
-            path,
-            writer: None,
-            model: self.model,
-        }
-    }
-}
+impl<W: Write> Tracer<W> for TracePrinter<W> {
+    const EXTENSION: &'static str = "csv";
 
-impl<'a> Tracer for TracePrinter<'a> {
-    fn init(&mut self) {
-        let idx = self
-            .index
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let filename = PathBuf::new()
-            .with_file_name(format!("{idx:04}"))
-            .with_extension("csv");
-        self.path.push(Self::TEMP);
-        self.path.push(&filename);
-        self.path.add_extension("gz");
-        let file = File::create_new(&self.path).expect("create file");
-        let enc = flate2::GzBuilder::new()
-            .filename(filename.to_str().expect("file name"))
-            .comment("Scan-generated execution trace")
-            .write(file, flate2::Compression::best());
-        let mut writer = csv::WriterBuilder::new().from_writer(enc);
+    type ModelData = ScxmlModel;
+
+    fn init(writer: W, data: &ScxmlModel) -> Self {
+        let mut writer = csv::Writer::from_writer(writer);
         writer
             .write_record(
                 Self::HEADER.into_iter().map(String::from).chain(
-                    self.model.ports.iter().map(|(name, omg_type, _)| {
+                    data.port_vars.iter().map(|(name, omg_type, _)| {
                         format!("{name}: {}", format_omg_type(omg_type))
                     }),
                 ),
             )
             .expect("write header");
-        self.writer = Some(writer);
+
+        Self { writer }
     }
 
-    fn trace<I: IntoIterator<Item = Val>>(
+    fn trace(
         &mut self,
+        data: &ScxmlModel,
         _action: Action,
         event: &Event,
         time: Time,
-        ports: I,
+        ports: &[Vec<Val>],
     ) {
         let mut fields = Vec::new();
         let time = time.to_string();
@@ -133,31 +91,22 @@ impl<'a> Tracer for TracePrinter<'a> {
         let mut params = String::new();
         fields.push(time.as_str());
 
-        if let Some((src, trg, event_idx)) = self.model.parameters.get(&event.channel) {
-            origin_name = self.model.fsm_names.get(&(*src).into()).unwrap().to_owned();
-            target_name = self.model.fsm_names.get(&(*trg).into()).unwrap().to_owned();
-            (event_name, param_types) = self.model.events.get(*event_idx).unwrap().clone();
+        if let Some((src, trg, event_idx)) = data.parameters.get(&event.channel) {
+            origin_name = data.fsm_names.get(&(*src).into()).unwrap().to_owned();
+            target_name = data.fsm_names.get(&(*trg).into()).unwrap().to_owned();
+            (event_name, param_types) = data.events.get(*event_idx).unwrap().clone();
             if let EventType::Send(ref vals) = event.event_type {
-                params = format_val_from_def(
-                    vals,
-                    param_types.as_ref().unwrap(),
-                    &self.model.omg_types,
-                    true,
-                );
+                params =
+                    format_val_from_def(vals, param_types.as_ref().unwrap(), &data.omg_types, true);
             } else {
                 return;
             }
-        } else if let Some(trg) = self.model.ext_queues.get(&event.channel) {
-            target_name = self.model.fsm_names.get(&(*trg).into()).unwrap().to_owned();
+        } else if let Some(trg) = data.ext_queues.get(&event.channel) {
+            target_name = data.fsm_names.get(&(*trg).into()).unwrap().to_owned();
             if let EventType::Send(ref vals) = event.event_type {
                 if let (Val::Natural(sent_event), Val::Natural(origin)) = (vals[0], vals[1]) {
-                    origin_name = self
-                        .model
-                        .fsm_names
-                        .get(&(origin as u16))
-                        .unwrap()
-                        .to_owned();
-                    (event_name, param_types) = self.model.events[sent_event as usize].clone();
+                    origin_name = data.fsm_names.get(&(origin as u16)).unwrap().to_owned();
+                    (event_name, param_types) = data.events[sent_event as usize].clone();
                     if param_types.is_some() {
                         // No need to trace this as parameters event already traced
                         return;
@@ -168,17 +117,12 @@ impl<'a> Tracer for TracePrinter<'a> {
             } else {
                 return;
             }
-        } else if self.model.int_queues.contains(&event.channel) {
-            origin_name = self
-                .model
-                .fsm_names
-                .get(&event.pg_id.into())
-                .unwrap()
-                .to_owned();
+        } else if data.int_queues.contains(&event.channel) {
+            origin_name = data.fsm_names.get(&event.pg_id.into()).unwrap().to_owned();
             target_name = origin_name.clone();
             if let EventType::Send(ref vals) = event.event_type {
                 if let Val::Natural(sent_event) = vals[0] {
-                    (event_name, param_types) = self.model.events[sent_event as usize].clone();
+                    (event_name, param_types) = data.events[sent_event as usize].clone();
                     if param_types.is_some() {
                         // No need to trace this as parameters event already traced
                         return;
@@ -193,52 +137,14 @@ impl<'a> Tracer for TracePrinter<'a> {
             panic!("Events should all be either internal or external events");
         }
 
-        let state = self.format_state(ports);
+        let state = self.format_state(data, event, ports);
         self.writer
-            .as_mut()
-            .unwrap()
             .write_record(
                 [time, event_name, origin_name, target_name, params]
                     .into_iter()
                     .chain(state),
             )
             .expect("write record");
-    }
-
-    fn finalize(self, outcome: &RunOutcome) {
-        let mut writer = self.writer.unwrap();
-        writer.flush().expect("flush csv content");
-        writer
-            .into_inner()
-            .expect("encoder")
-            .try_finish()
-            .expect("finish");
-
-        let mut new_path = self.path.clone();
-        // pop file name
-        new_path.pop();
-        // pop temp folder
-        new_path.pop();
-        match outcome {
-            RunOutcome::Verified(verified) => {
-                if verified.iter().all(|b| *b) {
-                    new_path.push(Self::SUCCESSES);
-                } else {
-                    new_path.push(Self::FAILURES);
-                    // This path might not exist yet
-                    if !exists(new_path.as_path()).expect("check folder") {
-                        create_dir_all(new_path.clone()).expect("create missing folder");
-                    }
-                }
-            }
-            RunOutcome::Incomplete => {
-                remove_file(&self.path).expect("delete file");
-                return;
-            }
-        }
-
-        new_path.push(self.path.file_name().expect("file name"));
-        rename(&self.path, new_path).expect("renaming");
     }
 }
 
