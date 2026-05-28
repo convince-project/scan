@@ -1,9 +1,8 @@
-use std::fs::{File, create_dir_all, exists, rename};
+use std::fs::{create_dir_all, exists, rename};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flate2::write::GzEncoder;
 use log::trace;
 use rand::rngs::SmallRng;
 
@@ -220,7 +219,7 @@ impl<'def> TransitionSystemRun<'def> {
         path: PathBuf,
         model_data: &T::ModelData,
     ) where
-        T: Tracer<GzEncoder<File>>,
+        T: Tracer,
     {
         trace!("new run starting");
         // reuse vector to avoid allocations

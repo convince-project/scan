@@ -1,13 +1,18 @@
-use std::io::Write;
+use std::fs::File;
+
+use flate2::write::GzEncoder;
 
 use crate::{
     Time, Val,
     channel_system::{Action, Event},
 };
 
+/// A writer for traces
+pub type TraceWriter = GzEncoder<File>;
+
 /// Trait that handles streaming of traces,
 /// e.g., to print them to file.
-pub trait Tracer<W: Write> {
+pub trait Tracer {
     /// The extension to use for files of traces produced by the [`Tracer`].
     const EXTENSION: &str;
 
@@ -15,7 +20,7 @@ pub trait Tracer<W: Write> {
     type ModelData;
 
     /// Creates and initializes the Tracer
-    fn init(writer: W, data: &Self::ModelData) -> Self;
+    fn init(writer: TraceWriter, data: &Self::ModelData) -> Self;
 
     /// Stream a new state of the trace.
     fn trace(

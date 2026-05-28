@@ -32,12 +32,18 @@ codegen-units = 1
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = ["scan_core", "scan_scxml", "scan_jani", "scan_promela", "scan_pmtl", "scan_mtl"]
+members = [
+  "scan_core",
+  "scan_scxml",
+  "scan_jani",
+  "scan_promela",
+  "scan_pmtl",
+  "scan_mtl"
+]
 
 [workspace.dependencies]
 anyhow = "1.0.102"
 csv = "1.4.0"
-flate2 = { version = "1.1.9", features = ["zlib-rs"], default-features = false }
 log = "0.4.29"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

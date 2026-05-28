@@ -2,21 +2,20 @@ use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
 
 use super::ScxmlModel;
 use scan_core::channel_system::{Action, Event, EventType};
-use scan_core::{Time, Tracer, Val};
-use std::io::Write;
+use scan_core::{Time, TraceWriter, Tracer, Val};
 
 #[derive(Debug)]
-pub struct TracePrinter<W: Write> {
-    writer: csv::Writer<W>,
+pub struct TracePrinter {
+    writer: csv::Writer<TraceWriter>,
 }
 
-impl<W: Write> Drop for TracePrinter<W> {
+impl Drop for TracePrinter {
     fn drop(&mut self) {
         self.writer.flush().expect("flush writer");
     }
 }
 
-impl<W: Write> TracePrinter<W> {
+impl TracePrinter {
     const HEADER: [&'static str; 5] = ["Time", "Event", "Origin", "Target", "Values"];
 
     fn format_state(&self, model: &ScxmlModel, event: &Event, ports: &[Vec<Val>]) -> Vec<String> {
@@ -54,12 +53,12 @@ impl<W: Write> TracePrinter<W> {
     }
 }
 
-impl<W: Write> Tracer<W> for TracePrinter<W> {
+impl Tracer for TracePrinter {
     const EXTENSION: &'static str = "csv";
 
     type ModelData = ScxmlModel;
 
-    fn init(writer: W, data: &ScxmlModel) -> Self {
+    fn init(writer: TraceWriter, data: &ScxmlModel) -> Self {
         let mut writer = csv::Writer::from_writer(writer);
         writer
             .write_record(
