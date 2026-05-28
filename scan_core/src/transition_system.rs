@@ -1,6 +1,9 @@
+use std::fs::{File, create_dir_all, exists, rename};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use flate2::write::GzEncoder;
 use log::trace;
 use rand::rngs::SmallRng;
 
@@ -22,6 +25,7 @@ pub enum Atom {
 #[derive(Debug, Clone)]
 pub struct TransitionSystem {
     cs: ChannelSystem,
+    // ports are supposed to be ordered by channel
     ports: Vec<Channel>,
     vals: Vec<Vec<Val>>,
     predicates: Vec<BooleanExpr<Atom>>,
@@ -166,8 +170,8 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     #[inline]
-    fn state(&self) -> impl Iterator<Item = Val> {
-        self.vals.iter().flatten().copied()
+    fn state(&self) -> &[Vec<Val>] {
+        &self.vals
     }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
@@ -208,18 +212,23 @@ impl<'def> TransitionSystemRun<'def> {
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
     /// and process the execution trace via the given [`Tracer`].
-    pub(crate) fn trace<T, O: Oracle>(&mut self, duration: Time, mut oracle: O, mut tracer: T)
-    where
-        T: Tracer,
+    pub(crate) fn trace<T, O: Oracle>(
+        &mut self,
+        duration: Time,
+        mut oracle: O,
+        mut tracer: T,
+        path: PathBuf,
+        model_data: &T::ModelData,
+    ) where
+        T: Tracer<GzEncoder<File>>,
     {
         trace!("new run starting");
         // reuse vector to avoid allocations
         let mut labels = Vec::new();
-        tracer.init();
         while self.time() <= duration {
             self.transition();
             if let Some((action, event)) = self.last_event() {
-                tracer.trace(*action, event, self.time(), self.state());
+                tracer.trace(model_data, *action, event, self.time(), self.state());
                 labels.clear();
                 labels.extend(self.labels());
                 oracle.update_state(&labels);
@@ -230,6 +239,24 @@ impl<'def> TransitionSystemRun<'def> {
         }
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
-        tracer.finalize(&RunOutcome::Verified(verified));
+        // writer.try_finish().expect("finish");
+
+        let mut new_path = path.clone();
+        // pop file name
+        new_path.pop();
+        // pop temp folder
+        new_path.pop();
+        if verified.iter().all(|b| *b) {
+            new_path.push(crate::SUCCESSES);
+        } else {
+            new_path.push(crate::FAILURES);
+            // This path might not exist yet
+            if !exists(new_path.as_path()).expect("check folder") {
+                create_dir_all(new_path.clone()).expect("create missing folder");
+            }
+        }
+
+        new_path.push(path.file_name().expect("file name"));
+        rename(&path, new_path).expect("renaming");
     }
 }

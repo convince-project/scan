@@ -10,7 +10,7 @@ mod float;
 mod integer;
 mod natural;
 
-use rand::Rng;
+use rand::{Rng, rngs::SmallRng};
 use std::{
     hash::Hash,
     ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Rem},
@@ -218,6 +218,27 @@ where
             Expression::Natural(natural_expr) => Val::Natural(natural_expr.eval(vars, rng)),
             Expression::Integer(integer_expr) => Val::Integer(integer_expr.eval(vars, rng)),
             Expression::Float(float_expr) => Val::Float(float_expr.eval(vars, rng)),
+        }
+    }
+
+    /// Evaluates the expression with the given variable assignments.
+    ///
+    /// Will assume the expression (with the variable assignment) is well-typed,
+    /// and may panic if producing an unexpected type.
+    pub fn eval_deterministic(&self, vars: &dyn Fn(V) -> Val) -> Val {
+        match self {
+            Expression::Boolean(boolean_expr) => {
+                Val::Boolean(boolean_expr.eval::<SmallRng>(vars, &mut None))
+            }
+            Expression::Natural(natural_expr) => {
+                Val::Natural(natural_expr.eval::<SmallRng>(vars, &mut None))
+            }
+            Expression::Integer(integer_expr) => {
+                Val::Integer(integer_expr.eval::<SmallRng>(vars, &mut None))
+            }
+            Expression::Float(float_expr) => {
+                Val::Float(float_expr.eval::<SmallRng>(vars, &mut None))
+            }
         }
     }
 
