@@ -25,7 +25,7 @@ pub(crate) struct TraceArgs {
     #[arg(long, default_value_t = 1)]
     pub(crate) traces: usize,
     /// Max duration of execution (in model-time).
-    #[arg(short, long, default_value_t = 10000)]
+    #[arg(short, long, default_value_t = 0)]
     pub(crate) duration: Time,
     /// Run the model execution on a single thread.
     ///

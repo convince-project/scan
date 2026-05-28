@@ -50,7 +50,7 @@ pub(crate) struct VerifyArgs {
     pub(crate) precision: f64,
     /// Max duration of execution (in model-time),
     /// to prevent infinite executions.
-    #[arg(short, long, default_value_t = 10000)]
+    #[arg(short, long, default_value_t = 0)]
     pub(crate) duration: Time,
     /// Run the verification on a single thread.
     ///
