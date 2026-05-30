@@ -2,16 +2,16 @@
 
 mod builder;
 mod parser;
-mod print_trace;
+mod tracer;
 
 use std::path::Path;
 
 pub use builder::ScxmlModel;
 use log::info;
-pub use print_trace::TracePrinter;
 pub use scan_core;
 use scan_core::Scan;
 use scan_pmtl::PmtlOracle;
+pub use tracer::TracePrinter;
 
 pub type ScxmlScan = Scan<PmtlOracle>;
 
