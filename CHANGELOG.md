@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### New
+
+- `scan_pmtl` and `scan_mtl` modules for oracles.
+
+### Changed
+
+- JANI: Complete makeover of JANI model building.
+- **BREAKING** Core: new simplified `scan` API using only CS as models.
+- **BREAKING** Core: streamlined tracer API decupling/deduplicating file handling.
+
+## [0.2.0] - 2026-04-23
+
 ### Changed
 
 - **BREAKING** SCXML: Use ECMAScript enumeration syntax (i.e., the property syntax) for enumeration values.
