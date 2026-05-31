@@ -321,6 +321,70 @@ where
                 .and_then(|()| exprs.2.context(vars)),
         }
     }
+
+    pub fn ite(
+        self,
+        then: Expression<V>,
+        r#else: Expression<V>,
+    ) -> Result<Expression<V>, TypeError> {
+        match then {
+            Expression::Boolean(if_boolean_expr) => {
+                if let Expression::Boolean(else_boolean_expr) = r#else {
+                    Ok(Expression::Boolean(BooleanExpr::Ite(Box::new((
+                        self,
+                        if_boolean_expr,
+                        else_boolean_expr,
+                    )))))
+                } else {
+                    Err(TypeError::TypeMismatch)
+                }
+            }
+            Expression::Natural(if_natural_expr) => match r#else {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(else_natural_expr) => Ok(Expression::Natural(
+                    NaturalExpr::Ite(Box::new((self, if_natural_expr, else_natural_expr))),
+                )),
+                Expression::Integer(else_integer_expr) => {
+                    Ok(Expression::Integer(IntegerExpr::Ite(Box::new((
+                        self,
+                        IntegerExpr::from(if_natural_expr),
+                        else_integer_expr,
+                    )))))
+                }
+                Expression::Float(else_float_expr) => Ok(Expression::Float(FloatExpr::Ite(
+                    Box::new((self, FloatExpr::from(if_natural_expr), else_float_expr)),
+                ))),
+            },
+            Expression::Integer(if_integer_expr) => match r#else {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(else_natural_expr) => {
+                    Ok(Expression::Integer(IntegerExpr::Ite(Box::new((
+                        self,
+                        if_integer_expr,
+                        IntegerExpr::from(else_natural_expr),
+                    )))))
+                }
+                Expression::Integer(else_integer_expr) => Ok(Expression::Integer(
+                    IntegerExpr::Ite(Box::new((self, if_integer_expr, else_integer_expr))),
+                )),
+                Expression::Float(else_float_expr) => Ok(Expression::Float(FloatExpr::Ite(
+                    Box::new((self, FloatExpr::from(if_integer_expr), else_float_expr)),
+                ))),
+            },
+            Expression::Float(if_float_expr) => match r#else {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(else_natural_expr) => Ok(Expression::Float(FloatExpr::Ite(
+                    Box::new((self, if_float_expr, FloatExpr::from(else_natural_expr))),
+                ))),
+                Expression::Integer(else_integer_expr) => Ok(Expression::Float(FloatExpr::Ite(
+                    Box::new((self, if_float_expr, FloatExpr::from(else_integer_expr))),
+                ))),
+                Expression::Float(else_float_expr) => Ok(Expression::Float(FloatExpr::Ite(
+                    Box::new((self, if_float_expr, else_float_expr)),
+                ))),
+            },
+        }
+    }
 }
 
 impl<V> From<bool> for BooleanExpr<V>

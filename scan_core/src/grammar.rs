@@ -569,78 +569,9 @@ where
         }
     }
 
-    /// Creates a [`BooleanExpr`] that compares numerical expressions `self` and `rhs`,
-    /// and returns error if comparison is not possible.
-    ///
-    /// Equality of numerical types automatically casts the one of most-restrictive type to the less restrictive type of the other one;
-    /// see [`Self::equal_to`].
     pub fn ite(self, then: Self, r#else: Self) -> Result<Self, TypeError> {
         if let Expression::Boolean(r#if) = self {
-            match then {
-                Expression::Boolean(if_boolean_expr) => {
-                    if let Expression::Boolean(else_boolean_expr) = r#else {
-                        Ok(Expression::Boolean(BooleanExpr::Ite(Box::new((
-                            r#if,
-                            if_boolean_expr,
-                            else_boolean_expr,
-                        )))))
-                    } else {
-                        Err(TypeError::TypeMismatch)
-                    }
-                }
-                Expression::Natural(if_natural_expr) => match r#else {
-                    Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                    Expression::Natural(else_natural_expr) => Ok(Expression::Natural(
-                        NaturalExpr::Ite(Box::new((r#if, if_natural_expr, else_natural_expr))),
-                    )),
-                    Expression::Integer(else_integer_expr) => {
-                        Ok(Expression::Integer(IntegerExpr::Ite(Box::new((
-                            r#if,
-                            IntegerExpr::from(if_natural_expr),
-                            else_integer_expr,
-                        )))))
-                    }
-                    Expression::Float(else_float_expr) => Ok(Expression::Float(FloatExpr::Ite(
-                        Box::new((r#if, FloatExpr::from(if_natural_expr), else_float_expr)),
-                    ))),
-                },
-                Expression::Integer(if_integer_expr) => match r#else {
-                    Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                    Expression::Natural(else_natural_expr) => {
-                        Ok(Expression::Integer(IntegerExpr::Ite(Box::new((
-                            r#if,
-                            if_integer_expr,
-                            IntegerExpr::from(else_natural_expr),
-                        )))))
-                    }
-                    Expression::Integer(else_integer_expr) => Ok(Expression::Integer(
-                        IntegerExpr::Ite(Box::new((r#if, if_integer_expr, else_integer_expr))),
-                    )),
-                    Expression::Float(else_float_expr) => Ok(Expression::Float(FloatExpr::Ite(
-                        Box::new((r#if, FloatExpr::from(if_integer_expr), else_float_expr)),
-                    ))),
-                },
-                Expression::Float(if_float_expr) => match r#else {
-                    Expression::Boolean(_) => Err(TypeError::TypeMismatch),
-                    Expression::Natural(else_natural_expr) => {
-                        Ok(Expression::Float(FloatExpr::Ite(Box::new((
-                            r#if,
-                            if_float_expr,
-                            FloatExpr::from(else_natural_expr),
-                        )))))
-                    }
-                    Expression::Integer(else_integer_expr) => {
-                        Ok(Expression::Float(FloatExpr::Ite(Box::new((
-                            r#if,
-                            if_float_expr,
-                            FloatExpr::from(else_integer_expr),
-                        )))))
-                    }
-                    Expression::Float(else_float_expr) => Ok(Expression::Float(FloatExpr::Ite(
-                        Box::new((r#if, if_float_expr, else_float_expr)),
-                    ))),
-                },
-            }
+            r#if.ite(then, r#else)
         } else {
             Err(TypeError::TypeMismatch)
         }

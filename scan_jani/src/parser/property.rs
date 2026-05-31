@@ -12,8 +12,9 @@ pub(crate) struct Property {
     /// the state-set formula
     pub(crate) expression: PropertyExpression,
     /// an optional comment
-    #[serde(skip)]
-    pub(crate) _comment: IgnoredAny,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) comment: IgnoredAny,
 }
 
 #[derive(Deserialize)]
@@ -115,6 +116,36 @@ pub(crate) enum PropertyExpression {
         //   "bounds": PropertyInterval // the bounds of numeric type
         // })
     },
+    /// eventually / always
+    #[allow(dead_code)]
+    DerivedTemp {
+        op: DerivedTempOp,            // result type is bool
+        exp: Box<PropertyExpression>, // the single operand, type bool
+        // "?step-bounds": PropertyInterval, // step bounds (number of edges taken) of type int
+        /// and time bounds of numeric type, only allowed in timed models
+        time_bounds: Option<PropertyInterval>,
+        // "?reward-bounds": Array.of({ // and a conjunction of reward bounds
+        // "exp": Expression, // what to accumulate over steps and time for this subformula
+        // "accumulate": RewardAccumulation, // must not be empty
+        // "bounds": PropertyInterval // the bounds of numeric type
+    },
+    /// State predicates.
+    /// Result type is bool.
+    States { op: StatesOp },
+    /// Filters the values of sets of reachable states ("filter" in PRISM)
+    Filter {
+        op: FilterOp,
+        fun: FunOp,
+        // the formula that produces the values to apply fun to
+        values: Box<PropertyExpression>,
+        // the formula characterising the relevant subset of the reachable states; type bool
+        states: Box<PropertyExpression>,
+    },
+    /// Maximum/minimum probability ("P" operator in PRISM)
+    PMinMax {
+        op: PMinMaxOp,                // result type is real
+        exp: Box<PropertyExpression>, // the path formula, type bool
+    },
 }
 
 #[derive(Deserialize)]
@@ -142,4 +173,58 @@ pub(crate) enum UntilOp {
     Until,
     #[serde(rename = "W")]
     WeakUntil,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DerivedTempOp {
+    #[serde(rename = "F")]
+    Eventually,
+    #[serde(rename = "G")]
+    Always,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum FilterOp {
+    Filter,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum FunOp {
+    // values must have type real and states must characterise a non-empty set of states; result type is real
+    Min,
+    Max,
+    Sum,
+    Avg,
+    // values must have type bool, result type is int
+    Count,
+    // values must have type bool, result type is bool
+    #[serde(rename = "∀")]
+    Forall,
+    #[serde(rename = "∃")]
+    Exists,
+    Argmin,
+    // values must have type real, result type is set of states
+    Argmax,
+    // the result type is a set of values of the type of values ("printall" in PRISM)
+    Values,
+}
+
+/// Maximum/minimum probability ("P" operator in PRISM).
+/// Result type is real.
+#[derive(Deserialize)]
+pub(crate) enum PMinMaxOp {
+    Pmin,
+    Pmax,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum StatesOp {
+    Initial,
+    Deadlock,
+    /// "timelock" is only allowed in TA, PTA, STA, HA, PHA, SHA
+    Timelock,
 }

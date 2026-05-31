@@ -41,6 +41,13 @@ where
     Div(Box<(NaturalExpr<V>, NaturalExpr<V>)>),
     /// Abs
     Abs(Box<IntegerExpr<V>>),
+    // --------------------
+    // Order operators
+    // --------------------
+    /// Min of two values
+    Min(Box<(NaturalExpr<V>, NaturalExpr<V>)>),
+    /// Max of two values
+    Max(Box<(NaturalExpr<V>, NaturalExpr<V>)>),
     // -----
     // Flow
     // -----
@@ -62,7 +69,10 @@ where
             NaturalExpr::Sum(natural_exprs) | NaturalExpr::Product(natural_exprs) => {
                 natural_exprs.iter().all(NaturalExpr::is_constant)
             }
-            NaturalExpr::Rem(args) | NaturalExpr::Div(args) => {
+            NaturalExpr::Rem(args)
+            | NaturalExpr::Div(args)
+            | NaturalExpr::Min(args)
+            | NaturalExpr::Max(args) => {
                 let (lhs, rhs) = args.as_ref();
                 lhs.is_constant() && rhs.is_constant()
             }
@@ -112,7 +122,12 @@ where
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.strict_rem_euclid(rhs)
             }
-            NaturalExpr::Div(_) => todo!(),
+            NaturalExpr::Div(args) => {
+                let (lhs_expr, rhs_expr) = args.as_ref();
+                let lhs = lhs_expr.eval(vars, rng);
+                let rhs = rhs_expr.eval(vars, rng);
+                lhs / rhs
+            }
             NaturalExpr::Abs(integer_expr) => integer_expr.eval(vars, rng).unsigned_abs(),
             NaturalExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
@@ -121,6 +136,18 @@ where
                 } else {
                     rhs.eval(vars, rng)
                 }
+            }
+            NaturalExpr::Min(args) => {
+                let (lhs_expr, rhs_expr) = args.as_ref();
+                let lhs = lhs_expr.eval(vars, rng);
+                let rhs = rhs_expr.eval(vars, rng);
+                lhs.min(rhs)
+            }
+            NaturalExpr::Max(args) => {
+                let (lhs_expr, rhs_expr) = args.as_ref();
+                let lhs = lhs_expr.eval(vars, rng);
+                let rhs = rhs_expr.eval(vars, rng);
+                lhs.max(rhs)
             }
         }
     }
@@ -158,6 +185,14 @@ where
                 let (r#if, then, r#else) = *args;
                 NaturalExpr::Ite(Box::new((r#if.map(map), then.map(map), r#else.map(map))))
             }
+            NaturalExpr::Min(args) => {
+                let (lhs, rhs) = *args;
+                NaturalExpr::Min(Box::new((lhs.map(map), rhs.map(map))))
+            }
+            NaturalExpr::Max(args) => {
+                let (lhs, rhs) = *args;
+                NaturalExpr::Max(Box::new((lhs.map(map), rhs.map(map))))
+            }
         }
     }
 
@@ -167,9 +202,11 @@ where
             NaturalExpr::Var(v) => matches!(vars(*v), Some(Type::Natural))
                 .then_some(())
                 .ok_or(TypeError::TypeMismatch),
-            NaturalExpr::Rand(exprs) | NaturalExpr::Div(exprs) | NaturalExpr::Rem(exprs) => {
-                exprs.0.context(vars).and_then(|()| exprs.1.context(vars))
-            }
+            NaturalExpr::Rand(exprs)
+            | NaturalExpr::Div(exprs)
+            | NaturalExpr::Rem(exprs)
+            | NaturalExpr::Min(exprs)
+            | NaturalExpr::Max(exprs) => exprs.0.context(vars).and_then(|()| exprs.1.context(vars)),
             NaturalExpr::Sum(integer_exprs) | NaturalExpr::Product(integer_exprs) => {
                 integer_exprs.iter().try_for_each(|expr| expr.context(vars))
             }

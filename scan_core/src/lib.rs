@@ -204,7 +204,7 @@ impl<O: Oracle> Scan<O> {
         let filename = PathBuf::new()
             .with_file_name(format!("{idx:04}"))
             .with_extension(T::EXTENSION);
-        path.push(crate::TEMP);
+        path.push(TEMP);
         path.push(&filename);
         path.add_extension("gz");
         let file = File::create_new(&path).expect("create file");
@@ -221,10 +221,10 @@ impl<O: Oracle> Scan<O> {
             new_path.pop();
             // pop temp folder
             new_path.pop();
-            if verified.iter().all(|b| *b) {
-                new_path.push(crate::SUCCESSES);
+            if verified.into_iter().all(|b| b) {
+                new_path.push(SUCCESSES);
             } else {
-                new_path.push(crate::FAILURES);
+                new_path.push(FAILURES);
             }
             new_path.push(path.file_name().expect("file name"));
             rename(&path, new_path).expect("renaming");

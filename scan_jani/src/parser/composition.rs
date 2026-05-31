@@ -3,19 +3,20 @@ use serde::{Deserialize, de::IgnoredAny};
 
 /// Automata composition
 #[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct Composition {
     pub(crate) elements: Vec<Element>,
     #[serde(default)]
     pub(crate) syncs: Vec<Sync>,
     /// an optional comment
-    #[serde(skip)]
-    pub(crate) _comment: IgnoredAny,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) comment: IgnoredAny,
 }
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct Element {
     /// the name of an automaton
     pub(crate) automaton: Identifier,
@@ -24,12 +25,12 @@ pub(crate) struct Element {
     #[serde(default)]
     pub(crate) input_enable: Vec<Identifier>,
     /// an optional comment
-    #[serde(skip)]
-    pub(crate) _comment: IgnoredAny,
+    #[serde(default)]
+    pub(crate) comment: IgnoredAny,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct Sync {
     /// a list of action names or null, same length as elements
     pub(crate) synchronise: Vec<Option<Identifier>>,
@@ -37,6 +38,7 @@ pub(crate) struct Sync {
     #[serde(default)]
     pub(crate) result: Option<Identifier>,
     /// an optional comment
-    #[serde(skip)]
-    pub(crate) _comment: IgnoredAny,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) comment: IgnoredAny,
 }

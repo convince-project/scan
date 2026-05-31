@@ -7,6 +7,10 @@ pub enum Mtl<V: Clone> {
     Atom(V),
     /// An [`Mtl`] formula of the form `p U q`.
     Until(V, V),
+    /// An [`Mtl`] formula of the form `F q`.
+    Eventually(V),
+    /// An [`Mtl`] formula of the form `G q`.
+    Always(V),
 }
 
 /// An oracle for (simple) [`Mtl`] properties.
@@ -50,6 +54,24 @@ impl Oracle for MtlOracle {
                             Some(false)
                         }
                     }
+                    Mtl::Eventually(exp) => {
+                        if opt.is_some() {
+                            *opt
+                        } else if state.get(*exp).is_some_and(|b| *b) {
+                            Some(true)
+                        } else {
+                            None
+                        }
+                    }
+                    Mtl::Always(exp) => {
+                        if opt.is_some() {
+                            *opt
+                        } else if state.get(*exp).is_some_and(|b| !b) {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    }
                 }
             })
     }
@@ -63,11 +85,15 @@ impl Oracle for MtlOracle {
     }
 
     fn final_output_assumes(&self) -> impl Iterator<Item = bool> {
-        self.assumes.iter().map(|(_, opt)| opt.unwrap_or(false))
+        self.assumes
+            .iter()
+            .map(|(exp, opt)| opt.unwrap_or_else(|| matches!(exp, Mtl::Always(_) | Mtl::Atom(_))))
     }
 
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool> {
-        self.guarantees.iter().map(|(_, opt)| opt.unwrap_or(false))
+        self.guarantees
+            .iter()
+            .map(|(exp, opt)| opt.unwrap_or_else(|| matches!(exp, Mtl::Always(_) | Mtl::Atom(_))))
     }
 
     fn update_time(&mut self, time: Time) {

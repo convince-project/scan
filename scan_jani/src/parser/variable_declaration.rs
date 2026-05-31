@@ -24,6 +24,7 @@ pub(crate) struct VariableDeclaration {
     #[serde(default)]
     pub(crate) initial_value: Option<Expression>,
     /// an optional comment
-    #[serde(skip)]
-    pub(crate) _comment: IgnoredAny,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) comment: IgnoredAny,
 }

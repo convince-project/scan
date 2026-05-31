@@ -84,6 +84,16 @@ pub(crate) enum Expression {
         /// the single operand; numeric type
         exp: Box<Expression>,
     },
+    /// maximum / minimum: computes max(left, right) / min(left, right)
+    MinMax {
+        /// in basic jani-model, this can be expressed as "if left < right then right else left" (or with > for min)
+        /// result type is int (if left and right are int) or real (otherwise)
+        op: MinMaxOp,
+        /// the left operand; numeric type
+        left: Box<Expression>,
+        /// the right operand; numeric type
+        right: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -187,4 +197,12 @@ pub(crate) enum RealOp {
 pub(crate) enum Real2IntOp {
     Floor,
     Ceil,
+}
+
+/// floor / ceiling: computes ⌊exp⌋ / ⌈exp⌉
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum MinMaxOp {
+    Min,
+    Max,
 }

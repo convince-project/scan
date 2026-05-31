@@ -5,6 +5,7 @@ use crate::parser::{
 };
 use anyhow::{Context, anyhow, bail};
 use either::Either;
+use log::warn;
 use scan_core::{
     Atom, BooleanExpr, Float, FloatExpr, Integer, IntegerExpr, Natural, NaturalExpr,
     TransitionSystem, Type, TypeError, Val,
@@ -221,14 +222,14 @@ impl JaniBuilder {
                 parser::Sync {
                     synchronise,
                     result: None,
-                    _comment: IgnoredAny,
+                    comment: IgnoredAny,
                 }
             });
         // Sync calling initial action on all elements
         let initial_sync = Sync {
             synchronise: vec![Some(Self::INITIAL.to_string()); jani_model.system.elements.len()],
             result: Some(Self::INITIAL.to_string()),
-            _comment: IgnoredAny,
+            comment: IgnoredAny,
         };
 
         // for every sync, create sync action
@@ -332,16 +333,16 @@ impl JaniBuilder {
                             location: location.clone(),
                             probability: None,
                             assignments: Vec::new(),
-                            _comment: IgnoredAny,
+                            comment: IgnoredAny,
                         })
                         .collect(),
-                    _comment: IgnoredAny,
+                    comment: IgnoredAny,
                 };
 
                 let initial_location = parser::Location {
                     name: Self::INITIAL.to_string(),
                     transient_values: Vec::new(),
-                    _comment: IgnoredAny,
+                    comment: IgnoredAny,
                 };
 
                 // create edges for the automaton action corresponding to the sync action
@@ -453,6 +454,9 @@ impl JaniBuilder {
 
                         // add effects
                         for assignment in &dest.assignments {
+                            if assignment.index > 0 {
+                                warn!("index of assignments unsupported; ignored");
+                            }
                             let (var, _, r#type) = automaton_builder
                                 .local_vars
                                 .get(&assignment.r#ref)
@@ -673,6 +677,7 @@ impl JaniBuilder {
             match prop {
                 Mtl::Atom(pred) => vec![pred.clone()],
                 Mtl::Until(lhs, rhs) => vec![lhs.clone(), rhs.clone()],
+                Mtl::Eventually(exp) | Mtl::Always(exp) => vec![exp.clone()],
             }
         }
         fn extract_mtl(prop: &Mtl<scan_core::BooleanExpr<Atom>>, idx: &mut usize) -> Mtl<usize> {
@@ -685,6 +690,16 @@ impl JaniBuilder {
                 Mtl::Until(_, _) => {
                     let prop = Mtl::Until(*idx, *idx + 1);
                     *idx += 2;
+                    prop
+                }
+                Mtl::Eventually(_) => {
+                    let prop = Mtl::Eventually(*idx);
+                    *idx += 1;
+                    prop
+                }
+                Mtl::Always(_) => {
+                    let prop = Mtl::Always(*idx);
+                    *idx += 1;
                     prop
                 }
             }
@@ -901,6 +916,20 @@ impl JaniBuilder {
                     bail!(TypeError::TypeMismatch)
                 }
             }
+            Expression::MinMax { op, left, right } => {
+                let left = self.build_expression(left, None, local_vars)?;
+                let right = self.build_expression(right, None, local_vars)?;
+                // TODO: Use native min/max operation when available
+                match op {
+                    parser::MinMaxOp::Min => {
+                        left.clone().less_than(right.clone())?.ite(left, right)
+                    }
+                    parser::MinMaxOp::Max => {
+                        left.clone().less_than(right.clone())?.ite(right, left)
+                    }
+                }
+                .map_err(anyhow::Error::from)
+            }
         }
     }
 
@@ -911,6 +940,53 @@ impl JaniBuilder {
     {
         use scan_core::Expression;
         match prop {
+            PropertyExpression::Filter {
+                op,
+                fun,
+                values,
+                states,
+            } => {
+                match op {
+                    parser::FilterOp::Filter => {
+                        // OK
+                        // (nothing to do as this is only choice)
+                    }
+                }
+                match fun {
+                    parser::FunOp::Values => {
+                        // OK
+                    }
+                    _ => bail!(
+                        "unsupported property filter function: only uniform scheduler is supported"
+                    ),
+                }
+                match states.as_ref() {
+                    PropertyExpression::States { op } => match op {
+                        parser::StatesOp::Initial => {
+                            // OK
+                        }
+                        parser::StatesOp::Deadlock | parser::StatesOp::Timelock => {
+                            bail!("unsupported filter states: only initial states supported")
+                        }
+                    },
+                    _ => {
+                        bail!("unsupported filter states: expression has to be a state expression")
+                    }
+                }
+                match values.as_ref() {
+                    PropertyExpression::PMinMax { op, exp } => {
+                        match op {
+                            parser::PMinMaxOp::Pmin => warn!("only uniform scheduler is supported"),
+                            parser::PMinMaxOp::Pmax => warn!("only uniform scheduler is supported"),
+                        }
+                        self.build_property(exp.as_ref())
+                    }
+                    _ => bail!("unexpected expression: expected maximum/minimum probability"),
+                }
+            }
+            PropertyExpression::PMinMax { op: _, exp: _ } => {
+                bail!("unexpected expression: must occur inside of a filter expression")
+            }
             PropertyExpression::ConstantValue(constant_value) => {
                 Ok(Either::Left(match constant_value {
                     parser::ConstantValue::Boolean(b) => Expression::from(*b),
@@ -1065,6 +1141,26 @@ impl JaniBuilder {
                     parser::UntilOp::WeakUntil => todo!(),
                 }))
             }
+            PropertyExpression::DerivedTemp {
+                op,
+                exp,
+                time_bounds: _,
+            } => {
+                let exp = self
+                    .build_property(exp)?
+                    .left()
+                    .ok_or(anyhow!("unsupported property"))?;
+                let exp = if let scan_core::Expression::Boolean(exp) = exp {
+                    exp
+                } else {
+                    bail!("not a boolean expression")
+                };
+                Ok(Either::Right(match op {
+                    parser::DerivedTempOp::Eventually => Mtl::Eventually(exp),
+                    parser::DerivedTempOp::Always => Mtl::Always(exp),
+                }))
+            }
+            PropertyExpression::States { op: _ } => bail!("unexpected states expression"),
         }
     }
 }
