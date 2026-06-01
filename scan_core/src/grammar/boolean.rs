@@ -322,6 +322,7 @@ where
         }
     }
 
+    /// Creates an if-then-else expression
     pub fn ite(
         self,
         then: Expression<V>,

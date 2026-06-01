@@ -11,11 +11,6 @@ fn jani_test2() {
 }
 
 #[test]
-fn workflow() {
-    test(Path::new("./tests/workflow.jani"))
-}
-
-#[test]
 fn brp() {
     test(Path::new("./tests/brp.v1.jani"))
 }

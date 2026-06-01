@@ -47,6 +47,13 @@ where
     Floor(Box<FloatExpr<V>>),
     /// Ceil
     Ceil(Box<FloatExpr<V>>),
+    // --------------------
+    // Order operators
+    // --------------------
+    /// Min of two values
+    Min(Box<(IntegerExpr<V>, IntegerExpr<V>)>),
+    /// Max of two values
+    Max(Box<(IntegerExpr<V>, IntegerExpr<V>)>),
     // -----
     // Flow
     // -----
@@ -70,7 +77,10 @@ where
             IntegerExpr::Sum(integer_exprs) | IntegerExpr::Product(integer_exprs) => {
                 integer_exprs.iter().all(IntegerExpr::is_constant)
             }
-            IntegerExpr::Div(args) | IntegerExpr::Rem(args) => {
+            IntegerExpr::Div(args)
+            | IntegerExpr::Rem(args)
+            | IntegerExpr::Min(args)
+            | IntegerExpr::Max(args) => {
                 let (lhs, rhs) = args.as_ref();
                 lhs.is_constant() && rhs.is_constant()
             }
@@ -140,6 +150,18 @@ where
                     rhs.eval(vars, rng)
                 }
             }
+            IntegerExpr::Min(args) => {
+                let (lhs_expr, rhs_expr) = args.as_ref();
+                let lhs = lhs_expr.eval(vars, rng);
+                let rhs = rhs_expr.eval(vars, rng);
+                lhs.min(rhs)
+            }
+            IntegerExpr::Max(args) => {
+                let (lhs_expr, rhs_expr) = args.as_ref();
+                let lhs = lhs_expr.eval(vars, rng);
+                let rhs = rhs_expr.eval(vars, rng);
+                lhs.max(rhs)
+            }
         }
     }
 
@@ -181,6 +203,14 @@ where
                 let (r#if, then, r#else) = *args;
                 IntegerExpr::Ite(Box::new((r#if.map(map), then.map(map), r#else.map(map))))
             }
+            IntegerExpr::Min(args) => {
+                let (lhs, rhs) = *args;
+                IntegerExpr::Min(Box::new((lhs.map(map), rhs.map(map))))
+            }
+            IntegerExpr::Max(args) => {
+                let (lhs, rhs) = *args;
+                IntegerExpr::Max(Box::new((lhs.map(map), rhs.map(map))))
+            }
         }
     }
 
@@ -191,9 +221,11 @@ where
                 .then_some(())
                 .ok_or(TypeError::TypeMismatch),
             IntegerExpr::Nat(natural_expr) => natural_expr.context(vars),
-            IntegerExpr::Rand(exprs) | IntegerExpr::Div(exprs) | IntegerExpr::Rem(exprs) => {
-                exprs.0.context(vars).and_then(|()| exprs.1.context(vars))
-            }
+            IntegerExpr::Rand(exprs)
+            | IntegerExpr::Div(exprs)
+            | IntegerExpr::Rem(exprs)
+            | IntegerExpr::Min(exprs)
+            | IntegerExpr::Max(exprs) => exprs.0.context(vars).and_then(|()| exprs.1.context(vars)),
             IntegerExpr::Opposite(integer_expr) => integer_expr.context(vars),
             IntegerExpr::Sum(integer_exprs) | IntegerExpr::Product(integer_exprs) => {
                 integer_exprs.iter().try_for_each(|expr| expr.context(vars))

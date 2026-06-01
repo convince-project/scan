@@ -43,6 +43,13 @@ where
     Product(Vec<FloatExpr<V>>),
     /// Div operation
     Div(Box<(FloatExpr<V>, FloatExpr<V>)>),
+    // --------------------
+    // Order operators
+    // --------------------
+    /// Min of two values
+    Min(Box<(FloatExpr<V>, FloatExpr<V>)>),
+    /// Max of two values
+    Max(Box<(FloatExpr<V>, FloatExpr<V>)>),
     // -----
     // Flow
     // -----
@@ -68,7 +75,7 @@ where
             FloatExpr::Sum(float_exprs) | FloatExpr::Product(float_exprs) => {
                 float_exprs.iter().all(FloatExpr::is_constant)
             }
-            FloatExpr::Div(args) => {
+            FloatExpr::Div(args) | FloatExpr::Min(args) | FloatExpr::Max(args) => {
                 let (lhs, rhs) = args.as_ref();
                 lhs.is_constant() && rhs.is_constant()
             }
@@ -131,6 +138,18 @@ where
                     rhs.eval(vars, rng)
                 }
             }
+            FloatExpr::Min(args) => {
+                let (lhs_expr, rhs_expr) = args.as_ref();
+                let lhs = lhs_expr.eval(vars, rng);
+                let rhs = rhs_expr.eval(vars, rng);
+                lhs.min(rhs)
+            }
+            FloatExpr::Max(args) => {
+                let (lhs_expr, rhs_expr) = args.as_ref();
+                let lhs = lhs_expr.eval(vars, rng);
+                let rhs = rhs_expr.eval(vars, rng);
+                lhs.max(rhs)
+            }
         }
     }
 
@@ -159,6 +178,14 @@ where
                 let (r#if, then, r#else) = *args;
                 FloatExpr::Ite(Box::new((r#if.map(map), then.map(map), r#else.map(map))))
             }
+            FloatExpr::Min(args) => {
+                let (lhs, rhs) = *args;
+                FloatExpr::Min(Box::new((lhs.map(map), rhs.map(map))))
+            }
+            FloatExpr::Max(args) => {
+                let (lhs, rhs) = *args;
+                FloatExpr::Max(Box::new((lhs.map(map), rhs.map(map))))
+            }
         }
     }
 
@@ -170,9 +197,10 @@ where
                 .ok_or(TypeError::TypeMismatch),
             FloatExpr::Nat(natural_expr) => natural_expr.context(vars),
             FloatExpr::Int(integer_expr) => integer_expr.context(vars),
-            FloatExpr::Rand(exprs) | FloatExpr::Div(exprs) => {
-                exprs.0.context(vars).and_then(|()| exprs.1.context(vars))
-            }
+            FloatExpr::Rand(exprs)
+            | FloatExpr::Div(exprs)
+            | FloatExpr::Min(exprs)
+            | FloatExpr::Max(exprs) => exprs.0.context(vars).and_then(|()| exprs.1.context(vars)),
             FloatExpr::Opposite(integer_expr) => integer_expr.context(vars),
             FloatExpr::Sum(integer_exprs) | FloatExpr::Product(integer_exprs) => {
                 integer_exprs.iter().try_for_each(|expr| expr.context(vars))

@@ -569,6 +569,95 @@ where
         }
     }
 
+    /// Creates a [`BooleanExpr`] that takes the minimum of two numerical expressions `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    pub fn min(self, rhs: Self) -> Result<Self, TypeError> {
+        match self {
+            Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+            Expression::Natural(natural_expr) => match rhs {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(natural_expr_rhs) => Ok(Expression::Natural(NaturalExpr::Min(
+                    Box::new((natural_expr, natural_expr_rhs)),
+                ))),
+                Expression::Integer(integer_expr_rhs) => Ok(Expression::Integer(IntegerExpr::Min(
+                    Box::new((IntegerExpr::Nat(natural_expr), integer_expr_rhs)),
+                ))),
+                Expression::Float(float_expr_rhs) => Ok(Expression::Float(FloatExpr::Min(
+                    Box::new((FloatExpr::Nat(natural_expr), float_expr_rhs)),
+                ))),
+            },
+            Expression::Integer(integer_expr) => match rhs {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(natural_expr_rhs) => Ok(Expression::Integer(IntegerExpr::Min(
+                    Box::new((integer_expr, IntegerExpr::Nat(natural_expr_rhs))),
+                ))),
+                Expression::Integer(integer_expr_rhs) => Ok(Expression::Integer(IntegerExpr::Min(
+                    Box::new((integer_expr, integer_expr_rhs)),
+                ))),
+                Expression::Float(float_expr_rhs) => Ok(Expression::Float(FloatExpr::Min(
+                    Box::new((FloatExpr::Int(integer_expr), float_expr_rhs)),
+                ))),
+            },
+            Expression::Float(float_expr) => match rhs {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(natural_expr_rhs) => Ok(Expression::Float(FloatExpr::Min(
+                    Box::new((float_expr, FloatExpr::Nat(natural_expr_rhs))),
+                ))),
+                Expression::Integer(integer_expr_rhs) => Ok(Expression::Float(FloatExpr::Min(
+                    Box::new((float_expr, FloatExpr::Int(integer_expr_rhs))),
+                ))),
+                Expression::Float(float_expr_rhs) => Ok(Expression::Float(FloatExpr::Min(
+                    Box::new((float_expr, float_expr_rhs)),
+                ))),
+            },
+        }
+    }
+
+    /// Creates a [`BooleanExpr`] that takes the maximum of two numerical expressions `self` and `rhs`,
+    /// and returns error if comparison is not possible.
+    pub fn max(self, rhs: Self) -> Result<Self, TypeError> {
+        match self {
+            Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+            Expression::Natural(natural_expr) => match rhs {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(natural_expr_rhs) => Ok(Expression::Natural(NaturalExpr::Max(
+                    Box::new((natural_expr, natural_expr_rhs)),
+                ))),
+                Expression::Integer(integer_expr_rhs) => Ok(Expression::Integer(IntegerExpr::Max(
+                    Box::new((IntegerExpr::Nat(natural_expr), integer_expr_rhs)),
+                ))),
+                Expression::Float(float_expr_rhs) => Ok(Expression::Float(FloatExpr::Max(
+                    Box::new((FloatExpr::Nat(natural_expr), float_expr_rhs)),
+                ))),
+            },
+            Expression::Integer(integer_expr) => match rhs {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(natural_expr_rhs) => Ok(Expression::Integer(IntegerExpr::Max(
+                    Box::new((integer_expr, IntegerExpr::Nat(natural_expr_rhs))),
+                ))),
+                Expression::Integer(integer_expr_rhs) => Ok(Expression::Integer(IntegerExpr::Max(
+                    Box::new((integer_expr, integer_expr_rhs)),
+                ))),
+                Expression::Float(float_expr_rhs) => Ok(Expression::Float(FloatExpr::Max(
+                    Box::new((FloatExpr::Int(integer_expr), float_expr_rhs)),
+                ))),
+            },
+            Expression::Float(float_expr) => match rhs {
+                Expression::Boolean(_) => Err(TypeError::TypeMismatch),
+                Expression::Natural(natural_expr_rhs) => Ok(Expression::Float(FloatExpr::Max(
+                    Box::new((float_expr, FloatExpr::Nat(natural_expr_rhs))),
+                ))),
+                Expression::Integer(integer_expr_rhs) => Ok(Expression::Float(FloatExpr::Max(
+                    Box::new((float_expr, FloatExpr::Int(integer_expr_rhs))),
+                ))),
+                Expression::Float(float_expr_rhs) => Ok(Expression::Float(FloatExpr::Max(
+                    Box::new((float_expr, float_expr_rhs)),
+                ))),
+            },
+        }
+    }
+
+    /// Creates an if-then-else expression
     pub fn ite(self, then: Self, r#else: Self) -> Result<Self, TypeError> {
         if let Expression::Boolean(r#if) = self {
             r#if.ite(then, r#else)

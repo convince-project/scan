@@ -919,14 +919,9 @@ impl JaniBuilder {
             Expression::MinMax { op, left, right } => {
                 let left = self.build_expression(left, None, local_vars)?;
                 let right = self.build_expression(right, None, local_vars)?;
-                // TODO: Use native min/max operation when available
                 match op {
-                    parser::MinMaxOp::Min => {
-                        left.clone().less_than(right.clone())?.ite(left, right)
-                    }
-                    parser::MinMaxOp::Max => {
-                        left.clone().less_than(right.clone())?.ite(right, left)
-                    }
+                    parser::MinMaxOp::Min => left.min(right),
+                    parser::MinMaxOp::Max => left.max(right),
                 }
                 .map_err(anyhow::Error::from)
             }
