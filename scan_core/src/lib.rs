@@ -28,6 +28,7 @@ use std::{
     },
     time::Instant,
 };
+use thiserror::Error;
 pub use tracer::{TraceWriter, Tracer};
 pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
 
@@ -37,6 +38,17 @@ const FAILURES: &str = "failures";
 
 /// The type that represents time.
 pub type Time = u32;
+
+/// Errors that can be returned by a `[Scan]` method
+#[derive(Clone, Copy, Debug, Error)]
+pub enum ScanError {
+    /// Precision value is out-of-bounds
+    #[error("out-of-bounds precision value: {0}")]
+    OutOfBoundsPrecision(f64),
+    /// Confidence value is out-of-bounds
+    #[error("out-of-bounds confidence value: {0}")]
+    OutOfBoundsConfidence(f64),
+}
 
 /// The possible outcomes of a model execution.
 #[derive(Debug, Clone)]
@@ -108,6 +120,8 @@ impl<O> Scan<O> {
 
 impl<O: Oracle> Scan<O> {
     fn verification(&self, confidence: f64, precision: f64, duration: Time) {
+        assert!(0f64 < confidence && confidence < 1f64);
+        assert!(0f64 < precision && precision < 1f64);
         let local_successes;
         let local_failures;
 
@@ -157,10 +171,18 @@ impl<O: Oracle> Scan<O> {
     }
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
-    pub fn adaptive(&self, confidence: f64, precision: f64, duration: Time) {
-        // Cannot return as a T::Err, don't want to include anyhow in scan_core
-        assert!(0f64 < confidence && confidence < 1f64);
-        assert!(0f64 < precision && precision < 1f64);
+    pub fn adaptive(
+        &self,
+        confidence: f64,
+        precision: f64,
+        duration: Time,
+    ) -> Result<(), ScanError> {
+        if !(0f64 < confidence && confidence < 1f64) {
+            return Err(ScanError::OutOfBoundsConfidence(confidence));
+        }
+        if !(0f64 < precision && precision < 1f64) {
+            return Err(ScanError::OutOfBoundsPrecision(precision));
+        }
 
         self.reset();
 
@@ -175,6 +197,7 @@ impl<O: Oracle> Scan<O> {
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
+        Ok(())
     }
 
     /// Produces and saves the traces for the given number of runs,
@@ -238,9 +261,18 @@ where
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.
-    pub fn par_adaptive(&self, confidence: f64, precision: f64, duration: Time) {
-        assert!(0f64 < confidence && confidence < 1f64);
-        assert!(0f64 < precision && precision < 1f64);
+    pub fn par_adaptive(
+        &self,
+        confidence: f64,
+        precision: f64,
+        duration: Time,
+    ) -> Result<(), ScanError> {
+        if !(0f64 < confidence && confidence < 1f64) {
+            return Err(ScanError::OutOfBoundsConfidence(confidence));
+        }
+        if !(0f64 < precision && precision < 1f64) {
+            return Err(ScanError::OutOfBoundsPrecision(precision));
+        }
 
         self.reset();
 
@@ -256,6 +288,7 @@ where
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
+        Ok(())
     }
 
     /// Produces and saves the traces for the given number of runs,

@@ -85,10 +85,11 @@ impl VerifyArgs {
         O: Oracle + Sync + 'a,
     {
         if self.single_thread {
-            scan.adaptive(self.confidence, self.precision, self.duration);
+            scan.adaptive(self.confidence, self.precision, self.duration)
         } else {
-            scan.par_adaptive(self.confidence, self.precision, self.duration);
+            scan.par_adaptive(self.confidence, self.precision, self.duration)
         }
+        .expect("verify");
         let successes = scan.successes();
         let failures = scan.failures();
         let runs = successes + failures;
