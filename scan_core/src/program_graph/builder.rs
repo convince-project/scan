@@ -462,41 +462,30 @@ impl ProgramGraphBuilder {
             }
         });
         self.effects.shrink_to_fit();
-        // Vars are not going to be immutable,
-        // but their number will be constant anyway
         self.vars.shrink_to_fit();
-        let mut locations = self
-            .locations
-            .into_iter()
-            .map(|(a_transitions, mut invariants)| {
-                let mut a_transitions = a_transitions
-                    .into_iter()
-                    .map(|(a, mut loc_transitions)| {
+        self.locations
+            .iter_mut()
+            .for_each(|(transitions, invariants)| {
+                assert!(transitions.is_sorted_by_key(|(action, ..)| *action));
+                transitions
+                    .iter_mut()
+                    .for_each(|(_action, loc_transitions)| {
                         loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
-                        (
-                            a,
-                            loc_transitions
-                                .into_iter()
-                                .map(|(p, guard, mut c)| {
-                                    c.sort_unstable();
-                                    (p, guard, c)
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                assert!(a_transitions.is_sorted_by_key(|(a, ..)| *a));
-                a_transitions.shrink_to_fit();
+                        loc_transitions
+                            .iter_mut()
+                            .for_each(|(_p, _guard, time_guards)| {
+                                time_guards.sort_unstable();
+                            });
+                    });
+                transitions.shrink_to_fit();
                 invariants.sort_unstable();
                 invariants.shrink_to_fit();
-                (a_transitions, invariants)
-            })
-            .collect::<Vec<_>>();
-        locations.shrink_to_fit();
+            });
+        self.locations.shrink_to_fit();
         // Build program graph
         info!(
             "create Program Graph with:\n{} locations\n{} actions\n{} vars",
-            locations.len(),
+            self.locations.len(),
             self.effects.len(),
             self.vars.len()
         );
@@ -504,8 +493,8 @@ impl ProgramGraphBuilder {
         self.initial_states.shrink_to_fit();
         ProgramGraph {
             initial_states: self.initial_states,
-            effects: self.effects.into_iter().collect(),
-            locations,
+            effects: self.effects,
+            locations: self.locations,
             vars: self.vars,
             clocks: self.clocks,
         }
