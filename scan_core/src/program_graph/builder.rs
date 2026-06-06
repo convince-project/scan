@@ -372,6 +372,9 @@ impl ProgramGraphBuilder {
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
             let transition = (post, guard, constraints);
+            // WARN: Actions have to be inserted in order but insertion has worst-case complexity O(n)
+            // so in some cases insertion of all actions could have complexity O(n^2).
+            // In practice though this is unlikely to ever be a bottleneck
             match transitions.binary_search_by_key(&action, |(a, _)| *a) {
                 Ok(idx) => transitions[idx].1.push(transition),
                 Err(idx) => transitions.insert(idx, (action, vec![transition])),
