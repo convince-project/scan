@@ -484,7 +484,7 @@ impl ProgramGraphBuilder {
         self.locations.shrink_to_fit();
         // Build program graph
         info!(
-            "create Program Graph with:\n{} locations\n{} actions\n{} vars",
+            "create Program Graph with: {} locations; {} actions; {} vars",
             self.locations.len(),
             self.effects.len(),
             self.vars.len()
