@@ -51,6 +51,7 @@ enum Format {
     /// if present, or the path of a directory.
     /// In the latter case, SCAN will attempt to process appropriately
     /// all files in the given directory and its sub-directories.
+    #[cfg(feature = "scxml")]
     Scxml,
     /// JANI format, passed as the path to the .jani file.
     ///
@@ -59,6 +60,7 @@ enum Format {
     /// The model has to be passed to SCAN as the path to the .jani file.
     ///
     /// WARNING: JANI support is still experimental.
+    #[cfg(feature = "jani")]
     Jani,
     /// Promela format, passed as the path to the .pml or .prm file.
     ///
@@ -67,6 +69,7 @@ enum Format {
     /// The model has to be passed to SCAN as the path to the .pml or .prm file.
     ///
     /// WARNING: Promela support is still experimental.
+    #[cfg(feature = "promela")]
     Promela,
 }
 
@@ -174,9 +177,12 @@ impl Cli {
 
         if let Some(format) = self.format {
             match format {
+                #[cfg(feature = "scxml")]
                 Format::Scxml => self.run_scxml(&model),
-                Format::Promela => self.run_promela(&model),
+                #[cfg(feature = "jani")]
                 Format::Jani => self.run_jani(&model),
+                #[cfg(feature = "promela")]
+                Format::Promela => self.run_promela(&model),
             }
         } else if self.model.is_dir() {
             self.run_scxml(&model)
@@ -189,14 +195,18 @@ impl Cli {
                 .to_str()
                 .ok_or(anyhow!("file extension not recognized"))?
             {
+                #[cfg(feature = "scxml")]
                 "xml" | "scxml" => self.run_scxml(&model),
+                #[cfg(feature = "jani")]
                 "jani" => self.run_jani(&model),
+                #[cfg(feature = "promela")]
                 "pml" | "prm" => self.run_promela(&model),
                 _ => bail!("unsupported file format"),
             }
         }
     }
 
+    #[cfg(feature = "scxml")]
     fn run_scxml(self, model: &str) -> anyhow::Result<()> {
         use scan_scxml::*;
 
@@ -231,6 +241,7 @@ impl Cli {
         Ok(())
     }
 
+    #[cfg(feature = "jani")]
     fn run_jani(self, model: &str) -> anyhow::Result<()> {
         use scan_jani::*;
 
@@ -263,6 +274,7 @@ impl Cli {
         Ok(())
     }
 
+    #[cfg(feature = "promela")]
     fn run_promela(self, model: &str) -> anyhow::Result<()> {
         use scan_promela::*;
 
