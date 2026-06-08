@@ -19,6 +19,8 @@ API docs for the library crates:
 - [`smc_scan_scxml`](https://docs.rs/smc_scan_scxml/latest/scan_scxml/)
 - [`smc_scan_jani`](https://docs.rs/smc_scan_jani/latest/scan_jani/)
 - [`smc_scan_promela`](https://docs.rs/smc_scan_promela/latest/scan_promela/)
+- [`smc_scan_pmtl`](https://docs.rs/smc_scan_pmtl/latest/scan_pmtl/)
+- [`smc_scan_mtl`](https://docs.rs/smc_scan_mtl/latest/scan_mtl/)
 - [`smc_scan`](https://docs.rs/smc_scan/latest/scan/)
 
 ## Formalism
@@ -35,7 +37,11 @@ At the moment the following languages are planned or (partially) implemented:
 - [ ] [Promela](https://spinroot.com/spin/Man/Manual.html)
 - [x] [JANI](https://jani-spec.org/)
 
-## Build prerequisites
+## Installation
+
+Currently, the only way to obtain SCAN is to build it from sources.
+
+### Build prerequisites
 
 SCAN is entirely written in [Rust](https://www.rust-lang.org/),
 so, to build it, you need to install a recent version of the Rust toolchain.
@@ -43,9 +49,7 @@ The easiest and recommended way to do so is by installing [rustup](https://rustu
 either following the instructions on its homepage or through your OS's package manager.
 Do not forget to set your `PATH` correctly, if required.
 
-## Installation and usage
-
-Currently, the only way to use SCAN is to build it from sources.
+### Installing with Cargo
 
 To install and use SCAN on your system,
 the easiest way is to use the `cargo install` command.
@@ -74,6 +78,34 @@ cargo install --git https://github.com/convince-project/scan
 ```
 
 (see `cargo install --help` for more options).
+
+### Features
+
+By default, SCAN includes the SCXML and JANI frontends,
+while the Promela frontend is disabled through the use of [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
+The available features for SCAN are:
+
+- `scxml` to include the SCXML frontend (included by default);
+- `jani` to include the JANI frontend (included by default);
+- `promela` to include the Promela frontend (disabled by default);
+
+To change which frontends to include at build time,
+explicitly select the desired features with the `--features` option as follows:
+
+```console
+cargo install smc_scan --locked --features FEATURES
+```
+
+where `FEATURES` is a (comma-separated, or space-separated inside quotes) list.
+Alternatively, if you want all available features, install SCAN with:
+
+```console
+cargo install smc_scan --locked --all-features
+```
+
+Be aware that each feature imports extra dependencies and increases build time.
+
+## Usage
 
 After installation, SCAN can be used as a CLI tool.
 To print the help screen, use

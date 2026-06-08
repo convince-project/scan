@@ -1,5 +1,7 @@
 # Installation
 
+Currently, the only way to obtain SCAN is to build it from sources.
+
 ## Build prerequisites
 
 SCAN is entirely written in [Rust](https://www.rust-lang.org/),
@@ -34,3 +36,41 @@ scan
 
 to verify that the installation completed successfully
 by displaying the in-line help.
+
+To install a specific SCAN version, e.g., v0.1.0, use:
+
+```console
+cargo install smc_scan --version 0.1.0 --locked
+```
+
+It is also possible to install SCAN from the latest commit directly from this repository with:
+
+```console
+cargo install --git https://github.com/convince-project/scan
+```
+
+## Features
+
+By default, SCAN includes the SCXML and JANI frontends,
+while the Promela frontend is disabled through the use of [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
+The available features for SCAN are:
+
+- `scxml` to include the SCXML frontend (enabled by default);
+- `jani` to include the JANI frontend (enabled by default);
+- `promela` to include the Promela frontend (disabled by default);
+
+To change which frontends to include at build time,
+explicitly select the desired features with the `--features` option as follows:
+
+```console
+cargo install smc_scan --locked --features FEATURES
+```
+
+where `FEATURES` is a (comma-separated, or space-separated inside quotes) list.
+Alternatively, if you want all available features, install SCAN with:
+
+```console
+cargo install smc_scan --locked --all-features
+```
+
+Be aware that each feature imports extra dependencies and increases build time.
