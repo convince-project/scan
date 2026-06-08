@@ -2,19 +2,19 @@
 
 [Introduction](./README.md)
 
-# The SCAN User Manual
+# The SCAN user manual
 
 - [Installation](./manual/install.md)
-- [The User Interface](./manual/interface.md)
+- [The user interface](./manual/interface.md)
 
-# Model Checking Background in SCAN
+# Model checking background
 
 - [Channel Systems]()
-- [Temporal Logic]()
-- [Statistical Model Checking]()
+- [Temporal logic]()
+- [Statistical model checking]()
 
-# SCXML-based Model Specification Format
+# SCXML model specification
 
-- [Model Main File]()
-- [Properties](./scxml/properties.md)
-- [SCXML Processes]()
+- [Model main file]()
+- [XML properties](./scxml/properties.md)
+- [SCXML processes]()

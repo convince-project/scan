@@ -144,13 +144,13 @@ impl<O: Oracle> Scan<O> {
                     local_failures = self.failures.fetch_add(1, Ordering::Relaxed);
                     let violations = &mut *self.violations.lock().unwrap();
                     violations.resize(violations.len().max(guarantees.len()), 0);
-                    guarantees.iter().zip(violations.iter_mut()).for_each(
-                        |(success, violations)| {
-                            if !success {
-                                *violations += 1;
-                            }
-                        },
-                    );
+                    guarantees
+                        .into_iter()
+                        .zip(violations.iter_mut())
+                        .filter(|(success, _)| !success)
+                        .for_each(|(_, violations)| {
+                            *violations += 1;
+                        });
                     // If guarantee is violated, we have found a counter-example!
                     trace!("runs: {local_failures} failures");
                 }
