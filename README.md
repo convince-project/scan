@@ -65,6 +65,8 @@ Cargo will build and install SCAN on your system
 but it is recommended as it improves build reproducibility
 by enforcing the use of specified versions for dependencies).
 
+### Installing specific versions
+
 To install a specific SCAN version, e.g., v0.1.0, use:
 
 ```console
@@ -104,6 +106,17 @@ cargo install smc_scan --locked --all-features
 ```
 
 Be aware that each feature imports extra dependencies and increases build time.
+
+### Build optimization
+
+Even though by default the `cargo install` builds are highly-optimized,
+there exist some further advanced build optimizations set via local configurations.
+It can be difficult (and inappropriate) to enable these compiler optimizations on the SCAN side,
+so we prefer to leave it to (advanced) individual users to decide what makes sense for their use cases.
+Empirically, such optimization have been shown to yield up to, but no more than, a 10% performance improvement on typical SCAN use cases.
+
+An excellent, though unofficial, reference on Rust performance optimization is (https://nnethercote.github.io/perf-book/),
+specifically the [Build configuration](https://nnethercote.github.io/perf-book/build-configuration.html) section.
 
 ## Usage
 
