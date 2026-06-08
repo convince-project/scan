@@ -119,7 +119,6 @@ pub use builder::*;
 use rand::rngs::SmallRng;
 use rand::seq::IteratorRandom;
 use rand::{RngExt, SeedableRng};
-use smallvec::SmallVec;
 use std::collections::VecDeque;
 use thiserror::Error;
 
@@ -269,9 +268,9 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventType {
     /// Sending a value to a channel.
-    Send(SmallVec<[Val; 2]>),
+    Send(Vec<Val>),
     /// Retrieving a value out of a channel.
-    Receive(SmallVec<[Val; 2]>),
+    Receive(Vec<Val>),
     /// Checking whether a channel is empty.
     ProbeEmptyQueue,
     /// Checking whether a channel is full.
@@ -480,7 +479,7 @@ impl<'def> ChannelSystemRun<'def> {
                     .filter_map(|(action, post_states)| {
                         post_states
                             .map(|locs| locs.choose(&mut rand1).map(|loc| Location(pg_id, loc)))
-                            .collect::<Option<SmallVec<[Location; 4]>>>()
+                            .collect::<Option<Vec<Location>>>()
                             .map(|locs| (action, locs))
                     })
                     .choose(&mut rand2)
@@ -598,7 +597,7 @@ impl<'def> ChannelSystemRun<'def> {
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect::<SmallVec<[PgLocation; 8]>>()
+                                .collect::<Vec<PgLocation>>()
                                 .as_slice(),
                             &mut self.rng,
                         )
@@ -615,13 +614,13 @@ impl<'def> ChannelSystemRun<'def> {
                     let (types, _) = &self.def.channels[channel.0 as usize];
                     let vals = self.message_queue[channel.0 as usize]
                         .drain(..types.len())
-                        .collect::<SmallVec<[Val; 2]>>();
+                        .collect::<Vec<Val>>();
                     self.program_graphs[pg_id.0 as usize]
                         .receive(
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect::<SmallVec<[PgLocation; 8]>>()
+                                .collect::<Vec<PgLocation>>()
                                 .as_slice(),
                             vals.as_slice(),
                         )
@@ -642,7 +641,7 @@ impl<'def> ChannelSystemRun<'def> {
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect::<SmallVec<[PgLocation; 8]>>()
+                                .collect::<Vec<PgLocation>>()
                                 .as_slice(),
                             &mut self.rng,
                         )
@@ -660,7 +659,7 @@ impl<'def> ChannelSystemRun<'def> {
                                     action.1,
                                     post.iter()
                                         .map(|loc| loc.1)
-                                        .collect::<SmallVec<[PgLocation; 8]>>()
+                                        .collect::<Vec<PgLocation>>()
                                         .as_slice(),
                                     &mut self.rng,
                                 )
@@ -685,7 +684,7 @@ impl<'def> ChannelSystemRun<'def> {
                     action.1,
                     post.iter()
                         .map(|loc| loc.1)
-                        .collect::<SmallVec<[PgLocation; 8]>>()
+                        .collect::<Vec<PgLocation>>()
                         .as_slice(),
                     &mut self.rng,
                 )

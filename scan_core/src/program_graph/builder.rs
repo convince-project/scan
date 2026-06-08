@@ -7,7 +7,6 @@ use crate::{
     program_graph::PgGuard,
 };
 use log::info;
-use smallvec::SmallVec;
 
 // type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
 pub(crate) type Transition = (Location, Option<BooleanExpr<Var>>, Vec<TimeConstraint>);
@@ -16,7 +15,7 @@ pub(crate) type Transition = (Location, Option<BooleanExpr<Var>>, Vec<TimeConstr
 #[derive(Debug, Clone)]
 pub struct ProgramGraphBuilder {
     // initial_states: Vec<Location>,
-    initial_states: SmallVec<[Location; 8]>,
+    initial_states: Vec<Location>,
     // Effects are indexed by actions
     effects: Vec<Effect>,
     // Transitions are indexed by locations
@@ -39,7 +38,7 @@ impl ProgramGraphBuilder {
     /// At creation, this will only have the initial location with no variables, no actions and no transitions.
     pub fn new() -> Self {
         Self {
-            initial_states: SmallVec::new(),
+            initial_states: Vec::new(),
             effects: Vec::new(),
             vars: Vec::new(),
             locations: Vec::new(),
@@ -208,7 +207,7 @@ impl ProgramGraphBuilder {
             .map_err(PgError::Type)?;
         // Actions are indexed progressively
         let idx = self.effects.len();
-        self.effects.push(Effect::Send(msgs.into()));
+        self.effects.push(Effect::Send(msgs));
         Ok(Action(idx as ActionIdx))
     }
 
@@ -218,7 +217,7 @@ impl ProgramGraphBuilder {
         } else {
             // Actions are indexed progressively
             let idx = self.effects.len();
-            self.effects.push(Effect::Receive(vars.into()));
+            self.effects.push(Effect::Receive(vars));
             Ok(Action(idx as ActionIdx))
         }
     }

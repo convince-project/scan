@@ -23,7 +23,6 @@
 //!
 //! ```
 //! # use scan_core::program_graph::{ProgramGraphBuilder, Location};
-//! # use smallvec::smallvec;
 //! // Create a new PG builder
 //! let mut pg_builder = ProgramGraphBuilder::new();
 //!
@@ -82,7 +81,6 @@ mod builder;
 use crate::{Time, grammar::*};
 pub use builder::*;
 use rand::{Rng, rngs::SmallRng};
-use smallvec::SmallVec;
 use thiserror::Error;
 
 /// The index for [`Location`]s in a [`ProgramGraph`].
@@ -201,8 +199,8 @@ pub enum PgError {
 enum Effect {
     // NOTE: Could use a SmallVec for clock resets
     Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
-    Send(SmallVec<[Expression<Var>; 2]>),
-    Receive(SmallVec<[Var; 2]>),
+    Send(Vec<Expression<Var>>),
+    Receive(Vec<Var>),
 }
 
 type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
@@ -244,7 +242,7 @@ type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ProgramGraph {
-    initial_states: SmallVec<[Location; 8]>,
+    initial_states: Vec<Location>,
     effects: Vec<Effect>,
     locations: Vec<LocationData>,
     // Time invariants of each location
@@ -348,7 +346,7 @@ impl<'a, I: Iterator<Item = (Action, &'a [Transition])>> Iterator for Transition
 /// because only the internal state needs to be duplicated.
 #[derive(Debug, Clone)]
 pub struct ProgramGraphRun<'def> {
-    current_states: SmallVec<[Location; 8]>,
+    current_states: Vec<Location>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
     def: &'def ProgramGraph,
@@ -374,7 +372,7 @@ impl<'def> ProgramGraphRun<'def> {
     /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
     /// ```
     #[inline]
-    pub fn current_states(&self) -> &SmallVec<[Location; 8]> {
+    pub fn current_states(&self) -> &[Location] {
         &self.current_states
     }
 
@@ -669,7 +667,7 @@ impl<'def> ProgramGraphRun<'def> {
         action: Action,
         post_states: &[Location],
         rng: &'a mut R,
-    ) -> Result<SmallVec<[Val; 2]>, PgError> {
+    ) -> Result<Vec<Val>, PgError> {
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
