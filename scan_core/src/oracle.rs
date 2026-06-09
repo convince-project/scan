@@ -3,7 +3,7 @@ use crate::Time;
 /// Implementators are induced by a temporal property.
 /// They can update their internal state when fed a new state of a trace,
 /// and establish whether their corresponding property holds on such trace.
-pub trait Oracle: Clone + Sync {
+pub trait Oracle: Sync {
     /// Update the internal state of the [`Oracle`] with the latest state of a temporal trace.
     fn update_state(&mut self, state: &[bool]);
 

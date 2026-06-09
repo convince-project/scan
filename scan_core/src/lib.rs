@@ -50,11 +50,11 @@ pub enum ScanError {
     OutOfBoundsConfidence(f64),
 }
 
-/// The possible outcomes of a model execution:
-/// - If the run was not completed (because the execution violated an assume), result is `None`.
-/// - If the run succeeded, or failed by violating the guarantees, result is `Some(violations)`
-///   where the `violations` carries which (if any) guarantees were violated.
-pub type RunOutcome = Option<Vec<bool>>;
+// The possible outcomes of a model execution:
+// - If the run was not completed (because the execution violated an assume), result is `None`.
+// - If the run succeeded, or failed by violating the guarantees, result is `Some(violations)`
+//   where the `violations` carries which (if any) guarantees were violated.
+type RunOutcome = Option<Vec<bool>>;
 
 /// The main type to interface with the verification capabilities of SCAN.
 /// [`Scan`] holds the model, properties and other data necessary to run the verification process.
@@ -115,7 +115,7 @@ impl<O> Scan<O> {
     }
 }
 
-impl<O: Oracle> Scan<O> {
+impl<O: Oracle + Clone> Scan<O> {
     fn verification(&self, confidence: f64, precision: f64, duration: Time) {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -246,7 +246,7 @@ impl<O: Oracle> Scan<O> {
 
 impl<O> Scan<O>
 where
-    O: Oracle + Sync,
+    O: Oracle + Clone + Sync,
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.

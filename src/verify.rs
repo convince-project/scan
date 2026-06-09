@@ -82,7 +82,7 @@ impl VerifyArgs {
 
     pub(crate) fn verify<'a, O>(&self, model: String, scan: &'a Scan<O>) -> Report
     where
-        O: Oracle + Sync + 'a,
+        O: Oracle + Clone + Sync + 'a,
     {
         if self.single_thread {
             scan.adaptive(self.confidence, self.precision, self.duration)
