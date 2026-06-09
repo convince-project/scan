@@ -87,5 +87,5 @@ It can be difficult (and inappropriate) to enable these compiler optimizations o
 so we prefer to leave it to (advanced) individual users to decide what makes sense for their use cases.
 Empirically, such optimization have been shown to yield up to, but no more than, a 10% performance improvement on typical SCAN use cases.
 
-An excellent, though unofficial, reference on Rust performance optimization is (https://nnethercote.github.io/perf-book/),
+An excellent, though unofficial, reference on Rust performance optimization is [The Rust Performance Book](https://nnethercote.github.io/perf-book/),
 specifically the [Build configuration](https://nnethercote.github.io/perf-book/build-configuration.html) section.
