@@ -32,9 +32,11 @@ crate-type = ["lib"]  # The crate types to generate.
 name = "scan"  # The name of the target.
 path = "src/main.rs"
 
-[profile.release]
+[profile.release-lto]
+inherits = "release"
 lto = true
 codegen-units = 1
+debug = "none"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
