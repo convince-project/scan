@@ -60,7 +60,7 @@ impl ChannelSystemBuilder {
 
     /// Add a new variable of the given type to the given PG.
     ///
-    /// It fails if the CS contains no such PG, or if the expression is badly-typed.
+    /// It fails if the CS contains no such PG.
     ///
     /// See [`ProgramGraphBuilder::new_var`] for more info.
     pub fn new_var(&mut self, pg_id: PgId, val: Val) -> Result<Var, CsError> {
@@ -68,9 +68,7 @@ impl ChannelSystemBuilder {
             .program_graphs
             .get_mut(pg_id.0 as usize)
             .ok_or(CsError::MissingPg(pg_id))?;
-        let var = pg
-            .new_var(val)
-            .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
+        let var = pg.new_var(val);
         Ok(Var(pg_id, var))
     }
 

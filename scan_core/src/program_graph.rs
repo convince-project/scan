@@ -803,9 +803,7 @@ mod tests {
         let mut builder = ProgramGraphBuilder::new();
         let initial = builder.new_initial_location();
         let r#final = builder.new_location();
-        let var = builder
-            .new_var(Val::from(0 as Natural))
-            .expect("create var");
+        let var = builder.new_var(Val::from(0 as Natural));
         let action = builder.new_action();
         builder
             .add_effect(
@@ -865,7 +863,7 @@ mod tests {
         let mut builder = ProgramGraphBuilder::new();
         // Variables
         let mut rng = SmallRng::from_seed([0; 32]);
-        let battery = builder.new_var(Val::from(0i64))?;
+        let battery = builder.new_var(Val::from(0i64));
         // Locations
         let initial = builder.new_initial_location();
         let left = builder.new_location();
