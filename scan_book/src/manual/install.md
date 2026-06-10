@@ -81,11 +81,20 @@ Be aware that each feature imports extra dependencies and increases build time.
 
 ## Build optimization
 
-Even though by default the `cargo install` builds are highly-optimized,
-there exist some further advanced build optimizations set via local configurations.
-It can be difficult (and inappropriate) to enable these compiler optimizations on the SCAN side,
-so we prefer to leave it to (advanced) individual users to decide what makes sense for their use cases.
-Empirically, such optimization have been shown to yield up to, but no more than, a 10% performance improvement on typical SCAN use cases.
+Even though by default the `cargo install` builds are well-optimized,
+some further advanced build optimizations are possible.
+The extent of the speed-up that can be obtained depends on the use-case,
+and is not always worth the extra effort required to enable these configurations.
+
+Advanced Rust users will already be familiar with compilation settings
+and can tune the build as they see fit.
+For users that are unfamiliar with Rust but still want to get high performances,
+and without going into the details,
+a more optimized built can be attempted with:
+
+```console
+RUSTFLAGS="-C target-cpu=native" cargo install smc_scan --locked --profile release-lto
+```
 
 An excellent, though unofficial, reference on Rust performance optimization is [The Rust Performance Book](https://nnethercote.github.io/perf-book/),
 specifically the [Build configuration](https://nnethercote.github.io/perf-book/build-configuration.html) section.
