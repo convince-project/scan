@@ -65,58 +65,7 @@ Cargo will build and install SCAN on your system
 but it is recommended as it improves build reproducibility
 by enforcing the use of specified versions for dependencies).
 
-### Installing specific versions
-
-To install a specific SCAN version, e.g., v0.1.0, use:
-
-```console
-cargo install smc_scan --version 0.1.0 --locked
-```
-
-It is also possible to install SCAN from the latest commit directly from this repository with:
-
-```console
-cargo install --git https://github.com/convince-project/scan
-```
-
-(see `cargo install --help` for more options).
-
-### Features
-
-By default, SCAN includes the SCXML and JANI frontends,
-while the Promela frontend is disabled through the use of [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
-The available features for SCAN are:
-
-- `scxml` to include the SCXML frontend (included by default);
-- `jani` to include the JANI frontend (included by default);
-- `promela` to include the Promela frontend (disabled by default);
-
-To change which frontends to include at build time,
-explicitly select the desired features with the `--features` option as follows:
-
-```console
-cargo install smc_scan --locked --features FEATURES
-```
-
-where `FEATURES` is a (comma-separated, or space-separated inside quotes) list.
-Alternatively, if you want all available features, install SCAN with:
-
-```console
-cargo install smc_scan --locked --all-features
-```
-
-Be aware that each feature imports extra dependencies and increases build time.
-
-### Build optimization
-
-Even though by default the `cargo install` builds are highly-optimized,
-there exist some further advanced build optimizations set via local configurations.
-It can be difficult (and inappropriate) to enable these compiler optimizations on the SCAN side,
-so we prefer to leave it to (advanced) individual users to decide what makes sense for their use cases.
-Empirically, such optimization have been shown to yield up to, but no more than, a 10% performance improvement on typical SCAN use cases.
-
-An excellent, though unofficial, reference on Rust performance optimization is (https://nnethercote.github.io/perf-book/),
-specifically the [Build configuration](https://nnethercote.github.io/perf-book/build-configuration.html) section.
+For advanced installation options, refer to the [Install](https://convince-project.github.io/scan/manual/install.html) section of the SCAN Book.
 
 ## Usage
 
@@ -137,14 +86,7 @@ scan <MODEL> verify --all
 
 where `MODEL` is the path to your model file or folder.
 
-It can be helpful to run SCAN with logging activated.
-Use the `--verbose` flag (even multiple times) to increase the verbosity level, or
-
-```console
-RUST_LOG=<LOG_LEVEL> scan <MODEL>
-```
-
-where `LOG_LEVEL=error|warn|info|debug|trace`.
+For an in-depth documentation of the user interface, refer to the [Interface](https://convince-project.github.io/scan/manual/interface.html) section of the SCAN Book.
 
 ## Development
 
