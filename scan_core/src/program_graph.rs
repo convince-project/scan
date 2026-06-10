@@ -744,28 +744,119 @@ mod tests {
     }
 
     #[test]
-    fn transitions() {
+    fn transition() {
         let mut builder = ProgramGraphBuilder::new();
         let initial = builder.new_initial_location();
         let r#final = builder.new_location();
-        let action = builder.new_action();
         builder
-            .add_transition(initial, action, r#final, None)
+            .add_autonomous_transition(initial, r#final, None)
             .expect("add transition");
         let pg_def = builder.build();
         let mut pg = pg_def.new_instance();
-        // assert_eq!(pg.current_states().as_slice(), &[initial]);
-        // assert_eq!(
-        //     pg.possible_transitions().collect::<Vec<_>>(),
-        //     vec![(
-        //         action,
-        //         SmallVec::<[_; 4]>::from(vec![SmallVec::<[_; 8]>::from(vec![r#final])])
-        //     )]
-        // );
+        assert_eq!(pg.current_states(), &[initial]);
+        {
+            let mut possible_transitions = pg.possible_transitions();
+            assert!(
+                possible_transitions
+                    .next()
+                    .is_some_and(|(a, _)| a == EPSILON),
+            );
+            assert!(possible_transitions.next().is_none());
+        }
         let mut rng = SmallRng::from_seed([0; 32]);
-        pg.transition(action, &[r#final], &mut rng)
+        pg.transition(EPSILON, &[r#final], &mut rng)
             .expect("transition to final");
+        assert_eq!(pg.current_states(), &[r#final]);
         assert_eq!(pg.possible_transitions().count(), 0);
+    }
+
+    #[test]
+    fn guard() {
+        let mut builder = ProgramGraphBuilder::new();
+        let initial = builder.new_initial_location();
+        let r#final = builder.new_location();
+        builder
+            .add_autonomous_transition(initial, r#final, Some(BooleanExpr::Const(true)))
+            .expect("add transition");
+        builder
+            .add_autonomous_transition(r#final, initial, Some(BooleanExpr::Const(false)))
+            .expect("add transition");
+        let pg_def = builder.build();
+        let mut pg = pg_def.new_instance();
+        let mut rng = SmallRng::from_seed([0; 32]);
+        // It is possible to transition from initial to final
+        pg.transition(EPSILON, &[r#final], &mut rng)
+            .expect("transition to final");
+        assert_eq!(pg.current_states(), &[r#final]);
+        // It is not possible to transition from final to initial
+        let mut possible_transitions = pg.possible_transitions();
+        let (next_action, mut next_locations) = possible_transitions.next().unwrap();
+        assert_eq!(next_action, EPSILON);
+        let mut next_location = next_locations.next().unwrap();
+        assert!(next_location.next().is_none());
+        assert!(possible_transitions.next().is_none());
+    }
+
+    #[test]
+    fn effect() {
+        const TRESHOLD: Natural = 3;
+        let mut builder = ProgramGraphBuilder::new();
+        let initial = builder.new_initial_location();
+        let r#final = builder.new_location();
+        let var = builder
+            .new_var(Val::from(0 as Natural))
+            .expect("create var");
+        let action = builder.new_action();
+        builder
+            .add_effect(
+                action,
+                var,
+                Expression::Natural(NaturalExpr::Var(var) + NaturalExpr::Const(1)),
+            )
+            .expect("add effect");
+        builder
+            .add_transition(
+                initial,
+                action,
+                initial,
+                Some(
+                    Expression::from_var(var, Type::Natural)
+                        .less_than(Expression::from(TRESHOLD))
+                        .expect("boolean expression"),
+                ),
+            )
+            .expect("add transition");
+        builder
+            .add_autonomous_transition(
+                initial,
+                r#final,
+                Some(
+                    Expression::from_var(var, Type::Natural)
+                        .equal_to(Expression::from(TRESHOLD))
+                        .expect("boolean expression"),
+                ),
+            )
+            .expect("add transition");
+        let pg_def = builder.build();
+        let mut pg = pg_def.new_instance();
+        let mut rng = SmallRng::from_seed([0; 32]);
+        for _ in 0..TRESHOLD {
+            assert_eq!(pg.current_states(), &[initial]);
+            // It is not possible to transition from initial to final
+            pg.transition(EPSILON, &[r#final], &mut rng)
+                .expect_err("transition to final not possible");
+            // It is possible to transition from initial to initial
+            pg.transition(action, &[initial], &mut rng)
+                .expect("transition to initial");
+        }
+        assert_eq!(pg.current_states(), &[initial]);
+        // It is not possible to transition from initial to initial
+        pg.transition(action, &[initial], &mut rng)
+            .expect_err("transition to initial not possible");
+        // It is possible to transition from initial to final
+        pg.transition(EPSILON, &[r#final], &mut rng)
+            .expect("transition to final");
+        assert_eq!(pg.current_states(), &[r#final]);
     }
 
     #[test]
