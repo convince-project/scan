@@ -1,5 +1,7 @@
 # Installation
 
+Currently, the only way to obtain SCAN is to build it from sources.
+
 ## Build prerequisites
 
 SCAN is entirely written in [Rust](https://www.rust-lang.org/),
@@ -34,3 +36,65 @@ scan
 
 to verify that the installation completed successfully
 by displaying the in-line help.
+
+## Installing specific versions
+
+To install a specific SCAN version, e.g., v0.1.0, use:
+
+```console
+cargo install smc_scan --version 0.1.0 --locked
+```
+
+It is also possible to install SCAN from the latest commit directly from this repository with:
+
+```console
+cargo install --git https://github.com/convince-project/scan
+```
+
+(see `cargo install --help` for more options).
+
+## Features
+
+By default, SCAN includes the SCXML and JANI frontends,
+while the Promela frontend is disabled through the use of [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
+The available features for SCAN are:
+
+- `scxml` to include the SCXML frontend (enabled by default);
+- `jani` to include the JANI frontend (enabled by default);
+- `promela` to include the Promela frontend (disabled by default);
+
+To change which frontends to include at build time,
+explicitly select the desired features with the `--features` option as follows:
+
+```console
+cargo install smc_scan --locked --features FEATURES
+```
+
+where `FEATURES` is a (comma-separated, or space-separated inside quotes) list.
+Alternatively, if you want all available features, install SCAN with:
+
+```console
+cargo install smc_scan --locked --all-features
+```
+
+Be aware that each feature imports extra dependencies and increases build time.
+
+## Build optimization
+
+Even though by default the `cargo install` builds are well-optimized,
+some further advanced build optimizations are possible.
+The extent of the speed-up that can be obtained depends on the use-case,
+and is not always worth the extra effort required to enable these configurations.
+
+Advanced Rust users will already be familiar with compilation settings
+and can tune the build as they see fit.
+For users that are unfamiliar with Rust but still want to get high performances,
+and without going into the details,
+a more optimized built can be attempted with:
+
+```console
+RUSTFLAGS="-C target-cpu=native" cargo install smc_scan --locked --profile release-lto
+```
+
+An excellent, though unofficial, reference on Rust performance optimization is [The Rust Performance Book](https://nnethercote.github.io/perf-book/),
+specifically the [Build configuration](https://nnethercote.github.io/perf-book/build-configuration.html) section.

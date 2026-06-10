@@ -19,6 +19,8 @@ API docs for the library crates:
 - [`smc_scan_scxml`](https://docs.rs/smc_scan_scxml/latest/scan_scxml/)
 - [`smc_scan_jani`](https://docs.rs/smc_scan_jani/latest/scan_jani/)
 - [`smc_scan_promela`](https://docs.rs/smc_scan_promela/latest/scan_promela/)
+- [`smc_scan_pmtl`](https://docs.rs/smc_scan_pmtl/latest/scan_pmtl/)
+- [`smc_scan_mtl`](https://docs.rs/smc_scan_mtl/latest/scan_mtl/)
 - [`smc_scan`](https://docs.rs/smc_scan/latest/scan/)
 
 ## Formalism
@@ -35,7 +37,11 @@ At the moment the following languages are planned or (partially) implemented:
 - [ ] [Promela](https://spinroot.com/spin/Man/Manual.html)
 - [x] [JANI](https://jani-spec.org/)
 
-## Build prerequisites
+## Installation
+
+Currently, the only way to obtain SCAN is to build it from sources.
+
+### Build prerequisites
 
 SCAN is entirely written in [Rust](https://www.rust-lang.org/),
 so, to build it, you need to install a recent version of the Rust toolchain.
@@ -43,9 +49,7 @@ The easiest and recommended way to do so is by installing [rustup](https://rustu
 either following the instructions on its homepage or through your OS's package manager.
 Do not forget to set your `PATH` correctly, if required.
 
-## Installation and usage
-
-Currently, the only way to use SCAN is to build it from sources.
+### Installing with Cargo
 
 To install and use SCAN on your system,
 the easiest way is to use the `cargo install` command.
@@ -61,19 +65,9 @@ Cargo will build and install SCAN on your system
 but it is recommended as it improves build reproducibility
 by enforcing the use of specified versions for dependencies).
 
-To install a specific SCAN version, e.g., v0.1.0, use:
+For advanced installation options, refer to the [Install](https://convince-project.github.io/scan/manual/install.html) section of the SCAN Book.
 
-```console
-cargo install smc_scan --version 0.1.0 --locked
-```
-
-It is also possible to install SCAN from the latest commit directly from this repository with:
-
-```console
-cargo install --git https://github.com/convince-project/scan
-```
-
-(see `cargo install --help` for more options).
+## Usage
 
 After installation, SCAN can be used as a CLI tool.
 To print the help screen, use
@@ -92,14 +86,7 @@ scan <MODEL> verify --all
 
 where `MODEL` is the path to your model file or folder.
 
-It can be helpful to run SCAN with logging activated.
-Use the `--verbose` flag (even multiple times) to increase the verbosity level, or
-
-```console
-RUST_LOG=<LOG_LEVEL> scan <MODEL>
-```
-
-where `LOG_LEVEL=error|warn|info|debug|trace`.
+For an in-depth documentation of the user interface, refer to the [Interface](https://convince-project.github.io/scan/manual/interface.html) section of the SCAN Book.
 
 ## Development
 

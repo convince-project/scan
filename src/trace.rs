@@ -53,7 +53,7 @@ impl TraceArgs {
 
     pub(crate) fn trace<'a, Od, Tr>(&self, scan: &'a Scan<Od>, path: PathBuf, model: &Tr::ModelData)
     where
-        Od: Oracle + Sync + 'a,
+        Od: Oracle + Clone + Sync + 'a,
         Tr: Tracer,
         Tr::ModelData: Sync,
     {

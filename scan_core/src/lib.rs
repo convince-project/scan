@@ -50,18 +50,15 @@ pub enum ScanError {
     OutOfBoundsConfidence(f64),
 }
 
-/// The possible outcomes of a model execution.
-#[derive(Debug, Clone)]
-pub enum RunOutcome {
-    /// The run was not completed because the execution violated an assume.
-    Incomplete,
-    /// The run failed by violating the guarantees corresponding to the given index (if any).
-    Verified(Vec<bool>),
-}
+// The possible outcomes of a model execution:
+// - If the run was not completed (because the execution violated an assume), result is `None`.
+// - If the run succeeded, or failed by violating the guarantees, result is `Some(violations)`
+//   where the `violations` carries which (if any) guarantees were violated.
+type RunOutcome = Option<Vec<bool>>;
 
 /// The main type to interface with the verification capabilities of SCAN.
 /// [`Scan`] holds the model, properties and other data necessary to run the verification process.
-/// The type of models and properties is abstracted through the [`Oracle`] trait,
+/// The type of properties is abstracted through the [`Oracle`] trait,
 /// to provide a unified interface.
 #[derive(Debug, Clone)]
 pub struct Scan<O> {
@@ -118,55 +115,48 @@ impl<O> Scan<O> {
     }
 }
 
-impl<O: Oracle> Scan<O> {
+impl<O: Oracle + Clone> Scan<O> {
     fn verification(&self, confidence: f64, precision: f64, duration: Time) {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
-        let local_successes;
-        let local_failures;
 
         let result =
             self.model
                 .new_run()
                 .experiment(duration, self.oracle.clone(), self.running.clone());
-        if !self.running.load(Ordering::Relaxed) {
-            return;
-        }
-        match result {
-            RunOutcome::Verified(guarantees) => {
-                if guarantees.iter().all(|b| *b) {
-                    local_successes = self.successes.fetch_add(1, Ordering::Relaxed);
-                    local_failures = self.failures.load(Ordering::Relaxed);
-                    // If all guarantees are satisfied, the execution is successful
-                    trace!("runs: {local_successes} successes");
-                } else {
-                    local_successes = self.successes.load(Ordering::Relaxed);
-                    local_failures = self.failures.fetch_add(1, Ordering::Relaxed);
-                    let violations = &mut *self.violations.lock().unwrap();
-                    violations.resize(violations.len().max(guarantees.len()), 0);
-                    guarantees.iter().zip(violations.iter_mut()).for_each(
-                        |(success, violations)| {
-                            if !success {
-                                *violations += 1;
-                            }
-                        },
-                    );
-                    // If guarantee is violated, we have found a counter-example!
-                    trace!("runs: {local_failures} failures");
-                }
+        if let Some(guarantees) = result
+            && self.running.load(Ordering::Relaxed)
+        {
+            let local_successes;
+            let local_failures;
+            if guarantees.iter().all(|b| *b) {
+                local_successes = self.successes.fetch_add(1, Ordering::Relaxed);
+                local_failures = self.failures.load(Ordering::Relaxed);
+                // If all guarantees are satisfied, the execution is successful
+                trace!("runs: {local_successes} successes");
+            } else {
+                local_successes = self.successes.load(Ordering::Relaxed);
+                local_failures = self.failures.fetch_add(1, Ordering::Relaxed);
+                let violations = &mut *self.violations.lock().unwrap();
+                violations.resize(violations.len().max(guarantees.len()), 0);
+                guarantees
+                    .into_iter()
+                    .zip(violations.iter_mut())
+                    .filter(|(success, _)| !success)
+                    .for_each(|(_, violations)| {
+                        *violations += 1;
+                    });
+                // If guarantee is violated, we have found a counter-example!
+                trace!("runs: {local_failures} failures");
             }
-            RunOutcome::Incomplete => return,
-        }
-        let runs = local_successes + local_failures;
-        // Avoid division by 0
-        let avg = if runs == 0 {
-            0.5f64
-        } else {
-            local_successes as f64 / runs as f64
-        };
-        if adaptive_bound(avg, confidence, precision) <= runs as f64 {
-            info!("adaptive bound satisfied");
-            self.running.store(false, Ordering::Relaxed);
+            let runs = local_successes + local_failures;
+            // Division by 0 leads to Inf/NaN, which is not less than any other float number
+            // so this actually works as expected even for runs = 0.
+            let avg = local_successes as f64 / runs as f64;
+            if adaptive_bound(avg, confidence, precision) <= runs as f64 {
+                info!("adaptive bound satisfied");
+                self.running.store(false, Ordering::Relaxed);
+            }
         }
     }
 
@@ -190,7 +180,7 @@ impl<O: Oracle> Scan<O> {
         info!("verification starting");
         let start_time = Instant::now();
 
-        let _ = (0..usize::MAX)
+        let _ = (0..)
             .map(|_| self.verification(confidence, precision, duration))
             .take_while(|_| self.running.load(Ordering::Relaxed))
             .count();
@@ -236,8 +226,7 @@ impl<O: Oracle> Scan<O> {
             .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
         let tracer = T::init(writer, model_data);
-        if let RunOutcome::Verified(verified) =
-            ts.trace::<T, _>(duration, self.oracle.clone(), tracer, model_data)
+        if let Some(verified) = ts.trace::<T, _>(duration, self.oracle.clone(), tracer, model_data)
         {
             let mut new_path = path.clone();
             // pop file name
@@ -257,7 +246,7 @@ impl<O: Oracle> Scan<O> {
 
 impl<O> Scan<O>
 where
-    O: Oracle + Sync,
+    O: Oracle + Clone + Sync,
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.

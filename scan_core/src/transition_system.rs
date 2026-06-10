@@ -195,16 +195,16 @@ impl<'def> TransitionSystemRun<'def> {
             }
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
-                return RunOutcome::Incomplete;
+                return None;
             } else if oracle.output_guarantees().all(|b| b.is_some()) {
                 trace!("run complete early");
                 let verified = Vec::from_iter(oracle.output_guarantees().map(Option::unwrap));
-                return RunOutcome::Verified(verified);
+                return Some(verified);
             }
         }
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
-        RunOutcome::Verified(verified)
+        Some(verified)
     }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
@@ -240,6 +240,6 @@ impl<'def> TransitionSystemRun<'def> {
         }
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
-        RunOutcome::Verified(verified)
+        Some(verified)
     }
 }

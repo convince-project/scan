@@ -18,6 +18,12 @@ categories = [
 ]
 exclude = ["scan_book/*", ".github/*"]
 
+[features]
+default = ["scxml", "jani"]
+scxml = ["dep:smc_scan_scxml"]
+jani = ["dep:smc_scan_jani"]
+promela = ["dep:smc_scan_promela"]
+
 [lib]
 name = "scan"  # The name of the target.
 crate-type = ["lib"]  # The crate types to generate.
@@ -26,9 +32,11 @@ crate-type = ["lib"]  # The crate types to generate.
 name = "scan"  # The name of the target.
 path = "src/main.rs"
 
-[profile.release]
+[profile.release-lto]
+inherits = "release"
 lto = true
 codegen-units = 1
+debug = "none"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
@@ -44,9 +52,9 @@ members = [
 [workspace.dependencies]
 anyhow = "1.0.102"
 csv = "1.4.0"
-log = "0.4.29"
+log = "0.4.32"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 thiserror = "2.0.18"
 
 [dependencies]
@@ -54,12 +62,11 @@ anyhow = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
 clap-verbosity-flag = "3.0.4"
 env_logger = "0.11.10"
-human-panic = "2.0.8"
 indicatif = { version = "0.18.4", features = ["improved_unicode"] }
 log = { workspace = true }
 smc_scan_core = { version = "0.2.0", path = "scan_core" }
-smc_scan_jani = { version = "0.2.0", path = "scan_jani" }
-smc_scan_scxml = { version = "0.3.0", path = "scan_scxml" }
-smc_scan_promela = { version = "0.2.0", path = "scan_promela" }
+smc_scan_jani = { version = "0.2.0", path = "scan_jani", optional = true }
+smc_scan_scxml = { version = "0.3.0", path = "scan_scxml", optional = true }
+smc_scan_promela = { version = "0.2.0", path = "scan_promela", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

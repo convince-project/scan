@@ -1,4 +1,4 @@
-# The User Interface
+# The user interface
 
 SCAN provides a command line interface.
 
@@ -95,10 +95,10 @@ via the new adaptive sampling method.
 This determines the number of necessary samples also based on the outcomes of the previous samples,
 so that this number cannot be known a-priori but has to be continually recalculated during the verification task.
 
-The `--duration` flag's value sets the maximum duration (in model time) that the execution can take before being stopped.
-As this may vary depending on the input model and SCAN has no means to determine it,
-SCAN sets a reasonably large default value (10,000 time steps),
-but for best results the developer should set a value fitting the model.
+By default, the model passed to SCAN is assumed to be untimed.
+For timed models, use the `--duration` option to set the maximum duration (in model time) that the execution can take before being stopped.
+As the most appropriate value for this option may vary depending on the input model,
+the developer should set a suitable value manually.
 
 __WARNING:__ if verification seems to be hanging without making any progress,
 it might be due to a wrong (too small) duration value.

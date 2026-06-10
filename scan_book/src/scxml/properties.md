@@ -1,3 +1,5 @@
+# XML properties
+
 Properties are to be specified in a custom XML format
 (as there is no property specification format in SCXML).
 The following example shows the format structure and its elements:
