@@ -55,9 +55,6 @@ impl ProgramGraphBuilder {
     }
 
     /// Adds a new variable with the given initial value (and the inferred type) to the PG.
-    /// It creates and uses a default RNG for probabilistic expressions.
-    ///
-    /// It fails if the expression giving the initial value of the variable is not well-typed.
     ///
     /// ```
     /// # use scan_core::program_graph::{PgExpression, ProgramGraphBuilder};
@@ -70,13 +67,12 @@ impl ProgramGraphBuilder {
     ///
     /// // Create a new variable
     /// let var = pg_builder
-    ///     .new_var(val)
-    ///     .unwrap();
+    ///     .new_var(val);
     /// ```
-    pub fn new_var(&mut self, val: Val) -> Result<Var, PgError> {
+    pub fn new_var(&mut self, val: Val) -> Var {
         let idx = self.vars.len();
         self.vars.push(val);
-        Ok(Var(idx as u16))
+        Var(idx as u16)
     }
 
     /// Adds a new clock and returns a [`Clock`] id object.
