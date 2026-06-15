@@ -80,6 +80,7 @@ mod builder;
 
 use crate::{Time, grammar::*};
 pub use builder::*;
+use bumpalo::{Bump, collections::CollectIn};
 use rand::{Rng, rngs::SmallRng};
 use thiserror::Error;
 
@@ -262,6 +263,7 @@ impl ProgramGraph {
             vars: self.vars.clone(),
             def: self,
             clocks: vec![0; self.clocks as usize],
+            bump: Bump::new(),
         }
     }
 
@@ -295,27 +297,17 @@ impl ProgramGraph {
 // for every iteration of next, but this requires "streaming iterators" or analogous solution.
 // TODO: Find a way to implement preallocation (or no allocation).
 struct TransitionsIterator<'a, I: Iterator<Item = (Action, &'a [Transition])>> {
-    iters: Vec<I>,
-    // vals: Vec<&'a [Transition]>,
-}
-
-impl<'a, I: Iterator<Item = (Action, &'a [Transition])>> TransitionsIterator<'a, I> {
-    fn new(iters: Vec<I>) -> Self {
-        Self {
-            // vals: Vec::with_capacity(iters.len()),
-            iters,
-        }
-    }
+    iters: bumpalo::collections::Vec<'a, I>,
+    bump: &'a Bump,
 }
 
 impl<'a, I: Iterator<Item = (Action, &'a [Transition])>> Iterator for TransitionsIterator<'a, I> {
-    type Item = (Action, Vec<&'a [Transition]>);
+    type Item = (Action, bumpalo::collections::vec::Vec<'a, &'a [Transition]>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let len = self.iters.len();
-        let (first_a, first_t) = self.iters.first_mut().and_then(|it| it.next())?;
-        let mut first_a = first_a;
-        let mut vals = vec![first_t; len];
+        let (mut first_a, first_t) = self.iters.first_mut().and_then(|it| it.next())?;
+        let mut vals = bumpalo::vec![in self.bump; first_t; len];
 
         let mut total = 1;
         let mut i = 0;
@@ -344,12 +336,25 @@ impl<'a, I: Iterator<Item = (Action, &'a [Transition])>> Iterator for Transition
 /// meaning that it is not possible to introduce new locations, actions, variables, etc.
 /// Though, this restriction makes it so that cloning the [`ProgramGraphRun`] is cheap,
 /// because only the internal state needs to be duplicated.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProgramGraphRun<'def> {
     current_states: Vec<Location>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
     def: &'def ProgramGraph,
+    bump: Bump,
+}
+
+impl<'def> Clone for ProgramGraphRun<'def> {
+    fn clone(&self) -> Self {
+        Self {
+            current_states: self.current_states.clone(),
+            vars: self.vars.clone(),
+            clocks: self.clocks.clone(),
+            def: self.def,
+            bump: Bump::new(),
+        }
+    }
 }
 
 impl<'def> ProgramGraphRun<'def> {
@@ -376,15 +381,10 @@ impl<'def> ProgramGraphRun<'def> {
         &self.current_states
     }
 
-    /// Iterates over all transitions that can be admitted in the current state.
-    ///
-    /// An admissible transition is characterized by the required action and the post-state
-    /// (the pre-state being necessarily the current state of the machine).
-    /// The guard (if any) is guaranteed to be satisfied.
-    pub fn possible_transitions(
-        &self,
-    ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
-        let mut last_post_state: Option<Location> = None;
+    #[inline]
+    fn transitions<'a>(
+        &'a self,
+    ) -> TransitionsIterator<'a, impl Iterator<Item = (Action, &'a [Transition])>> {
         let iters = self
             .current_states
             .iter()
@@ -394,68 +394,41 @@ impl<'def> ProgramGraphRun<'def> {
                     .iter()
                     .map(|(action, transitions)| (*action, transitions.as_slice()))
             })
-            .collect::<Vec<_>>();
-        TransitionsIterator::new(iters).map(move |(action, loc_transitions)| {
+            .collect_in::<bumpalo::collections::Vec<_>>(&self.bump);
+        TransitionsIterator {
+            iters,
+            bump: &self.bump,
+        }
+    }
+
+    /// Iterates over all transitions that can be admitted in the current state.
+    ///
+    /// An admissible transition is characterized by the required action and the post-state
+    /// (the pre-state being necessarily the current state of the machine).
+    /// The guard (if any) is guaranteed to be satisfied.
+    pub fn possible_transitions(
+        &self,
+    ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
+        self.transitions().map(move |(action, loc_transitions)| {
             (
                 action,
-                loc_transitions.into_iter().map(move |transitions| {
-                    transitions
-                        .iter()
-                        .filter_map(move |(post_state, guard, constraints)| {
-                            // prevent post_states to be duplicated wastefully
-                            if last_post_state.is_some_and(|s| s == *post_state) {
-                                return None;
-                            }
-                            let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-                            if if action == EPSILON {
-                                self.active_autonomous_transition(
+                loc_transitions
+                    .into_bump_slice()
+                    .iter()
+                    .map(move |transitions| {
+                        transitions
+                            .iter()
+                            .filter_map(move |(post_state, guard, constraints)| {
+                                self.check_transition(
+                                    action,
+                                    *post_state,
                                     guard.as_ref(),
                                     constraints,
-                                    invariants,
                                 )
-                            } else {
-                                match self.def.effects[action.0 as usize] {
-                                    Effect::Effects(_, ref resets) => self.active_transition(
-                                        guard.as_ref(),
-                                        constraints,
-                                        invariants,
-                                        resets,
-                                    ),
-                                    Effect::Send(_) | Effect::Receive(_) => self
-                                        .active_autonomous_transition(
-                                            guard.as_ref(),
-                                            constraints,
-                                            invariants,
-                                        ),
-                                }
-                            } {
-                                last_post_state = Some(*post_state);
-                                last_post_state
-                                // Some(*post_state)
-                            } else {
-                                None
-                            }
-                        })
-                }),
+                            })
+                    }),
             )
         })
-        // self.current_states
-        //     .first()
-        //     .into_iter()
-        //     .flat_map(|loc| {
-        //         self.def.locations[loc.0 as usize]
-        //             .0
-        //             .iter()
-        //             .map(|&(action, ..)| action)
-        //     })
-        //     .chain(
-        //         self.current_states
-        //             .is_empty()
-        //             .then(|| (0..self.def.effects.len() as ActionIdx).map(Action))
-        //             .into_iter()
-        //             .flatten(),
-        //     )
-        // .map(|action| (action, self.possible_transitions_action(action)))
     }
 
     pub(crate) fn nosync_possible_transitions(
@@ -463,7 +436,6 @@ impl<'def> ProgramGraphRun<'def> {
     ) -> impl Iterator<Item = (Action, impl Iterator<Item = Location>)> {
         assert_eq!(self.current_states.len(), 1);
         let current_loc = self.current_states[0];
-        let mut last_post_state: Option<Location> = None;
         self.def.locations[current_loc.0 as usize]
             .0
             .iter()
@@ -473,41 +445,29 @@ impl<'def> ProgramGraphRun<'def> {
                     transitions
                         .iter()
                         .filter_map(move |(post_state, guard, constraints)| {
-                            // prevent post_states to be duplicated wastefully
-                            if last_post_state.is_some_and(|s| s == *post_state) {
-                                return None;
-                            }
-                            let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-                            if if *action == EPSILON {
-                                self.active_autonomous_transition(
-                                    guard.as_ref(),
-                                    constraints,
-                                    invariants,
-                                )
-                            } else {
-                                match self.def.effects[action.0 as usize] {
-                                    Effect::Effects(_, ref resets) => self.active_transition(
-                                        guard.as_ref(),
-                                        constraints,
-                                        invariants,
-                                        resets,
-                                    ),
-                                    Effect::Send(_) | Effect::Receive(_) => self
-                                        .active_autonomous_transition(
-                                            guard.as_ref(),
-                                            constraints,
-                                            invariants,
-                                        ),
-                                }
-                            } {
-                                last_post_state = Some(*post_state);
-                                last_post_state
-                            } else {
-                                None
-                            }
+                            self.check_transition(*action, *post_state, guard.as_ref(), constraints)
                         }),
                 )
             })
+    }
+
+    #[inline]
+    fn check_transition(
+        &self,
+        action: Action,
+        post_state: Location,
+        guard: Option<&BooleanExpr<Var>>,
+        constraints: &[TimeConstraint],
+    ) -> Option<Location> {
+        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
+        if action != EPSILON
+            && let Effect::Effects(_, ref resets) = self.def.effects[action.0 as usize]
+        {
+            self.active_transition(guard, constraints, invariants, resets)
+        } else {
+            self.active_autonomous_transition(guard, constraints, invariants)
+        }
+        .then_some(post_state)
     }
 
     #[inline]
@@ -518,20 +478,20 @@ impl<'def> ProgramGraphRun<'def> {
         invariants: &[TimeConstraint],
         resets: &[Clock],
     ) -> bool {
-        guard.is_none_or(|guard| {
-            // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None)
-        }) && constraints.iter().all(|(c, l, u)| {
-            let time = self.clocks[c.0 as usize];
-            l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
-        }) && invariants.iter().all(|(c, l, u)| {
-            let time = if resets.binary_search(c).is_ok() {
-                0
-            } else {
-                self.clocks[c.0 as usize]
-            };
-            l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
-        })
+        guard
+            .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
+            && constraints.iter().all(|(c, l, u)| {
+                let time = self.clocks[c.0 as usize];
+                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
+            })
+            && invariants.iter().all(|(c, l, u)| {
+                let time = if resets.binary_search(c).is_ok() {
+                    0
+                } else {
+                    self.clocks[c.0 as usize]
+                };
+                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
+            })
     }
 
     #[inline]
@@ -541,13 +501,12 @@ impl<'def> ProgramGraphRun<'def> {
         constraints: &[TimeConstraint],
         invariants: &[TimeConstraint],
     ) -> bool {
-        guard.is_none_or(|guard| {
-            // TODO FIXME: is there a way to avoid creating a dummy RNG?
-            guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None)
-        }) && constraints.iter().chain(invariants).all(|(c, l, u)| {
-            let time = self.clocks[c.0 as usize];
-            l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
-        })
+        guard
+            .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
+            && constraints.iter().chain(invariants).all(|(c, l, u)| {
+                let time = self.clocks[c.0 as usize];
+                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
+            })
     }
 
     fn active_transitions(
@@ -632,6 +591,7 @@ impl<'def> ProgramGraphRun<'def> {
             return Err(PgError::Communication(action));
         }
         self.current_states.copy_from_slice(post_states);
+        self.bump.reset();
         Ok(())
     }
 

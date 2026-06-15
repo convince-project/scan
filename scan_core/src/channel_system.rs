@@ -411,9 +411,9 @@ impl<'def> ChannelSystemRun<'def> {
         Item = (
             PgId,
             Action,
-            impl Iterator<Item = impl Iterator<Item = Location> + '_> + '_,
+            impl Iterator<Item = impl Iterator<Item = Location>>,
         ),
-    > + '_ {
+    > {
         self.program_graphs
             .iter()
             .enumerate()
@@ -421,10 +421,9 @@ impl<'def> ChannelSystemRun<'def> {
                 let pg_id = PgId(id as u16);
                 pg.possible_transitions().filter_map(move |(action, post)| {
                     let action = Action(pg_id, action);
-                    self.check_communication(pg_id, action).ok().map(move |()| {
-                        let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
-                        (pg_id, action, post)
-                    })
+                    self.check_communication(pg_id, action).ok()?;
+                    let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
+                    Some((pg_id, action, post))
                 })
             })
     }
@@ -603,7 +602,7 @@ impl<'def> ChannelSystemRun<'def> {
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     if matches!(capacity, ChannelCapacity::Queue(_)) {
-                        self.message_queue[channel.0 as usize].extend(vals.iter().copied());
+                        self.message_queue[channel.0 as usize].extend(&vals);
                     }
                     EventType::Send(vals)
                 }
@@ -688,8 +687,8 @@ impl<'def> ChannelSystemRun<'def> {
                         .as_slice(),
                     &mut self.rng,
                 )
-                .map_err(|err| CsError::ProgramGraph(pg_id, err))
-                .map(|()| None)
+                .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
+            Ok(None)
         }
     }
 
