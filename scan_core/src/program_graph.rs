@@ -77,12 +77,14 @@
 //! ```
 
 mod builder;
+mod run;
+mod transitions;
 
 use crate::{Time, grammar::*};
 pub use builder::*;
-use bumpalo::{Bump, collections::CollectIn};
-use rand::{Rng, rngs::SmallRng};
+pub use run::ProgramGraphRun;
 use thiserror::Error;
+use transitions::TransitionsIterator;
 
 /// The index for [`Location`]s in a [`ProgramGraph`].
 pub type LocationIdx = u32;
@@ -131,13 +133,24 @@ pub struct Var(u16);
 pub struct Clock(u16);
 
 /// A time constraint given by a clock and, optionally, a lower bound and/or an upper bound.
-pub type TimeConstraint = (Clock, Option<Time>, Option<Time>);
+type TimeConstraint = (Clock, Option<Time>, Option<Time>);
 
 /// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
 
 /// A Boolean expression over [`Var`] variables.
-pub type PgGuard = BooleanExpr<Var>;
+type PgGuard = BooleanExpr<Var>;
+
+#[derive(Debug, Clone)]
+enum Effect {
+    Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
+    Send(Vec<Expression<Var>>),
+    Receive(Vec<Var>),
+}
+
+type Transition = (Location, Option<BooleanExpr<Var>>, Vec<TimeConstraint>);
+
+type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
 
 /// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
 #[derive(Debug, Clone, Copy, Error)]
@@ -199,16 +212,6 @@ pub enum PgError {
     Type(#[source] TypeError),
 }
 
-#[derive(Debug, Clone)]
-enum Effect {
-    // NOTE: Could use a SmallVec for clock resets
-    Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
-    Send(Vec<Expression<Var>>),
-    Receive(Vec<Var>),
-}
-
-type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
-
 /// A definition object for a PG.
 /// It represents the abstract definition of a PG.
 ///
@@ -261,13 +264,7 @@ impl ProgramGraph {
     /// The new instance borrows the caller to refer to the PG definition without copying its data,
     /// so that spawning instances is (relatively) inexpensive.
     pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def> {
-        ProgramGraphRun {
-            current_states: self.initial_states.clone(),
-            vars: self.vars.clone(),
-            def: self,
-            clocks: vec![0; self.clocks as usize],
-            bump: Bump::new(),
-        }
+        ProgramGraphRun::new(self)
     }
 
     // Returns transition's guard.
@@ -292,399 +289,6 @@ impl ProgramGraph {
                     .take_while(move |&&(p, ..)| p == post_state)
                     .map(|(_, g, c)| (g.as_ref(), c.as_slice()))
             })
-    }
-}
-
-struct TransitionsIterator<'a, I: Iterator<Item = &'a (Action, Vec<Transition>)>> {
-    iters: &'a mut [I],
-    bump: &'a Bump,
-}
-
-impl<'a, I: Iterator<Item = &'a (Action, Vec<Transition>)>> Iterator
-    for TransitionsIterator<'a, I>
-{
-    type Item = (Action, &'a [&'a [Transition]]);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let &(mut first_a, ref first_t) = self.iters[0].next()?;
-        let len = self.iters.len();
-        let mut vals = bumpalo::vec![in self.bump; first_t.as_slice(); len];
-
-        let mut total = 1;
-        let mut i = 0;
-        while total < len {
-            i = (i + 1) % len;
-            let &(next_a, ref next_t) = self.iters[i].find(|(a, _)| *a >= first_a)?;
-            vals[i] = next_t.as_slice();
-            if next_a > first_a {
-                first_a = next_a;
-                total = 1;
-            } else {
-                total += 1;
-            }
-        }
-        Some((first_a, vals.into_bump_slice()))
-    }
-}
-
-/// Representation of a PG that can be executed transition-by-transition.
-///
-/// The structure of the PG cannot be changed,
-/// meaning that it is not possible to introduce new locations, actions, variables, etc.
-/// Though, this restriction makes it so that cloning the [`ProgramGraphRun`] is cheap,
-/// because only the internal state needs to be duplicated.
-#[derive(Debug)]
-pub struct ProgramGraphRun<'def> {
-    current_states: Vec<Location>,
-    vars: Vec<Val>,
-    clocks: Vec<Time>,
-    def: &'def ProgramGraph,
-    bump: Bump,
-}
-
-impl<'def> Clone for ProgramGraphRun<'def> {
-    fn clone(&self) -> Self {
-        Self {
-            current_states: self.current_states.clone(),
-            vars: self.vars.clone(),
-            clocks: self.clocks.clone(),
-            def: self.def,
-            bump: Bump::new(),
-        }
-    }
-}
-
-impl<'def> ProgramGraphRun<'def> {
-    /// Returns the current location.
-    ///
-    /// ```
-    /// # use scan_core::program_graph::ProgramGraphBuilder;
-    /// // Create a new PG builder
-    /// let mut pg_builder = ProgramGraphBuilder::new();
-    ///
-    /// // The builder is initialized with an initial location
-    /// let initial_loc = pg_builder.new_initial_location();
-    ///
-    /// // Build the PG from its builder
-    /// // The builder is always guaranteed to build a well-defined PG and building cannot fail
-    /// let pg = pg_builder.build();
-    /// let instance = pg.new_instance();
-    ///
-    /// // Execution starts in the initial location
-    /// assert_eq!(instance.current_states().as_slice(), &[initial_loc]);
-    /// ```
-    #[inline]
-    pub fn current_states(&self) -> &[Location] {
-        &self.current_states
-    }
-
-    #[inline]
-    fn transitions<'a>(
-        &'a self,
-    ) -> TransitionsIterator<'a, impl Iterator<Item = &'a (Action, Vec<Transition>)>> {
-        let iters = self
-            .current_states
-            .iter()
-            .map(|loc| self.def.locations[loc.0 as usize].0.iter())
-            .collect_in::<bumpalo::collections::Vec<_>>(&self.bump)
-            .into_bump_slice_mut();
-        TransitionsIterator {
-            iters,
-            bump: &self.bump,
-        }
-    }
-
-    /// Iterates over all transitions that can be admitted in the current state.
-    ///
-    /// An admissible transition is characterized by the required action and the post-state
-    /// (the pre-state being necessarily the current state of the machine).
-    /// The guard (if any) is guaranteed to be satisfied.
-    pub fn possible_transitions(
-        &self,
-    ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
-        self.transitions().map(move |(action, loc_transitions)| {
-            (
-                action,
-                loc_transitions.iter().map(move |transitions| {
-                    transitions
-                        .iter()
-                        .filter(move |(post_state, guard, constraints)| {
-                            self.check_transition(action, *post_state, guard.as_ref(), constraints)
-                        })
-                        .map(|(post_state, ..)| *post_state)
-                }),
-            )
-        })
-    }
-
-    /// Iterates over all transitions that can be admitted in the current state,
-    /// optimized for the special (but common) case in which the state is given by a single location.
-    ///
-    /// An admissible transition is characterized by the required action and the post-state
-    /// (the pre-state being necessarily the current state of the machine).
-    /// The guard (if any) is guaranteed to be satisfied.
-    ///
-    /// Returns error if the state is not given by a single location.
-    pub fn nosync_possible_transitions(
-        &self,
-    ) -> Result<impl Iterator<Item = (Action, impl Iterator<Item = Location>)>, PgError> {
-        if self.current_states.len() == 1 {
-            let current_loc = self.current_states[0];
-            Ok(self.def.locations[current_loc.0 as usize].0.iter().map(
-                move |(action, transitions)| {
-                    (
-                        *action,
-                        transitions
-                            .iter()
-                            .filter(move |(post_state, guard, constraints)| {
-                                self.check_transition(
-                                    *action,
-                                    *post_state,
-                                    guard.as_ref(),
-                                    constraints,
-                                )
-                            })
-                            .map(|(post_state, ..)| *post_state),
-                    )
-                },
-            ))
-        } else {
-            Err(PgError::Sync)
-        }
-    }
-
-    fn check_transition(
-        &self,
-        action: Action,
-        post_state: Location,
-        guard: Option<&BooleanExpr<Var>>,
-        constraints: &[TimeConstraint],
-    ) -> bool {
-        let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-        if action != EPSILON
-            && let Effect::Effects(_, ref resets) = self.def.effects[action.0 as usize]
-        {
-            self.active_transition(guard, constraints, invariants, resets)
-        } else {
-            self.active_autonomous_transition(guard, constraints, invariants)
-        }
-    }
-
-    fn active_transition(
-        &self,
-        guard: Option<&PgGuard>,
-        constraints: &[TimeConstraint],
-        invariants: &[TimeConstraint],
-        resets: &[Clock],
-    ) -> bool {
-        guard
-            .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
-            && constraints.iter().all(|(c, l, u)| {
-                let time = self.clocks[c.0 as usize];
-                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
-            })
-            && invariants.iter().all(|(c, l, u)| {
-                let time = if resets.binary_search(c).is_ok() {
-                    0
-                } else {
-                    self.clocks[c.0 as usize]
-                };
-                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
-            })
-    }
-
-    #[inline]
-    fn active_autonomous_transition(
-        &self,
-        guard: Option<&PgGuard>,
-        constraints: &[TimeConstraint],
-        invariants: &[TimeConstraint],
-    ) -> bool {
-        guard
-            .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
-            && constraints.iter().chain(invariants).all(|(c, l, u)| {
-                let time = self.clocks[c.0 as usize];
-                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
-            })
-    }
-
-    fn active_transitions(
-        &self,
-        action: Action,
-        post_states: &[Location],
-        resets: &[Clock],
-    ) -> bool {
-        self.current_states
-            .iter()
-            .zip(post_states)
-            .all(|(current_state, post_state)| {
-                self.def
-                    .guards(*current_state, action, *post_state)
-                    .any(|(guard, constraints)| {
-                        self.active_transition(
-                            guard,
-                            constraints,
-                            &self.def.locations[post_state.0 as usize].1,
-                            resets,
-                        )
-                    })
-            })
-    }
-
-    fn active_autonomous_transitions(&self, post_states: &[Location]) -> bool {
-        self.current_states
-            .iter()
-            .zip(post_states)
-            .all(|(current_state, post_state)| {
-                self.def
-                    .guards(*current_state, EPSILON, *post_state)
-                    .any(|(guard, constraints)| {
-                        self.active_autonomous_transition(
-                            guard,
-                            constraints,
-                            &self.def.locations[post_state.0 as usize].1,
-                        )
-                    })
-            })
-    }
-
-    /// Executes a transition characterized by the argument action and post-state.
-    ///
-    /// Fails if the requested transition is not admissible,
-    /// or if the post-location time invariants are violated.
-    pub fn transition<R: Rng>(
-        &mut self,
-        action: Action,
-        post_states: &[Location],
-        rng: &mut R,
-    ) -> Result<(), PgError> {
-        self.bump.reset();
-        if post_states.len() != self.current_states.len() {
-            return Err(PgError::MismatchingPostStates);
-        }
-        if let Some(ps) = post_states
-            .iter()
-            .find(|ps| ps.0 >= self.def.locations.len() as LocationIdx)
-        {
-            return Err(PgError::MissingLocation(*ps));
-        }
-        if action == EPSILON {
-            if !self.active_autonomous_transitions(post_states) {
-                return Err(PgError::UnsatisfiedGuard);
-            }
-        } else if action.0 >= self.def.effects.len() as LocationIdx {
-            return Err(PgError::MissingAction(action));
-        } else if let Effect::Effects(ref effects, ref resets) = self.def.effects[action.0 as usize]
-        {
-            if self.active_transitions(action, post_states, resets) {
-                let rng = &mut Some(rng);
-                effects.iter().for_each(|(var, effect)| {
-                    self.vars[var.0 as usize] = effect.eval(&|var| self.vars[var.0 as usize], rng)
-                });
-                resets
-                    .iter()
-                    .for_each(|clock| self.clocks[clock.0 as usize] = 0);
-            } else {
-                return Err(PgError::UnsatisfiedGuard);
-            }
-        } else {
-            return Err(PgError::Communication(action));
-        }
-        self.current_states.copy_from_slice(post_states);
-        Ok(())
-    }
-
-    /// Checks if it is possible to wait a given amount of time-units without violating the time invariants.
-    #[inline]
-    pub fn can_wait(&self, delta: Time) -> bool {
-        self.current_states
-            .iter()
-            .flat_map(|current_state| self.def.locations[current_state.0 as usize].1.iter())
-            .all(|(c, l, u)| {
-                // Invariants need to be satisfied during the whole wait.
-                let start_time = self.clocks[c.0 as usize];
-                let end_time = start_time + delta;
-                l.is_none_or(|l| l <= start_time) && u.is_none_or(|u| end_time < u)
-            })
-    }
-
-    /// Waits a given amount of time-units.
-    ///
-    /// Returns error if the waiting would violate the current location's time invariant (if any).
-    #[inline]
-    pub fn wait(&mut self, delta: Time) -> Result<(), PgError> {
-        self.bump.reset();
-        if self.can_wait(delta) {
-            self.clocks.iter_mut().for_each(|t| *t += delta);
-            Ok(())
-        } else {
-            Err(PgError::Invariant)
-        }
-    }
-
-    pub(crate) fn send<'a, R: Rng>(
-        &'a mut self,
-        action: Action,
-        post_states: &[Location],
-        rng: &'a mut R,
-    ) -> Result<Vec<Val>, PgError> {
-        self.bump.reset();
-        if action == EPSILON {
-            Err(PgError::NotSend(action))
-        } else if self.active_transitions(action, post_states, &[]) {
-            if let Effect::Send(effects) = &self.def.effects[action.0 as usize] {
-                let rng = &mut Some(rng);
-                let vals = effects
-                    .iter()
-                    .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], rng))
-                    .collect();
-                self.current_states.copy_from_slice(post_states);
-                Ok(vals)
-            } else {
-                Err(PgError::NotSend(action))
-            }
-        } else {
-            Err(PgError::UnsatisfiedGuard)
-        }
-    }
-
-    pub(crate) fn receive(
-        &mut self,
-        action: Action,
-        post_states: &[Location],
-        vals: &[Val],
-    ) -> Result<(), PgError> {
-        self.bump.reset();
-        if action == EPSILON {
-            Err(PgError::NotReceive(action))
-        } else if self.active_transitions(action, post_states, &[]) {
-            if let Effect::Receive(ref vars) = self.def.effects[action.0 as usize] {
-                // let var_content = self.vars.get_mut(var.0 as usize).expect("variable exists");
-                if vars.len() == vals.len()
-                    && vals.iter().zip(vars).all(|(val, var)| {
-                        self.vars
-                            .get(var.0 as usize)
-                            .expect("variable exists")
-                            .r#type()
-                            == val.r#type()
-                    })
-                {
-                    vals.iter().zip(vars).for_each(|(&val, var)| {
-                        *self.vars.get_mut(var.0 as usize).expect("variable exists") = val
-                    });
-                    self.current_states.copy_from_slice(post_states);
-                    // self.current_states = post_states;
-                    // self.update_buf();
-                    Ok(())
-                } else {
-                    Err(PgError::TypeMismatch)
-                }
-            } else {
-                Err(PgError::NotReceive(action))
-            }
-        } else {
-            Err(PgError::UnsatisfiedGuard)
-        }
     }
 }
 

@@ -463,7 +463,6 @@ impl<'def> ChannelSystemRun<'def> {
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
     /// See also [`ProgramGraphRun::possible_transitions`].
-    #[inline]
     pub fn possible_transitions_pg(
         &self,
         pg_id: PgId,
@@ -494,7 +493,6 @@ impl<'def> ChannelSystemRun<'def> {
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
     /// See also [`ProgramGraphRun::nosync_possible_transitions`].
-    #[inline]
     pub fn nosync_possible_transitions_pg(
         &self,
         pg_id: PgId,
@@ -517,7 +515,6 @@ impl<'def> ChannelSystemRun<'def> {
             })
     }
 
-    #[inline]
     fn check_message(&self, channel: Channel, message: Message) -> bool {
         let channel_idx = channel.0 as usize;
         let (_, capacity) = self.def.channels[channel_idx];
@@ -539,47 +536,6 @@ impl<'def> ChannelSystemRun<'def> {
             },
         }
     }
-
-    // fn check_communication(&self, pg_id: PgId, action: Action) -> Result<(), CsError> {
-    //     if pg_id.0 >= self.program_graphs.len() as u16 {
-    //         Err(CsError::MissingPg(pg_id))
-    //     } else if action.0 != pg_id {
-    //         Err(CsError::ActionNotInPg(action, pg_id))
-    //     } else if let Some((channel, message)) = self.def.communication(pg_id, action.1) {
-    //         let (_, capacity) = self.def.channels[channel.0 as usize];
-    //         let len = self.message_queue[channel.0 as usize].len();
-    //         // Channel capacity must never be exceeded!
-    //         // assert!(capacity.is_none_or(|cap| len <= cap));
-    //         match capacity {
-    //             ChannelCapacity::Queue(capacity) => match message {
-    //                 Message::Send if capacity.is_some_and(|cap| len >= cap) => {
-    //                     Err(CsError::OutOfCapacity(channel))
-    //                 }
-    //                 Message::Receive if len == 0 => Err(CsError::Empty(channel)),
-    //                 Message::ProbeEmptyQueue | Message::ProbeFullQueue
-    //                     if matches!(capacity, Some(0)) =>
-    //                 {
-    //                     Err(CsError::ProbingHandshakeChannel(channel))
-    //                 }
-    //                 Message::ProbeFullQueue if capacity.is_none() => {
-    //                     Err(CsError::ProbingInfiniteQueue(channel))
-    //                 }
-    //                 Message::ProbeEmptyQueue if len > 0 => Err(CsError::NotEmpty(channel)),
-    //                 Message::ProbeFullQueue if capacity.is_some_and(|cap| len < cap) => {
-    //                     Err(CsError::NotFull(channel))
-    //                 }
-    //                 _ => Ok(()),
-    //             },
-    //             ChannelCapacity::Sink => match message {
-    //                 Message::Send | Message::ProbeEmptyQueue => Ok(()),
-    //                 Message::ProbeFullQueue => Err(CsError::NotFull(channel)),
-    //                 Message::Receive => Err(CsError::Empty(channel)),
-    //             },
-    //         }
-    //     } else {
-    //         Ok(())
-    //     }
-    // }
 
     /// Executes a transition on the given PG characterized by the argument action and post-state.
     ///

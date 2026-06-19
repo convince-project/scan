@@ -1,16 +1,8 @@
 use std::collections::BTreeMap;
 
-use super::{
-    Action, ActionIdx, Clock, EPSILON, Effect, Location, LocationIdx, PgError, PgExpression,
-    ProgramGraph, TimeConstraint, Var,
-};
-use crate::{
-    grammar::{BooleanExpr, Type, Val},
-    program_graph::PgGuard,
-};
+use super::*;
+use crate::grammar::{Type, Val};
 use log::info;
-
-pub(crate) type Transition = (Location, Option<BooleanExpr<Var>>, Vec<TimeConstraint>);
 
 type LocationBuilderData = (BTreeMap<Action, Vec<Transition>>, Vec<TimeConstraint>);
 
@@ -211,12 +203,13 @@ impl ProgramGraphBuilder {
         Ok(Action(idx as ActionIdx))
     }
 
-    pub(crate) fn new_receive(&mut self, vars: Vec<Var>) -> Result<Action, PgError> {
+    pub(crate) fn new_receive(&mut self, mut vars: Vec<Var>) -> Result<Action, PgError> {
         if let Some(var) = vars.iter().find(|var| self.vars.len() as u16 <= var.0) {
             Err(PgError::MissingVar(var.to_owned()))
         } else {
             // Actions are indexed progressively
             let idx = self.effects.len();
+            vars.shrink_to_fit();
             self.effects.push(Effect::Receive(vars));
             Ok(Action(idx as ActionIdx))
         }
@@ -273,10 +266,8 @@ impl ProgramGraphBuilder {
     /// and returns the [`Location`] indexing object.
     pub fn new_initial_timed_location(
         &mut self,
-        mut invariants: Vec<TimeConstraint>,
+        invariants: Vec<TimeConstraint>,
     ) -> Result<Location, PgError> {
-        invariants.sort_unstable();
-        invariants.shrink_to_fit();
         let location = self.new_timed_location(invariants)?;
         self.new_process(location)?;
         Ok(location)
@@ -475,18 +466,16 @@ impl ProgramGraphBuilder {
             }
         });
         self.effects.shrink_to_fit();
-        self.locations.iter_mut().for_each(|(transitions, _)| {
-            transitions.iter_mut().for_each(|(_, loc_transitions)| {
-                loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
-                loc_transitions.shrink_to_fit();
-            });
-        });
         let mut locations = self
             .locations
             .into_iter()
             .map(|(transitions, loc_invariants)| {
                 let mut transitions = Vec::from_iter(transitions);
                 transitions.shrink_to_fit();
+                transitions.iter_mut().for_each(|(_, loc_transitions)| {
+                    loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
+                    loc_transitions.shrink_to_fit();
+                });
                 // Actions are assumed to be sorted
                 assert!(transitions.is_sorted_by_key(|(action, _)| *action));
                 (transitions, loc_invariants)
