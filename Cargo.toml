@@ -38,6 +38,10 @@ lto = true
 codegen-units = 1
 debug = "none"
 
+[profile.profiling]
+inherits = "release-lto"
+debug = "full"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
 members = [
