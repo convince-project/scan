@@ -191,6 +191,9 @@ pub enum PgError {
     /// A time invariant is not satisfied.
     #[error("A time invariant is not satisfied")]
     Invariant,
+    /// Program graph is a synchronous composition
+    #[error("synchronous composition")]
+    Sync,
     /// A type error
     #[error("type error")]
     Type(#[source] TypeError),
@@ -292,41 +295,35 @@ impl ProgramGraph {
     }
 }
 
-// WARN: This iterator allocates a [`Vec`] every time `next` is called.
-// To avoid this, one way would be to allocate a vector at creation and return a reference to it
-// for every iteration of next, but this requires "streaming iterators" or analogous solution.
-// TODO: Find a way to implement preallocation (or no allocation).
-struct TransitionsIterator<'a, I: Iterator<Item = (Action, &'a [Transition])>> {
-    iters: bumpalo::collections::Vec<'a, I>,
+struct TransitionsIterator<'a, I: Iterator<Item = &'a (Action, Vec<Transition>)>> {
+    iters: &'a mut [I],
     bump: &'a Bump,
 }
 
-impl<'a, I: Iterator<Item = (Action, &'a [Transition])>> Iterator for TransitionsIterator<'a, I> {
-    type Item = (Action, bumpalo::collections::vec::Vec<'a, &'a [Transition]>);
+impl<'a, I: Iterator<Item = &'a (Action, Vec<Transition>)>> Iterator
+    for TransitionsIterator<'a, I>
+{
+    type Item = (Action, &'a [&'a [Transition]]);
 
     fn next(&mut self) -> Option<Self::Item> {
+        let &(mut first_a, ref first_t) = self.iters[0].next()?;
         let len = self.iters.len();
-        let (mut first_a, first_t) = self.iters.first_mut().and_then(|it| it.next())?;
-        let mut vals = bumpalo::vec![in self.bump; first_t; len];
+        let mut vals = bumpalo::vec![in self.bump; first_t.as_slice(); len];
 
         let mut total = 1;
         let mut i = 0;
         while total < len {
             i = (i + 1) % len;
-            let (next_a, next_t) = self
-                .iters
-                .get_mut(i)
-                .expect("i < len")
-                .find(|(a, _)| *a >= first_a)?;
+            let &(next_a, ref next_t) = self.iters[i].find(|(a, _)| *a >= first_a)?;
+            vals[i] = next_t.as_slice();
             if next_a > first_a {
                 first_a = next_a;
                 total = 1;
             } else {
                 total += 1;
             }
-            vals[i] = next_t;
         }
-        Some((first_a, vals))
+        Some((first_a, vals.into_bump_slice()))
     }
 }
 
@@ -384,17 +381,13 @@ impl<'def> ProgramGraphRun<'def> {
     #[inline]
     fn transitions<'a>(
         &'a self,
-    ) -> TransitionsIterator<'a, impl Iterator<Item = (Action, &'a [Transition])>> {
+    ) -> TransitionsIterator<'a, impl Iterator<Item = &'a (Action, Vec<Transition>)>> {
         let iters = self
             .current_states
             .iter()
-            .map(|loc| {
-                self.def.locations[loc.0 as usize]
-                    .0
-                    .iter()
-                    .map(|(action, transitions)| (*action, transitions.as_slice()))
-            })
-            .collect_in::<bumpalo::collections::Vec<_>>(&self.bump);
+            .map(|loc| self.def.locations[loc.0 as usize].0.iter())
+            .collect_in::<bumpalo::collections::Vec<_>>(&self.bump)
+            .into_bump_slice_mut();
         TransitionsIterator {
             iters,
             bump: &self.bump,
@@ -412,53 +405,61 @@ impl<'def> ProgramGraphRun<'def> {
         self.transitions().map(move |(action, loc_transitions)| {
             (
                 action,
-                loc_transitions
-                    .into_bump_slice()
-                    .iter()
-                    .map(move |transitions| {
+                loc_transitions.iter().map(move |transitions| {
+                    transitions
+                        .iter()
+                        .filter(move |(post_state, guard, constraints)| {
+                            self.check_transition(action, *post_state, guard.as_ref(), constraints)
+                        })
+                        .map(|(post_state, ..)| *post_state)
+                }),
+            )
+        })
+    }
+
+    /// Iterates over all transitions that can be admitted in the current state,
+    /// optimized for the special (but common) case in which the state is given by a single location.
+    ///
+    /// An admissible transition is characterized by the required action and the post-state
+    /// (the pre-state being necessarily the current state of the machine).
+    /// The guard (if any) is guaranteed to be satisfied.
+    ///
+    /// Returns error if the state is not given by a single location.
+    pub fn nosync_possible_transitions(
+        &self,
+    ) -> Result<impl Iterator<Item = (Action, impl Iterator<Item = Location>)>, PgError> {
+        if self.current_states.len() == 1 {
+            let current_loc = self.current_states[0];
+            Ok(self.def.locations[current_loc.0 as usize].0.iter().map(
+                move |(action, transitions)| {
+                    (
+                        *action,
                         transitions
                             .iter()
-                            .filter_map(move |(post_state, guard, constraints)| {
+                            .filter(move |(post_state, guard, constraints)| {
                                 self.check_transition(
-                                    action,
+                                    *action,
                                     *post_state,
                                     guard.as_ref(),
                                     constraints,
                                 )
                             })
-                    }),
-            )
-        })
+                            .map(|(post_state, ..)| *post_state),
+                    )
+                },
+            ))
+        } else {
+            Err(PgError::Sync)
+        }
     }
 
-    pub(crate) fn nosync_possible_transitions(
-        &self,
-    ) -> impl Iterator<Item = (Action, impl Iterator<Item = Location>)> {
-        assert_eq!(self.current_states.len(), 1);
-        let current_loc = self.current_states[0];
-        self.def.locations[current_loc.0 as usize]
-            .0
-            .iter()
-            .map(move |(action, transitions)| {
-                (
-                    *action,
-                    transitions
-                        .iter()
-                        .filter_map(move |(post_state, guard, constraints)| {
-                            self.check_transition(*action, *post_state, guard.as_ref(), constraints)
-                        }),
-                )
-            })
-    }
-
-    #[inline]
     fn check_transition(
         &self,
         action: Action,
         post_state: Location,
         guard: Option<&BooleanExpr<Var>>,
         constraints: &[TimeConstraint],
-    ) -> Option<Location> {
+    ) -> bool {
         let (_, ref invariants) = self.def.locations[post_state.0 as usize];
         if action != EPSILON
             && let Effect::Effects(_, ref resets) = self.def.effects[action.0 as usize]
@@ -467,10 +468,8 @@ impl<'def> ProgramGraphRun<'def> {
         } else {
             self.active_autonomous_transition(guard, constraints, invariants)
         }
-        .then_some(post_state)
     }
 
-    #[inline]
     fn active_transition(
         &self,
         guard: Option<&PgGuard>,
@@ -559,6 +558,7 @@ impl<'def> ProgramGraphRun<'def> {
         post_states: &[Location],
         rng: &mut R,
     ) -> Result<(), PgError> {
+        self.bump.reset();
         if post_states.len() != self.current_states.len() {
             return Err(PgError::MismatchingPostStates);
         }
@@ -591,7 +591,6 @@ impl<'def> ProgramGraphRun<'def> {
             return Err(PgError::Communication(action));
         }
         self.current_states.copy_from_slice(post_states);
-        self.bump.reset();
         Ok(())
     }
 
@@ -614,6 +613,7 @@ impl<'def> ProgramGraphRun<'def> {
     /// Returns error if the waiting would violate the current location's time invariant (if any).
     #[inline]
     pub fn wait(&mut self, delta: Time) -> Result<(), PgError> {
+        self.bump.reset();
         if self.can_wait(delta) {
             self.clocks.iter_mut().for_each(|t| *t += delta);
             Ok(())
@@ -628,6 +628,7 @@ impl<'def> ProgramGraphRun<'def> {
         post_states: &[Location],
         rng: &'a mut R,
     ) -> Result<Vec<Val>, PgError> {
+        self.bump.reset();
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
@@ -653,6 +654,7 @@ impl<'def> ProgramGraphRun<'def> {
         post_states: &[Location],
         vals: &[Val],
     ) -> Result<(), PgError> {
+        self.bump.reset();
         if action == EPSILON {
             Err(PgError::NotReceive(action))
         } else if self.active_transitions(action, post_states, &[]) {

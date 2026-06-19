@@ -1,11 +1,16 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use bumpalo::Bump;
+use bumpalo::collections::CollectIn;
 use log::trace;
 use rand::rngs::SmallRng;
+use rand::seq::IteratorRandom;
+use rand::{RngExt, SeedableRng, make_rng};
 
 use crate::channel_system::{
     Action, Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
+    Location, PgId,
 };
 use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
 
@@ -88,12 +93,17 @@ impl TransitionSystem {
     pub fn new_run(&self) -> TransitionSystemRun<'_> {
         let mut vals = self.vals.clone();
         vals.shrink_to_fit();
+        let mut pg_list = Vec::from_iter(self.cs.program_graph_ids());
+        pg_list.shrink_to_fit();
         TransitionSystemRun {
             cs: self.cs.new_instance(),
             ports: &self.ports,
             vals,
             predicates: &self.predicates,
             last_event: None,
+            pg_list,
+            rng: make_rng(),
+            bump: Bump::new(),
         }
     }
 }
@@ -102,13 +112,31 @@ impl TransitionSystem {
 ///
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TransitionSystemRun<'def> {
     cs: ChannelSystemRun<'def>,
     ports: &'def [Channel],
     vals: Vec<Vec<Val>>,
     predicates: &'def [BooleanExpr<Atom>],
     last_event: Option<(Action, Event)>,
+    pg_list: Vec<PgId>,
+    rng: SmallRng,
+    bump: Bump,
+}
+
+impl<'def> Clone for TransitionSystemRun<'def> {
+    fn clone(&self) -> Self {
+        Self {
+            cs: self.cs.clone(),
+            ports: self.ports,
+            vals: self.vals.clone(),
+            predicates: self.predicates,
+            last_event: self.last_event.clone(),
+            pg_list: self.pg_list.clone(),
+            rng: self.rng.clone(),
+            bump: Bump::new(),
+        }
+    }
 }
 
 impl<'def> TransitionSystemRun<'def> {
@@ -116,7 +144,7 @@ impl<'def> TransitionSystemRun<'def> {
     ///
     /// Used to generate Montecarlo-like executions
     pub fn transition(&mut self) {
-        self.last_event = self.cs.montecarlo_execution();
+        self.last_event = self.montecarlo_execution();
         if let Some((_, ref event)) = self.last_event
             && let EventType::Send(ref vals) = event.event_type
             && let Ok(index) = self.ports.binary_search(&event.channel)
@@ -241,5 +269,76 @@ impl<'def> TransitionSystemRun<'def> {
         trace!("run complete");
         let verified = Vec::from_iter(oracle.final_output_guarantees());
         Some(verified)
+    }
+
+    fn montecarlo_execution(&mut self) -> Option<(Action, Event)> {
+        let mut rand1 = SmallRng::from_rng(&mut self.rng);
+        // Setting pgs_left as length resets the queue
+        let mut pgs_left = self.pg_list.len();
+        while pgs_left > 0 {
+            // Select random pg within 0..pgs_left
+            let pg_select = self.rng.random_range(0..pgs_left);
+            let pg_id = self.pg_list[pg_select];
+            // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
+            // Decrease the length of the queue (so that selected element is removed)
+            pgs_left -= 1;
+            self.pg_list.swap(pg_select, pgs_left);
+            // Execute randomly chosen transitions on the picked PG until an event is generated,
+            // or no more transition is possible
+            // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
+            // Hopefully it will be possible to treat all cases in a general way eventually.
+            if self
+                .cs
+                .program_graph(pg_id)
+                .expect("pg exists")
+                .current_states()
+                .len()
+                == 1
+            {
+                while let Some((action, post_state)) = self
+                    .cs
+                    .nosync_possible_transitions_pg(pg_id)
+                    .expect("pg exists")
+                    .filter_map(|(action, post_states)| {
+                        post_states.choose(&mut rand1).map(|loc| (action, loc))
+                    })
+                    .choose(&mut self.rng)
+                {
+                    let event = self
+                        .cs
+                        .transition(pg_id, action, &[post_state])
+                        .expect("successful transition");
+                    if event.is_some() {
+                        return event.map(|ev| (action, ev));
+                    }
+                }
+            } else {
+                use bumpalo::collections::Vec as BumpVec;
+
+                self.bump.reset();
+                while let Some((action, post_states)) = self
+                    .cs
+                    .possible_transitions_pg(pg_id)
+                    .expect("pg exists")
+                    .filter_map(|(action, post_states)| {
+                        post_states
+                            .map(|locs| locs.choose(&mut rand1))
+                            .collect_in::<Option<BumpVec<Location>>>(&self.bump)
+                            // .collect::<Option<Vec<Location>>>()
+                            .map(|locs| (action, locs))
+                    })
+                    .choose(&mut self.rng)
+                {
+                    let event = self
+                        .cs
+                        .transition(pg_id, action, post_states.as_slice())
+                        .expect("successful transition");
+                    if event.is_some() {
+                        return event.map(|ev| (action, ev));
+                    }
+                }
+            }
+        }
+        None
     }
 }
