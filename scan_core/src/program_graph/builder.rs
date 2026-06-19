@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use super::{
-    Action, ActionIdx, Clock, EPSILON, Effect, Location, LocationData, LocationIdx, PgError,
-    PgExpression, ProgramGraph, TimeConstraint, Var,
+    Action, ActionIdx, Clock, EPSILON, Effect, Location, LocationIdx, PgError, PgExpression,
+    ProgramGraph, TimeConstraint, Var,
 };
 use crate::{
     grammar::{BooleanExpr, Type, Val},
@@ -8,8 +10,9 @@ use crate::{
 };
 use log::info;
 
-// type TransitionBuilder = (Location, Option<PgExpression>, Vec<TimeConstraint>);
 pub(crate) type Transition = (Location, Option<BooleanExpr<Var>>, Vec<TimeConstraint>);
+
+type LocationBuilderData = (BTreeMap<Action, Vec<Transition>>, Vec<TimeConstraint>);
 
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
@@ -20,7 +23,7 @@ pub struct ProgramGraphBuilder {
     effects: Vec<Effect>,
     // Transitions are indexed by locations
     // Time invariants of each location
-    locations: Vec<LocationData>,
+    locations: Vec<LocationBuilderData>,
     // Local variables with initial value.
     vars: Vec<Val>,
     // Number of clocks
@@ -194,7 +197,7 @@ impl ProgramGraphBuilder {
         }
     }
 
-    pub(crate) fn new_send(&mut self, msgs: Vec<PgExpression>) -> Result<Action, PgError> {
+    pub(crate) fn new_send(&mut self, mut msgs: Vec<PgExpression>) -> Result<Action, PgError> {
         // Check message is well-typed
         msgs.iter()
             .try_for_each(|msg| {
@@ -203,6 +206,7 @@ impl ProgramGraphBuilder {
             .map_err(PgError::Type)?;
         // Actions are indexed progressively
         let idx = self.effects.len();
+        msgs.shrink_to_fit();
         self.effects.push(Effect::Send(msgs));
         Ok(Action(idx as ActionIdx))
     }
@@ -229,14 +233,16 @@ impl ProgramGraphBuilder {
     /// and returns its [`Location`] indexing object.
     pub fn new_timed_location(
         &mut self,
-        invariants: Vec<TimeConstraint>,
+        mut invariants: Vec<TimeConstraint>,
     ) -> Result<Location, PgError> {
         if let Some((clock, _, _)) = invariants.iter().find(|(c, _, _)| c.0 >= self.clocks) {
             Err(PgError::MissingClock(*clock))
         } else {
             // Locations are indexed progressively
             let idx = self.locations.len();
-            self.locations.push((Vec::new(), invariants));
+            invariants.sort_unstable();
+            invariants.shrink_to_fit();
+            self.locations.push((BTreeMap::new(), invariants));
             Ok(Location(idx as LocationIdx))
         }
     }
@@ -267,8 +273,10 @@ impl ProgramGraphBuilder {
     /// and returns the [`Location`] indexing object.
     pub fn new_initial_timed_location(
         &mut self,
-        invariants: Vec<TimeConstraint>,
+        mut invariants: Vec<TimeConstraint>,
     ) -> Result<Location, PgError> {
+        invariants.sort_unstable();
+        invariants.shrink_to_fit();
         let location = self.new_timed_location(invariants)?;
         self.new_process(location)?;
         Ok(location)
@@ -346,7 +354,7 @@ impl ProgramGraphBuilder {
         action: Action,
         post: Location,
         guard: Option<PgGuard>,
-        constraints: Vec<TimeConstraint>,
+        mut constraints: Vec<TimeConstraint>,
     ) -> Result<(), PgError> {
         // Check 'pre' and 'post' locations exists
         if self.locations.len() as LocationIdx <= pre.0 {
@@ -366,13 +374,17 @@ impl ProgramGraphBuilder {
                     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
+            constraints.sort_unstable();
+            constraints.shrink_to_fit();
             let transition = (post, guard, constraints);
             // WARN: Actions have to be inserted in order but insertion has worst-case complexity O(n)
             // so in some cases insertion of all actions could have complexity O(n^2).
             // In practice though this is unlikely to ever be a bottleneck
-            match transitions.binary_search_by_key(&action, |(a, _)| *a) {
-                Ok(idx) => transitions[idx].1.push(transition),
-                Err(idx) => transitions.insert(idx, (action, vec![transition])),
+            match transitions.get_mut(&action) {
+                Some(action_transitions) => action_transitions.push(transition),
+                None => {
+                    let _ = transitions.insert(action, vec![transition]);
+                }
             }
             Ok(())
         }
@@ -454,45 +466,44 @@ impl ProgramGraphBuilder {
     pub fn build(mut self) -> ProgramGraph {
         // Since vectors of effects and transitions will become immutable,
         // they should be shrunk to take as little space as possible
+        self.initial_states.shrink_to_fit();
+        self.vars.shrink_to_fit();
         self.effects.iter_mut().for_each(|effect| {
             if let Effect::Effects(_, resets) = effect {
                 resets.sort_unstable();
+                resets.shrink_to_fit();
             }
         });
         self.effects.shrink_to_fit();
-        self.vars.shrink_to_fit();
-        self.locations
-            .iter_mut()
-            .for_each(|(transitions, invariants)| {
-                assert!(transitions.is_sorted_by_key(|(action, ..)| *action));
-                transitions
-                    .iter_mut()
-                    .for_each(|(_action, loc_transitions)| {
-                        loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
-                        loc_transitions
-                            .iter_mut()
-                            .for_each(|(_p, _guard, time_guards)| {
-                                time_guards.sort_unstable();
-                            });
-                    });
-                transitions.shrink_to_fit();
-                invariants.sort_unstable();
-                invariants.shrink_to_fit();
+        self.locations.iter_mut().for_each(|(transitions, _)| {
+            transitions.iter_mut().for_each(|(_, loc_transitions)| {
+                loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
+                loc_transitions.shrink_to_fit();
             });
-        self.locations.shrink_to_fit();
+        });
+        let mut locations = self
+            .locations
+            .into_iter()
+            .map(|(transitions, loc_invariants)| {
+                let mut transitions = Vec::from_iter(transitions);
+                transitions.shrink_to_fit();
+                // Actions are assumed to be sorted
+                assert!(transitions.is_sorted_by_key(|(action, _)| *action));
+                (transitions, loc_invariants)
+            })
+            .collect::<Vec<_>>();
+        locations.shrink_to_fit();
         // Build program graph
         info!(
             "create Program Graph with: {} locations; {} actions; {} vars",
-            self.locations.len(),
+            locations.len(),
             self.effects.len(),
             self.vars.len()
         );
-        self.initial_states.sort_unstable();
-        self.initial_states.shrink_to_fit();
         ProgramGraph {
             initial_states: self.initial_states,
             effects: self.effects,
-            locations: self.locations,
+            locations,
             vars: self.vars,
             clocks: self.clocks,
         }
