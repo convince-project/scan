@@ -84,21 +84,21 @@ impl VerifyArgs {
     where
         O: Oracle + Clone + Sync + 'a,
     {
-        if self.single_thread {
+        let report = if self.single_thread {
             scan.adaptive(self.confidence, self.precision, self.duration)
         } else {
             scan.par_adaptive(self.confidence, self.precision, self.duration)
         }
         .expect("verify");
-        let successes = scan.successes();
-        let failures = scan.failures();
+        let successes = report.successes;
+        let failures = report.failures;
         let runs = successes + failures;
         let rate = successes as f64 / runs as f64;
         let property_failures = self
             .properties
             .iter()
             .cloned()
-            .zip(scan.violations().into_iter().chain([0].into_iter().cycle()))
+            .zip(report.violations.into_iter().chain([0].into_iter().cycle()))
             .collect::<Vec<(String, u32)>>();
         Report {
             model,

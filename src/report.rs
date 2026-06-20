@@ -2,7 +2,7 @@ use scan_core::Time;
 use serde::Serialize;
 use std::fmt::Display;
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct Report {
     pub(crate) model: String,
     pub(crate) precision: f64,
