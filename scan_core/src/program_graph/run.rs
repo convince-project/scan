@@ -1,11 +1,13 @@
+use std::ops::RangeBounds;
+
 use bumpalo::{Bump, collections::CollectIn};
 use rand::{Rng, rngs::SmallRng};
 
 use super::{
     Action, Clock, EPSILON, Effect, Location, LocationIdx, PgError, PgGuard, ProgramGraph,
-    TimeConstraint, Transition, TransitionsIterator, Var,
+    Transition, TransitionsIterator, Var,
 };
-use crate::{BooleanExpr, Time, Val};
+use crate::{BooleanExpr, Time, Val, program_graph::TimeRange};
 
 /// Representation of a PG that can be executed transition-by-transition.
 ///
@@ -146,7 +148,7 @@ impl<'def> ProgramGraphRun<'def> {
         action: Action,
         post_state: Location,
         guard: Option<&BooleanExpr<Var>>,
-        constraints: &[TimeConstraint],
+        constraints: &[(Clock, TimeRange)],
     ) -> bool {
         let (_, ref invariants) = self.def.locations[post_state.0 as usize];
         if action != EPSILON
@@ -161,23 +163,23 @@ impl<'def> ProgramGraphRun<'def> {
     fn active_transition(
         &self,
         guard: Option<&PgGuard>,
-        constraints: &[TimeConstraint],
-        invariants: &[TimeConstraint],
+        constraints: &[(Clock, TimeRange)],
+        invariants: &[(Clock, TimeRange)],
         resets: &[Clock],
     ) -> bool {
         guard
             .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
-            && constraints.iter().all(|(c, l, u)| {
+            && constraints.iter().all(|(c, range)| {
                 let time = self.clocks[c.0 as usize];
-                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
+                range.contains(&time)
             })
-            && invariants.iter().all(|(c, l, u)| {
+            && invariants.iter().all(|(c, range)| {
                 let time = if resets.binary_search(c).is_ok() {
                     0
                 } else {
                     self.clocks[c.0 as usize]
                 };
-                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
+                range.contains(&time)
             })
     }
 
@@ -185,14 +187,14 @@ impl<'def> ProgramGraphRun<'def> {
     fn active_autonomous_transition(
         &self,
         guard: Option<&PgGuard>,
-        constraints: &[TimeConstraint],
-        invariants: &[TimeConstraint],
+        constraints: &[(Clock, TimeRange)],
+        invariants: &[(Clock, TimeRange)],
     ) -> bool {
         guard
             .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
-            && constraints.iter().chain(invariants).all(|(c, l, u)| {
+            && constraints.iter().chain(invariants).all(|(c, range)| {
                 let time = self.clocks[c.0 as usize];
-                l.is_none_or(|l| l <= time) && u.is_none_or(|u| time < u)
+                range.contains(&time)
             })
     }
 
@@ -288,11 +290,11 @@ impl<'def> ProgramGraphRun<'def> {
         self.current_states
             .iter()
             .flat_map(|current_state| self.def.locations[current_state.0 as usize].1.iter())
-            .all(|(c, l, u)| {
+            .all(|(c, range)| {
                 // Invariants need to be satisfied during the whole wait.
                 let start_time = self.clocks[c.0 as usize];
                 let end_time = start_time + delta;
-                l.is_none_or(|l| l <= start_time) && u.is_none_or(|u| end_time < u)
+                range.contains(&start_time) && range.contains(&end_time)
             })
     }
 

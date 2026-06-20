@@ -334,20 +334,19 @@ fn parse_predicates(
                 parse_predicates(rhs, predicates, interner)?,
             ))))
         }
-        Pmtl::Historically(pmtl, l, u) => parse_predicates(*pmtl, predicates, interner)
-            .map(|f| Pmtl::Historically(Box::new(f), l, u)),
-        Pmtl::Once(pmtl, l, u) => {
-            parse_predicates(*pmtl, predicates, interner).map(|f| Pmtl::Once(Box::new(f), l, u))
+        Pmtl::Historically(pmtl, range) => parse_predicates(*pmtl, predicates, interner)
+            .map(|f| Pmtl::Historically(Box::new(f), range)),
+        Pmtl::Once(pmtl, range) => {
+            parse_predicates(*pmtl, predicates, interner).map(|f| Pmtl::Once(Box::new(f), range))
         }
-        Pmtl::Since(args, l, u) => {
+        Pmtl::Since(args, range) => {
             let (lhs, rhs) = *args;
             Ok(Pmtl::Since(
                 Box::new((
                     parse_predicates(lhs, predicates, interner)?,
                     parse_predicates(rhs, predicates, interner)?,
                 )),
-                l,
-                u,
+                range,
             ))
         }
     }

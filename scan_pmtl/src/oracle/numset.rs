@@ -1,4 +1,24 @@
+use std::ops::{AddAssign, Bound, RangeBounds};
+
 use scan_core::Time;
+
+#[inline]
+fn lower_bound<R: RangeBounds<Time>>(range: &R) -> Time {
+    match range.start_bound() {
+        Bound::Included(b) => *b,
+        Bound::Excluded(b) => *b + 1,
+        Bound::Unbounded => Time::MIN,
+    }
+}
+
+#[inline]
+fn upper_bound<R: RangeBounds<Time>>(range: &R) -> Time {
+    match range.end_bound() {
+        Bound::Included(b) => *b,
+        Bound::Excluded(b) => *b - 1,
+        Bound::Unbounded => Time::MAX,
+    }
+}
 
 // Represent union of closed intervals,
 // each interval being represented by lower and upper bounds.
@@ -7,51 +27,25 @@ use scan_core::Time;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NumSet(Vec<(Time, Time)>);
 
-impl NumSet {
+impl<R: RangeBounds<Time>> From<R> for NumSet {
     #[inline]
-    pub(super) fn empty() -> Self {
-        Self(Vec::new())
-    }
-
-    #[inline]
-    fn _full() -> Self {
-        Self(vec![(0, Time::MAX)])
-    }
-
-    #[inline]
-    pub(super) fn from_range(lower_bound: Time, upper_bound: Time) -> Self {
-        assert!(lower_bound <= upper_bound);
+    fn from(value: R) -> Self {
+        let lower_bound = lower_bound(&value);
+        let upper_bound = upper_bound(&value);
         Self(vec![(lower_bound, upper_bound)])
     }
+}
 
-    #[inline]
-    pub(super) fn contains(&self, t: Time) -> bool {
-        match self.0.binary_search_by_key(&t, |&(t, _)| t) {
-            Ok(_) => true,
-            Err(i) if i > 0 => self.0[i - 1].1 >= t,
-            _ => false,
+impl<R: RangeBounds<Time>> AddAssign<R> for NumSet {
+    fn add_assign(&mut self, rhs: R) {
+        let lower_bound = lower_bound(&rhs);
+        let upper_bound = upper_bound(&rhs);
+
+        // Skip if empty range
+        if lower_bound > upper_bound {
+            return;
         }
-    }
 
-    #[inline]
-    fn _contains_interval(&self, lower_bound: Time, upper_bound: Time) -> bool {
-        assert!(lower_bound <= upper_bound);
-        match self.0.binary_search_by_key(&lower_bound, |&(t, _)| t) {
-            Ok(i) => self.0[i].1 >= upper_bound,
-            Err(i) if i > 0 => self.0[i - 1].1 >= upper_bound,
-            _ => false,
-        }
-    }
-
-    #[inline]
-    pub(super) fn contains_unbounded_interval(&self, lower_bound: Time) -> bool {
-        self.0
-            .last()
-            .is_some_and(|&(l, u)| l <= lower_bound && u == Time::MAX)
-    }
-
-    pub(super) fn add_interval(&mut self, lower_bound: Time, upper_bound: Time) {
-        assert!(lower_bound <= upper_bound);
         let len = self.0.len();
 
         match self
@@ -111,7 +105,44 @@ impl NumSet {
                 }
             }
         }
-        // Self(new)
+    }
+}
+
+impl NumSet {
+    #[inline]
+    pub(super) fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    #[inline]
+    fn _full() -> Self {
+        Self(vec![(0, Time::MAX)])
+    }
+
+    #[inline]
+    pub(super) fn contains(&self, t: Time) -> bool {
+        match self.0.binary_search_by_key(&t, |&(t, _)| t) {
+            Ok(_) => true,
+            Err(i) if i > 0 => self.0[i - 1].1 >= t,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    fn _contains_interval(&self, lower_bound: Time, upper_bound: Time) -> bool {
+        assert!(lower_bound <= upper_bound);
+        match self.0.binary_search_by_key(&lower_bound, |&(t, _)| t) {
+            Ok(i) => self.0[i].1 >= upper_bound,
+            Err(i) if i > 0 => self.0[i - 1].1 >= upper_bound,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    pub(super) fn contains_unbounded_interval(&self, lower_bound: Time) -> bool {
+        self.0
+            .last()
+            .is_some_and(|&(l, u)| l <= lower_bound && u == Time::MAX)
     }
 }
 
@@ -122,66 +153,66 @@ mod tests {
     #[test]
     fn add_interval_1() {
         let mut set = NumSet::empty();
-        set.add_interval(0, 1);
+        set += 0..=1;
         assert_eq!(set, NumSet(vec![(0, 1)]));
 
         let mut set = NumSet::empty();
-        set.add_interval(1, 1);
+        set += 1..=1;
         assert_eq!(set, NumSet(vec![(1, 1)]));
 
         let mut set = NumSet::empty();
-        set.add_interval(1, Time::MAX);
+        set += 1..;
         assert_eq!(set, NumSet(vec![(1, Time::MAX)]));
     }
 
     #[test]
     fn add_interval_2() {
         let mut set = NumSet::_full();
-        set.add_interval(0, 1);
+        set += 0..=1;
         assert_eq!(set, NumSet::_full());
 
-        set.add_interval(1, 1);
+        set += 1..=1;
         assert_eq!(set, NumSet::_full());
 
-        set.add_interval(1, Time::MAX);
+        set += 1..=Time::MAX;
         assert_eq!(set, NumSet::_full());
     }
 
     #[test]
     fn add_interval_3() {
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(0, 1);
+        let mut set = NumSet::from(5..=10);
+        set += 0..=1;
         assert_eq!(set, NumSet(vec![(0, 1), (5, 10)]));
 
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(12, 13);
+        let mut set = NumSet::from(5..=10);
+        set += 12..=13;
         assert_eq!(set, NumSet(vec![(5, 10), (12, 13)]));
 
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(7, 8);
+        let mut set = NumSet::from(5..=10);
+        set += 7..=8;
         assert_eq!(set, NumSet(vec![(5, 10)]));
 
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(3, 12);
+        let mut set = NumSet::from(5..=10);
+        set += 3..=12;
         assert_eq!(set, NumSet(vec![(3, 12)]));
     }
 
     #[test]
     fn add_interval_4() {
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(0, 5);
+        let mut set = NumSet::from(5..=10);
+        set += 0..=5;
         assert_eq!(set, NumSet(vec![(0, 10)]));
 
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(0, 4);
+        let mut set = NumSet::from(5..=10);
+        set += 0..=4;
         assert_eq!(set, NumSet(vec![(0, 10)]));
 
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(10, 15);
+        let mut set = NumSet::from(5..=10);
+        set += 10..=15;
         assert_eq!(set, NumSet(vec![(5, 15)]));
 
-        let mut set = NumSet::from_range(5, 10);
-        set.add_interval(11, 15);
+        let mut set = NumSet::from(5..=10);
+        set += 11..=15;
         assert_eq!(set, NumSet(vec![(5, 15)]));
     }
 }

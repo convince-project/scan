@@ -1,7 +1,9 @@
+use std::ops::Bound;
+
 use anyhow::{anyhow, bail};
 use chumsky::{IterParser, Parser, prelude::*, select};
 use logos::Logos;
-use scan_core::Time;
+use scan_core::TimeRange;
 use scan_pmtl::Pmtl;
 
 #[derive(Logos, Debug, PartialEq, Eq, Hash, Clone)]
@@ -75,9 +77,17 @@ fn parser<'src>() -> impl Parser<'src, &'src [Token], Pmtl<String>, extra::Err<S
     };
 
     let bounds = just(Token::BracketOpen)
-        .ignore_then(integer.or_not().map(|p| p.unwrap_or(Time::MIN)))
+        .ignore_then(
+            integer
+                .or_not()
+                .map(|p| p.map(Bound::Included).unwrap_or(Bound::Unbounded)),
+        )
         .then_ignore(just(Token::Colon))
-        .then(integer.or_not().map(|p| p.unwrap_or(Time::MAX)))
+        .then(
+            integer
+                .or_not()
+                .map(|p| p.map(Bound::Included).unwrap_or(Bound::Unbounded)),
+        )
         .then_ignore(just(Token::BracketClose));
 
     recursive(|p| {
@@ -101,8 +111,8 @@ fn parser<'src>() -> impl Parser<'src, &'src [Token], Pmtl<String>, extra::Err<S
             .repeated()
             .foldr(atom, |op, rhs| match op {
                 Token::Not => Pmtl::Not(Box::new(rhs)),
-                Token::Once => Pmtl::Once(Box::new(rhs), Time::MIN, Time::MAX),
-                Token::Historically => Pmtl::Historically(Box::new(rhs), Time::MIN, Time::MAX),
+                Token::Once => Pmtl::Once(Box::new(rhs), TimeRange::new(..)),
+                Token::Historically => Pmtl::Historically(Box::new(rhs), TimeRange::new(..)),
                 _ => unreachable!(),
             });
 
@@ -111,8 +121,8 @@ fn parser<'src>() -> impl Parser<'src, &'src [Token], Pmtl<String>, extra::Err<S
             .then(bounds.clone())
             .repeated()
             .foldr(unary, |(op, (l, u)), rhs| match op {
-                Token::Once => Pmtl::Once(Box::new(rhs), l, u),
-                Token::Historically => Pmtl::Historically(Box::new(rhs), l, u),
+                Token::Once => Pmtl::Once(Box::new(rhs), TimeRange::new((l, u))),
+                Token::Historically => Pmtl::Historically(Box::new(rhs), TimeRange::new((l, u))),
                 _ => unreachable!(),
             });
 
@@ -127,14 +137,14 @@ fn parser<'src>() -> impl Parser<'src, &'src [Token], Pmtl<String>, extra::Err<S
                 Token::And => Pmtl::And(vec![lhs, rhs]),
                 Token::Or => Pmtl::Or(vec![lhs, rhs]),
                 Token::Implies => Pmtl::Implies(Box::new((lhs, rhs))),
-                Token::Since => Pmtl::Since(Box::new((lhs, rhs)), Time::MIN, Time::MAX),
+                Token::Since => Pmtl::Since(Box::new((lhs, rhs)), TimeRange::new(..)),
                 _ => unreachable!(),
             },
         );
 
         binary.clone().foldl(
             just(Token::Since).then(bounds).then(binary).repeated(),
-            |lhs, ((_op, (l, u)), rhs)| Pmtl::Since(Box::new((lhs, rhs)), l, u),
+            |lhs, ((_op, (l, u)), rhs)| Pmtl::Since(Box::new((lhs, rhs)), TimeRange::new((l, u))),
         )
     })
     .then_ignore(end())
@@ -164,7 +174,10 @@ pub fn parse(input: &str) -> anyhow::Result<Pmtl<String>> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use scan_core::TimeRange;
+    use scan_pmtl::*;
+
+    use super::parse;
 
     #[test]
     fn not() {
@@ -185,8 +198,9 @@ mod test {
     #[test]
     fn bounded_once() {
         let once = parse("P[0:1] { var > 10 }").expect("parse formula");
-        assert!(matches!(once, Pmtl::Once(_, 0, 1)));
-        if let Pmtl::Once(atom, 0, 1) = once {
+        assert!(matches!(once, Pmtl::Once(..)));
+        if let Pmtl::Once(atom, range) = once {
+            assert_eq!(range, TimeRange::new(0u32..=1));
             assert!(matches!(*atom, Pmtl::Atom(_)));
             if let Pmtl::Atom(pred) = *atom {
                 assert_eq!(pred, "var > 10".to_string());
@@ -199,8 +213,9 @@ mod test {
     #[test]
     fn low_bounded_once() {
         let once = parse("P[1:] { var > 10 }").expect("parse formula");
-        assert!(matches!(once, Pmtl::Once(_, 1, Time::MAX)));
-        if let Pmtl::Once(atom, 1, Time::MAX) = once {
+        assert!(matches!(once, Pmtl::Once(..)));
+        if let Pmtl::Once(atom, range) = once {
+            assert_eq!(range, TimeRange::new(1..));
             assert!(matches!(*atom, Pmtl::Atom(_)));
             if let Pmtl::Atom(pred) = *atom {
                 assert_eq!(pred, "var > 10".to_string());
@@ -213,8 +228,9 @@ mod test {
     #[test]
     fn bounded_historically() {
         let once = parse("H[0:1] { var > 10 }").expect("parse formula");
-        assert!(matches!(once, Pmtl::Historically(_, 0, 1)));
-        if let Pmtl::Historically(atom, 0, 1) = once {
+        assert!(matches!(once, Pmtl::Historically(..)));
+        if let Pmtl::Historically(atom, range) = once {
+            assert_eq!(range, TimeRange::new(0..=1));
             assert!(matches!(*atom, Pmtl::Atom(_)));
             if let Pmtl::Atom(pred) = *atom {
                 assert_eq!(pred, "var > 10".to_string());
@@ -227,8 +243,9 @@ mod test {
     #[test]
     fn up_bounded_historically() {
         let once = parse("H[:1] { var > 10 }").expect("parse formula");
-        assert!(matches!(once, Pmtl::Historically(_, Time::MIN, 1)));
-        if let Pmtl::Historically(atom, Time::MIN, 1) = once {
+        assert!(matches!(once, Pmtl::Historically(..)));
+        if let Pmtl::Historically(atom, range) = once {
+            assert_eq!(range, TimeRange::new(..=1));
             assert!(matches!(*atom, Pmtl::Atom(_)));
             if let Pmtl::Atom(pred) = *atom {
                 assert_eq!(pred, "var > 10".to_string());
@@ -241,8 +258,9 @@ mod test {
     #[test]
     fn unbounded_once() {
         let once = parse("P { var > 10 }").expect("parse formula");
-        assert!(matches!(once, Pmtl::Once(_, Time::MIN, Time::MAX)));
-        if let Pmtl::Once(atom, Time::MIN, Time::MAX) = once {
+        assert!(matches!(once, Pmtl::Once(..)));
+        if let Pmtl::Once(atom, range) = once {
+            assert_eq!(range, TimeRange::new(..));
             assert!(matches!(*atom, Pmtl::Atom(_)));
             if let Pmtl::Atom(pred) = *atom {
                 assert_eq!(pred, "var > 10".to_string());
@@ -255,8 +273,9 @@ mod test {
     #[test]
     fn unbounded_historically() {
         let once = parse("H { var > 10 }").expect("parse formula");
-        assert!(matches!(once, Pmtl::Historically(_, Time::MIN, Time::MAX)));
-        if let Pmtl::Historically(atom, Time::MIN, Time::MAX) = once {
+        assert!(matches!(once, Pmtl::Historically(..)));
+        if let Pmtl::Historically(atom, range) = once {
+            assert_eq!(range, TimeRange::new(..));
             assert!(matches!(*atom, Pmtl::Atom(_)));
             if let Pmtl::Atom(pred) = *atom {
                 assert_eq!(pred, "var > 10".to_string());
@@ -269,9 +288,13 @@ mod test {
     #[test]
     fn historically_once() {
         let historically = parse("H[0:1] P[2:3] { var > 10 }").expect("parse formula");
-        assert!(matches!(historically, Pmtl::Historically(_, 0, 1)));
-        if let Pmtl::Historically(once, 0, 1) = historically {
-            assert!(matches!(*once, Pmtl::Once(_, 2, 3)));
+        assert!(matches!(historically, Pmtl::Historically(..)));
+        if let Pmtl::Historically(once, range) = historically {
+            assert_eq!(range, TimeRange::new(0..=1));
+            assert!(matches!(*once, Pmtl::Once(..)));
+            if let Pmtl::Once(_, range) = *once {
+                assert_eq!(range, TimeRange::new(2..=3));
+            }
         } else {
             unreachable!();
         }
@@ -279,10 +302,14 @@ mod test {
 
     #[test]
     fn once_historically() {
-        let once = parse("P[2:3] H[0:1] { var > 10 }").expect("parse formula");
-        assert!(matches!(once, Pmtl::Once(_, 2, 3)));
-        if let Pmtl::Once(historically, 2, 3) = once {
-            assert!(matches!(*historically, Pmtl::Historically(_, 0, 1)));
+        let once = parse("P[2:3] H[:1] { var > 10 }").expect("parse formula");
+        assert!(matches!(once, Pmtl::Once(..)));
+        if let Pmtl::Once(historically, range) = once {
+            assert_eq!(range, TimeRange::new(2..=3));
+            assert!(matches!(*historically, Pmtl::Historically(..)));
+            if let Pmtl::Historically(_, range) = *historically {
+                assert_eq!(range, TimeRange::new(..=1));
+            }
         } else {
             unreachable!();
         }
@@ -292,8 +319,9 @@ mod test {
     fn since() {
         let since =
             parse("not { var > 10 } since[2:10] { other_var == 1 }").expect("parse formula");
-        assert!(matches!(since, Pmtl::Since(_, 2, 10)));
-        if let Pmtl::Since(args, _, _) = since {
+        assert!(matches!(since, Pmtl::Since(..)));
+        if let Pmtl::Since(args, range) = since {
+            assert_eq!(range, TimeRange::new(2..=10));
             let (lhs, rhs) = *args;
             assert!(matches!(lhs, Pmtl::Not(_)));
             assert!(matches!(rhs, Pmtl::Atom(_)));

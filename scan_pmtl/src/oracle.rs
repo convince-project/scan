@@ -1,8 +1,8 @@
 mod numset;
 
 use numset::NumSet;
-use scan_core::{Oracle, Time};
-use std::hash::Hash;
+use scan_core::{Oracle, Time, TimeRange};
+use std::{hash::Hash, ops::RangeBounds};
 
 /// A Past-time Metric Temporal Logic (PMTL) formula.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -25,11 +25,11 @@ where
     /// Logical implication of a antecedent formula and a consequent formula.
     Implies(Box<(Pmtl<V>, Pmtl<V>)>),
     /// Temporal historical predicate over a formula (with bounds).
-    Historically(Box<Pmtl<V>>, Time, Time),
+    Historically(Box<Pmtl<V>>, TimeRange),
     /// Temporal previously predicate over a formula (with bounds).
-    Once(Box<Pmtl<V>>, Time, Time),
+    Once(Box<Pmtl<V>>, TimeRange),
     /// Temporal since predicate over a formula (with bounds).
-    Since(Box<(Pmtl<V>, Pmtl<V>)>, Time, Time),
+    Since(Box<(Pmtl<V>, Pmtl<V>)>, TimeRange),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,9 +41,9 @@ enum ValPmtl {
     Or(Vec<ValPmtl>),
     Not(Box<ValPmtl>),
     Implies(Box<(ValPmtl, ValPmtl)>),
-    Historically(Box<ValPmtl>, Time, Time, NumSet),
-    Once(Box<ValPmtl>, Time, Time, NumSet),
-    Since(Box<(ValPmtl, ValPmtl)>, Time, Time, NumSet),
+    Historically(Box<ValPmtl>, TimeRange, NumSet),
+    Once(Box<ValPmtl>, TimeRange, NumSet),
+    Since(Box<(ValPmtl, ValPmtl)>, TimeRange, NumSet),
 }
 
 impl From<&Pmtl<usize>> for ValPmtl {
@@ -58,16 +58,15 @@ impl From<&Pmtl<usize>> for ValPmtl {
             Pmtl::Implies(pmtls) => {
                 ValPmtl::Implies(Box::new(((&pmtls.0).into(), (&pmtls.1).into())))
             }
-            Pmtl::Historically(pmtl, lb, ub) => {
-                ValPmtl::Historically(Box::new(pmtl.as_ref().into()), *lb, *ub, NumSet::empty())
+            Pmtl::Historically(pmtl, range) => {
+                ValPmtl::Historically(Box::new(pmtl.as_ref().into()), *range, NumSet::empty())
             }
-            Pmtl::Once(pmtl, lb, ub) => {
-                ValPmtl::Once(Box::new(pmtl.as_ref().into()), *lb, *ub, NumSet::empty())
+            Pmtl::Once(pmtl, range) => {
+                ValPmtl::Once(Box::new(pmtl.as_ref().into()), *range, NumSet::empty())
             }
-            Pmtl::Since(pmtls, lb, ub) => ValPmtl::Since(
+            Pmtl::Since(pmtls, range) => ValPmtl::Since(
                 Box::new(((&pmtls.0).into(), (&pmtls.1).into())),
-                *lb,
-                *ub,
+                *range,
                 NumSet::empty(),
             ),
         }
@@ -88,13 +87,9 @@ impl ValPmtl {
                 let (lhs, rhs) = subformulae.as_ref();
                 rhs.output(time) || !lhs.output(time)
             }
-            ValPmtl::Historically(_sub, _lower_bound, _upper_bound, valuation) => {
-                !valuation.contains(time)
-            }
-            ValPmtl::Once(_sub, _lower_bound, _upper_bound, valuation) => valuation.contains(time),
-            ValPmtl::Since(_subformulae, _lower_bound, _upper_bound, valuation) => {
-                valuation.contains(time)
-            }
+            ValPmtl::Historically(_sub, _range, valuation) => !valuation.contains(time),
+            ValPmtl::Once(_sub, _range, valuation) => valuation.contains(time),
+            ValPmtl::Since(_subformulae, _range, valuation) => valuation.contains(time),
         }
     }
 
@@ -116,25 +111,19 @@ impl ValPmtl {
                 lhs.update_state(state, time);
                 rhs.update_state(state, time);
             }
-            ValPmtl::Historically(sub, lower_bound, upper_bound, valuation) => {
+            ValPmtl::Historically(sub, range, valuation) => {
                 sub.update_state(state, time);
                 if !sub.output(time) {
-                    valuation.add_interval(
-                        lower_bound.saturating_add(time),
-                        upper_bound.saturating_add(time),
-                    );
+                    *valuation += range.shift(time);
                 }
             }
-            ValPmtl::Once(sub, lower_bound, upper_bound, valuation) => {
+            ValPmtl::Once(sub, range, valuation) => {
                 sub.update_state(state, time);
                 if sub.output(time) {
-                    valuation.add_interval(
-                        lower_bound.saturating_add(time),
-                        upper_bound.saturating_add(time),
-                    );
+                    *valuation += range.shift(time);
                 }
             }
-            ValPmtl::Since(subformulae, lower_bound, upper_bound, valuation) => {
+            ValPmtl::Since(subformulae, range, valuation) => {
                 let (lhs, rhs) = subformulae.as_mut();
                 // Make sure all subformulae are updated
                 lhs.update_state(state, time);
@@ -143,16 +132,10 @@ impl ValPmtl {
                 let out_rhs = rhs.output(time);
                 if out_lhs {
                     if out_rhs {
-                        valuation.add_interval(
-                            lower_bound.saturating_add(time),
-                            upper_bound.saturating_add(time),
-                        );
+                        *valuation += range.shift(time);
                     }
                 } else if out_rhs {
-                    *valuation = NumSet::from_range(
-                        lower_bound.saturating_add(time),
-                        upper_bound.saturating_add(time),
-                    );
+                    *valuation = NumSet::from(range.shift(time));
                 } else {
                     *valuation = NumSet::empty();
                 }
@@ -178,25 +161,19 @@ impl ValPmtl {
                 lhs.update_time(time);
                 rhs.update_time(time);
             }
-            ValPmtl::Historically(sub, lower_bound, upper_bound, valuation) => {
+            ValPmtl::Historically(sub, range, valuation) => {
                 sub.update_time(time);
                 if !sub.output(time) {
-                    valuation.add_interval(
-                        lower_bound.saturating_add(time),
-                        upper_bound.saturating_add(time),
-                    );
+                    *valuation += range.shift(time);
                 }
             }
-            ValPmtl::Once(sub, lower_bound, upper_bound, valuation) => {
+            ValPmtl::Once(sub, range, valuation) => {
                 sub.update_time(time);
                 if sub.output(time) {
-                    valuation.add_interval(
-                        lower_bound.saturating_add(time),
-                        upper_bound.saturating_add(time),
-                    );
+                    *valuation += range.shift(time);
                 }
             }
-            ValPmtl::Since(subformulae, lower_bound, upper_bound, valuation) => {
+            ValPmtl::Since(subformulae, range, valuation) => {
                 let (lhs, rhs) = subformulae.as_mut();
                 // Make sure all subformulae are updated
                 lhs.update_time(time);
@@ -205,16 +182,10 @@ impl ValPmtl {
                 let out_rhs = rhs.output(time);
                 if out_lhs {
                     if out_rhs {
-                        valuation.add_interval(
-                            lower_bound.saturating_add(time),
-                            upper_bound.saturating_add(time),
-                        );
+                        *valuation += range.shift(time);
                     }
                 } else if out_rhs {
-                    *valuation = NumSet::from_range(
-                        lower_bound.saturating_add(time),
-                        upper_bound.saturating_add(time),
-                    );
+                    *valuation = NumSet::from(range.shift(time));
                 } else {
                     *valuation = NumSet::empty();
                 }
@@ -252,29 +223,29 @@ impl ValPmtl {
             // Valuation of Historically represents the set of time moments in which we know the formula to be false.
             // If the argument of the operator is know to be always true, then Historically is always true.
             // If the argument of the operator is know to be always false, then Historically is always false provided that the lower time bound is 0.
-            ValPmtl::Historically(subformula, lb, _, valuation) => subformula
+            ValPmtl::Historically(subformula, range, valuation) => subformula
                 .valuation(time)
-                .and_then(|v| (*lb == 0 || v).then_some(v))
+                .and_then(|v| (range.contains(&0) || v).then_some(v))
                 .or_else(|| valuation.contains_unbounded_interval(time).then_some(false)),
             // Valuation of Previously represents the set of time moments in which we know the formula to be false.
             // If the argument of the operator is know to be always true, then Previously is always true provided that the lower time bound is 0.
             // If the argument of the operator is know to be always false, then Previously is always false.
-            ValPmtl::Once(subformula, lb, _, valuation) => subformula
+            ValPmtl::Once(subformula, range, valuation) => subformula
                 .valuation(time)
-                .and_then(|v| (*lb == 0 || !v).then_some(v))
+                .and_then(|v| (range.contains(&0) || !v).then_some(v))
                 .or_else(|| valuation.contains_unbounded_interval(time).then_some(true)),
             // Valuation of Since represents the set of time moments in which we know the formula to be true if its lhs argument is true from then on.
             // If the rhs argument of the operator is know to be always false, then Since is always false.
             // If the Since valuation is always true and the lhs argument of the operator is know to be always true, then Since is always true.
             // If the Since valuation is always true and the lhs argument of the operator is know to be always false, then Since is always false provided that the lower time bound is 0.
-            ValPmtl::Since(subformulae, lb, _, valuation) => {
+            ValPmtl::Since(subformulae, range, valuation) => {
                 if let Some(false) = subformulae.1.valuation(time) {
                     Some(false)
                 } else if valuation.contains_unbounded_interval(time) {
                     subformulae
                         .0
                         .valuation(time)
-                        .and_then(|v| (*lb == 0 || v).then_some(v))
+                        .and_then(|v| (range.contains(&0) || v).then_some(v))
                 } else {
                     None
                 }
@@ -348,7 +319,7 @@ mod tests {
 
     #[test]
     fn since_1() {
-        let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), 0, Time::MAX);
+        let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), TimeRange::new(..));
         let mut oracle = PmtlOracle::new(&[], &[formula]);
         oracle.update_state(&[false, true]);
         assert!(oracle.final_output_guarantees().any(|b| b));
@@ -374,7 +345,10 @@ mod tests {
 
     #[test]
     fn since_2() {
-        let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), 0, 2);
+        let formula = Pmtl::Since(
+            Box::new((Pmtl::Atom(0), Pmtl::Atom(1))),
+            TimeRange::new(0..=2),
+        );
         let mut oracle = PmtlOracle::new(&[], &[formula]);
         oracle.update_state(&[false, true]);
         assert!(oracle.final_output_guarantees().any(|b| b));
@@ -402,7 +376,10 @@ mod tests {
 
     #[test]
     fn since_3() {
-        let formula = Pmtl::Since(Box::new((Pmtl::Atom(0), Pmtl::Atom(1))), 1, 2);
+        let formula = Pmtl::Since(
+            Box::new((Pmtl::Atom(0), Pmtl::Atom(1))),
+            TimeRange::new(1..=2),
+        );
         let mut oracle = PmtlOracle::new(&[], &[formula]);
         oracle.update_state(&[false, true]);
         assert!(oracle.final_output_guarantees().any(|b| !b));

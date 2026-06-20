@@ -13,6 +13,7 @@ mod grammar;
 mod oracle;
 pub mod program_graph;
 mod smc;
+mod time;
 mod tracer;
 mod transition_system;
 
@@ -31,15 +32,13 @@ use std::{
     time::Instant,
 };
 use thiserror::Error;
+pub use time::*;
 pub use tracer::{TraceWriter, Tracer};
 pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
 
 const TEMP: &str = ".temp";
 const SUCCESSES: &str = "successes";
 const FAILURES: &str = "failures";
-
-/// The type that represents time.
-pub type Time = u32;
 
 /// Errors that can be returned by a `[Scan]` method
 #[derive(Clone, Copy, Debug, Error)]
