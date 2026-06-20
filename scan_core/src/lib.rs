@@ -52,6 +52,19 @@ pub enum ScanError {
     OutOfBoundsConfidence(f64),
 }
 
+/// Final report for a verification run.
+#[derive(Debug, Clone)]
+pub struct Report {
+    /// Total executions run (even partial).
+    pub runs: u32,
+    /// Successful executions.
+    pub successes: u32,
+    /// Failed executions.
+    pub failures: u32,
+    /// Breakdown of violations by property.
+    pub violations: Vec<u32>,
+}
+
 // The possible outcomes of a model execution:
 // - If the run was not completed (because the execution violated an assume), result is `None`.
 // - If the run succeeded, or failed by violating the guarantees, result is `Some(violations)`
@@ -168,7 +181,7 @@ impl<O: Oracle + Clone> Scan<O> {
         confidence: f64,
         precision: f64,
         duration: Time,
-    ) -> Result<(), ScanError> {
+    ) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
         }
@@ -182,14 +195,19 @@ impl<O: Oracle + Clone> Scan<O> {
         info!("verification starting");
         let start_time = Instant::now();
 
-        let _ = (0..)
+        let runs = (0..)
             .map(|_| self.verification(confidence, precision, duration))
             .take_while(|_| self.running.load(Ordering::Relaxed))
-            .count();
+            .count() as u32;
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
-        Ok(())
+        Ok(Report {
+            runs,
+            successes: self.successes(),
+            failures: self.failures(),
+            violations: self.violations(),
+        })
     }
 
     /// Produces and saves the traces for the given number of runs,
@@ -257,7 +275,7 @@ where
         confidence: f64,
         precision: f64,
         duration: Time,
-    ) -> Result<(), ScanError> {
+    ) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
         }
@@ -271,15 +289,20 @@ where
         info!("verification starting");
         let start_time = Instant::now();
 
-        let _ = (0..usize::MAX)
+        let runs = (0..usize::MAX)
             .into_par_iter()
             .map(|_| self.verification(confidence, precision, duration))
             .take_any_while(|_| self.running.load(Ordering::Relaxed))
-            .count();
+            .count() as u32;
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
-        Ok(())
+        Ok(Report {
+            runs,
+            successes: self.successes(),
+            failures: self.failures(),
+            violations: self.violations(),
+        })
     }
 
     /// Produces and saves the traces for the given number of runs,
