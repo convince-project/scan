@@ -942,7 +942,7 @@ impl ModelBuilder {
                     self.cs.add_reset(pg_id, reset, clock).expect("add reset");
                     let next_loc = self
                         .cs
-                        .new_timed_location(pg_id, &[(clock, None, Some(*delay + 1))])
+                        .new_timed_location(pg_id, &[(clock, TimeRange::new(0..*delay + 1))])
                         .expect("PG exists");
                     self.cs
                         .add_transition(pg_id, loc, reset, next_loc, None)
@@ -955,7 +955,7 @@ impl ModelBuilder {
                             loc,
                             next_loc,
                             None,
-                            &[(clock, Some(*delay), None)],
+                            &[(clock, TimeRange::new(*delay..))],
                         )
                         .expect("autonomous timed transition");
                     loc = next_loc;

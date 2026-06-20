@@ -182,8 +182,6 @@ pub struct Var(PgId, PgVar);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Clock(PgId, PgClock);
 
-type TimeConstraint = (Clock, Option<Time>, Option<Time>);
-
 /// A message to be sent through a CS's channel.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum Message {

@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::RangeBounds};
 
 use super::*;
 use crate::grammar::{Type, Val};
 use log::info;
 
-type LocationBuilderData = (BTreeMap<Action, Vec<Transition>>, Vec<TimeConstraint>);
+type LocationBuilderData = (BTreeMap<Action, Vec<Transition>>, Vec<(Clock, TimeRange)>);
 
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
@@ -226,14 +226,14 @@ impl ProgramGraphBuilder {
     /// and returns its [`Location`] indexing object.
     pub fn new_timed_location(
         &mut self,
-        mut invariants: Vec<TimeConstraint>,
+        mut invariants: Vec<(Clock, TimeRange)>,
     ) -> Result<Location, PgError> {
-        if let Some((clock, _, _)) = invariants.iter().find(|(c, _, _)| c.0 >= self.clocks) {
+        if let Some((clock, _)) = invariants.iter().find(|(c, _)| c.0 >= self.clocks) {
             Err(PgError::MissingClock(*clock))
         } else {
             // Locations are indexed progressively
             let idx = self.locations.len();
-            invariants.sort_unstable();
+            invariants.sort_unstable_by_key(|(c, _)| *c);
             invariants.shrink_to_fit();
             self.locations.push((BTreeMap::new(), invariants));
             Ok(Location(idx as LocationIdx))
@@ -247,9 +247,9 @@ impl ProgramGraphBuilder {
             .ok_or(PgError::MissingLocation(location))?
             .1 // location's time invariants
             .iter()
-            .all(|(_, l, u)| {
+            .all(|(_, range)| {
                 // All clocks start at time 0
-                l.is_none_or(|l| l == 0) && u.is_none_or(|u| u > 0)
+                range.contains(&0)
             })
             .then(|| self.initial_states.push(location))
             .ok_or(PgError::Invariant)
@@ -266,7 +266,7 @@ impl ProgramGraphBuilder {
     /// and returns the [`Location`] indexing object.
     pub fn new_initial_timed_location(
         &mut self,
-        invariants: Vec<TimeConstraint>,
+        invariants: Vec<(Clock, TimeRange)>,
     ) -> Result<Location, PgError> {
         let location = self.new_timed_location(invariants)?;
         self.new_process(location)?;
@@ -345,7 +345,7 @@ impl ProgramGraphBuilder {
         action: Action,
         post: Location,
         guard: Option<PgGuard>,
-        mut constraints: Vec<TimeConstraint>,
+        mut constraints: Vec<(Clock, TimeRange)>,
     ) -> Result<(), PgError> {
         // Check 'pre' and 'post' locations exists
         if self.locations.len() as LocationIdx <= pre.0 {
@@ -355,8 +355,7 @@ impl ProgramGraphBuilder {
         } else if action != EPSILON && self.effects.len() as ActionIdx <= action.0 {
             // Check 'action' exists
             Err(PgError::MissingAction(action))
-        } else if let Some((clock, _, _)) = constraints.iter().find(|(c, _, _)| c.0 >= self.clocks)
-        {
+        } else if let Some((clock, _)) = constraints.iter().find(|(c, _)| c.0 >= self.clocks) {
             Err(PgError::MissingClock(*clock))
         } else {
             if let Some(ref guard) = guard {
@@ -365,7 +364,7 @@ impl ProgramGraphBuilder {
                     .map_err(PgError::Type)?;
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
-            constraints.sort_unstable();
+            constraints.sort_unstable_by_key(|(c, _)| *c);
             constraints.shrink_to_fit();
             let transition = (post, guard, constraints);
             // WARN: Actions have to be inserted in order but insertion has worst-case complexity O(n)
@@ -445,7 +444,7 @@ impl ProgramGraphBuilder {
         pre: Location,
         post: Location,
         guard: Option<PgGuard>,
-        constraints: Vec<TimeConstraint>,
+        constraints: Vec<(Clock, TimeRange)>,
     ) -> Result<(), PgError> {
         self.add_timed_transition(pre, EPSILON, post, guard, constraints)
     }

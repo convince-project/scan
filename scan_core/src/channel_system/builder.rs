@@ -1,11 +1,11 @@
 use super::{
     Action, Channel, ChannelSystem, Clock, CsError, Location, Message, PgError, PgExpression, PgId,
-    ProgramGraphBuilder, TimeConstraint, Var,
+    ProgramGraphBuilder, Var,
 };
 use crate::channel_system::ChannelCapacity;
 use crate::grammar::{BooleanExpr, Type};
 use crate::program_graph::ProgramGraph;
-use crate::{Expression, Val};
+use crate::{Expression, TimeRange, Val};
 use log::info;
 use std::collections::BTreeMap;
 
@@ -212,13 +212,13 @@ impl ChannelSystemBuilder {
     pub fn new_timed_location(
         &mut self,
         pg_id: PgId,
-        invariants: &[TimeConstraint],
+        invariants: &[(Clock, TimeRange)],
     ) -> Result<Location, CsError> {
         let invariants = invariants
             .iter()
-            .map(|(c, l, u)| {
+            .map(|(c, range)| {
                 if c.0 == pg_id {
-                    Ok((c.1, *l, *u))
+                    Ok((c.1, *range))
                 } else {
                     Err(CsError::DifferentPgs(pg_id, c.0))
                 }
@@ -271,13 +271,13 @@ impl ChannelSystemBuilder {
     pub fn new_initial_timed_location(
         &mut self,
         pg_id: PgId,
-        invariants: &[TimeConstraint],
+        invariants: &[(Clock, TimeRange)],
     ) -> Result<Location, CsError> {
         let invariants = invariants
             .iter()
-            .map(|(c, l, u)| {
+            .map(|(c, range)| {
                 if c.0 == pg_id {
-                    Ok((c.1, *l, *u))
+                    Ok((c.1, *range))
                 } else {
                     Err(CsError::DifferentPgs(pg_id, c.0))
                 }
@@ -342,7 +342,7 @@ impl ChannelSystemBuilder {
         action: Action,
         post: Location,
         guard: Option<CsGuard>,
-        constraints: &[TimeConstraint],
+        constraints: &[(Clock, TimeRange)],
     ) -> Result<(), CsError> {
         if action.0 != pg_id {
             Err(CsError::ActionNotInPg(action, pg_id))
@@ -360,9 +360,9 @@ impl ChannelSystemBuilder {
             });
             let constraints = constraints
                 .iter()
-                .map(|(c, l, u)| {
+                .map(|(c, range)| {
                     if c.0 == pg_id {
-                        Ok((c.1, *l, *u))
+                        Ok((c.1, *range))
                     } else {
                         Err(CsError::DifferentPgs(pg_id, c.0))
                     }
@@ -423,7 +423,7 @@ impl ChannelSystemBuilder {
         pre: Location,
         post: Location,
         guard: Option<CsGuard>,
-        constraints: &[TimeConstraint],
+        constraints: &[(Clock, TimeRange)],
     ) -> Result<(), CsError> {
         if pre.0 != pg_id {
             Err(CsError::LocationNotInPg(pre, pg_id))
@@ -439,9 +439,9 @@ impl ChannelSystemBuilder {
             });
             let constraints = constraints
                 .iter()
-                .map(|(c, l, u)| {
+                .map(|(c, range)| {
                     if c.0 == pg_id {
-                        Ok((c.1, *l, *u))
+                        Ok((c.1, *range))
                     } else {
                         Err(CsError::DifferentPgs(pg_id, c.0))
                     }

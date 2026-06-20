@@ -80,7 +80,7 @@ mod builder;
 mod run;
 mod transitions;
 
-use crate::{Time, grammar::*};
+use crate::{TimeRange, grammar::*};
 pub use builder::*;
 pub use run::ProgramGraphRun;
 use thiserror::Error;
@@ -132,9 +132,6 @@ pub struct Var(u16);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Clock(u16);
 
-/// A time constraint given by a clock and, optionally, a lower bound and/or an upper bound.
-type TimeConstraint = (Clock, Option<Time>, Option<Time>);
-
 /// An expression using PG's [`Var`] as variables.
 pub type PgExpression = Expression<Var>;
 
@@ -148,9 +145,9 @@ enum Effect {
     Receive(Vec<Var>),
 }
 
-type Transition = (Location, Option<BooleanExpr<Var>>, Vec<TimeConstraint>);
+type Transition = (Location, Option<BooleanExpr<Var>>, Vec<(Clock, TimeRange)>);
 
-type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<TimeConstraint>);
+type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<(Clock, TimeRange)>);
 
 /// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
 #[derive(Debug, Clone, Copy, Error)]
@@ -275,7 +272,7 @@ impl ProgramGraph {
         pre_state: Location,
         action: Action,
         post_state: Location,
-    ) -> impl Iterator<Item = (Option<&PgGuard>, &[TimeConstraint])> {
+    ) -> impl Iterator<Item = (Option<&PgGuard>, &[(Clock, TimeRange)])> {
         let a_transitions = self.locations[pre_state.0 as usize].0.as_slice();
         a_transitions
             .binary_search_by_key(&action, |&(a, ..)| a)
