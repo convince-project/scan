@@ -14,7 +14,12 @@
 //! - [x] [Promela](https://spinroot.com/spin/Man/Manual.html)
 //! - [x] [JANI](https://jani-spec.org/)
 //!
+//! This crate is part of the [SCAN statistical model checker](https://convince-project.github.io/scan/)
+//!
 //! [^1]: Baier, C., & Katoen, J. (2008). *Principles of model checking*. MIT Press.
+
+#![warn(missing_docs)]
+#![forbid(unsafe_code)]
 
 mod progress;
 mod report;
@@ -168,6 +173,7 @@ pub struct Cli {
 }
 
 impl Cli {
+    /// Run SCAN with the parameters passed via the CLI.
     pub fn run(self) -> anyhow::Result<()> {
         let model = std::path::absolute(&self.model)?
             .file_name()
