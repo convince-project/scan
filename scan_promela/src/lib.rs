@@ -1,3 +1,9 @@
+//! Parser and model builder for SCAN's Promela specification format.
+//!
+//! This crate is part of the [SCAN statistical model checker](https://convince-project.github.io/scan/)
+
+#![forbid(unsafe_code)]
+
 use std::{fs::File, io::Read, path::Path};
 
 pub use crate::spinv4_y::*;
@@ -16,15 +22,13 @@ use regex::Regex;
 use scan_core::{Scan, TransitionSystem};
 use scan_pmtl::PmtlOracle;
 
-pub type PromelaScan = Scan<PmtlOracle>;
-
 pub type PromelaModel = ();
 
 pub fn load(
     path: &Path,
     _properties: &[String],
     _all_properties: bool,
-) -> anyhow::Result<(PromelaScan, PromelaModel)> {
+) -> anyhow::Result<(Scan<PmtlOracle>, PromelaModel)> {
     // let time = std::time::Instant::now();
     // info!(target: "parser", "parse SCXML model");
 
@@ -46,7 +50,7 @@ pub fn load(
     // Ok((scan, model))
 }
 
-fn process_file(path: &Path, debug_mode: bool) -> anyhow::Result<(PromelaScan, PromelaModel)> {
+fn process_file(path: &Path, debug_mode: bool) -> anyhow::Result<(Scan<PmtlOracle>, PromelaModel)> {
     /* ---------- 1. extension check ----------------------------------------- */
     match path.extension().and_then(|e| e.to_str()) {
         Some("pml" | "prm") => {}

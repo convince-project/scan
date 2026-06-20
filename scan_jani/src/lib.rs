@@ -1,4 +1,8 @@
 //! Parser and model builder for SCAN's JANI specification format.
+//!
+//! This crate is part of the [SCAN statistical model checker](https://convince-project.github.io/scan/)
+
+#![forbid(unsafe_code)]
 
 mod builder;
 mod parser;
@@ -14,12 +18,10 @@ use scan_mtl::MtlOracle;
 use std::{fs::File, io::Read, path::Path};
 pub use tracer::TracePrinter;
 
-pub type JaniScan = Scan<MtlOracle>;
-
 pub fn load<'def>(
     path: &'def Path,
     properties: &'def [String],
-) -> anyhow::Result<(JaniScan, JaniModelData)> {
+) -> anyhow::Result<(Scan<MtlOracle>, JaniModelData)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parsing JANI model file '{}'", path.display());
     // NOTE: See <https://github.com/serde-rs/json/issues/160>
