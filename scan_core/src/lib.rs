@@ -130,14 +130,14 @@ impl<O> Scan<O> {
 }
 
 impl<O: Oracle + Clone> Scan<O> {
-    fn verification(&self, confidence: f64, precision: f64, duration: Time) {
+    fn verification(&self, confidence: f64, precision: f64) {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
 
-        let result =
-            self.model
-                .new_run()
-                .experiment(duration, self.oracle.clone(), self.running.clone());
+        let result = self
+            .model
+            .new_run()
+            .experiment(self.oracle.clone(), self.running.clone());
         if let Some(guarantees) = result
             && self.running.load(Ordering::Relaxed)
         {
@@ -175,12 +175,7 @@ impl<O: Oracle + Clone> Scan<O> {
     }
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
-    pub fn adaptive(
-        &self,
-        confidence: f64,
-        precision: f64,
-        duration: Time,
-    ) -> Result<Report, ScanError> {
+    pub fn adaptive(&self, confidence: f64, precision: f64) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
         }
@@ -195,7 +190,7 @@ impl<O: Oracle + Clone> Scan<O> {
         let start_time = Instant::now();
 
         let runs = (0..)
-            .map(|_| self.verification(confidence, precision, duration))
+            .map(|_| self.verification(confidence, precision))
             .take_while(|_| self.running.load(Ordering::Relaxed))
             .count() as u32;
 
@@ -211,7 +206,7 @@ impl<O: Oracle + Clone> Scan<O> {
 
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`].
-    pub fn traces<T>(&self, runs: usize, duration: Time, path: PathBuf, model_data: &T::ModelData)
+    pub fn traces<T>(&self, runs: usize, path: PathBuf, model_data: &T::ModelData)
     where
         T: Tracer,
     {
@@ -221,14 +216,14 @@ impl<O: Oracle + Clone> Scan<O> {
         create_traces_dirs_tree(path.clone());
 
         (0..runs).for_each(|idx| {
-            self.trace::<T>(duration, path.clone(), model_data, idx);
+            self.trace::<T>(path.clone(), model_data, idx);
         });
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
     }
 
-    fn trace<T>(&self, duration: u32, mut path: PathBuf, model_data: &T::ModelData, idx: usize)
+    fn trace<T>(&self, mut path: PathBuf, model_data: &T::ModelData, idx: usize)
     where
         T: Tracer,
     {
@@ -245,8 +240,7 @@ impl<O: Oracle + Clone> Scan<O> {
             .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
         let tracer = T::init(writer, model_data);
-        if let Some(verified) = ts.trace::<T, _>(duration, self.oracle.clone(), tracer, model_data)
-        {
+        if let Some(verified) = ts.trace::<T, _>(self.oracle.clone(), tracer, model_data) {
             let mut new_path = path.clone();
             // pop file name
             new_path.pop();
@@ -269,12 +263,7 @@ where
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.
-    pub fn par_adaptive(
-        &self,
-        confidence: f64,
-        precision: f64,
-        duration: Time,
-    ) -> Result<Report, ScanError> {
+    pub fn par_adaptive(&self, confidence: f64, precision: f64) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
         }
@@ -290,7 +279,7 @@ where
 
         let runs = (0..usize::MAX)
             .into_par_iter()
-            .map(|_| self.verification(confidence, precision, duration))
+            .map(|_| self.verification(confidence, precision))
             .take_any_while(|_| self.running.load(Ordering::Relaxed))
             .count() as u32;
 
@@ -307,13 +296,8 @@ where
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`],
     /// spawning multiple threads.
-    pub fn par_traces<T>(
-        &self,
-        runs: usize,
-        duration: Time,
-        path: PathBuf,
-        model_data: &T::ModelData,
-    ) where
+    pub fn par_traces<T>(&self, runs: usize, path: PathBuf, model_data: &T::ModelData)
+    where
         T: Tracer,
         T::ModelData: Sync,
     {
@@ -323,7 +307,7 @@ where
         create_traces_dirs_tree(path.clone());
 
         (0..runs).into_par_iter().for_each(|idx| {
-            self.trace::<T>(duration, path.clone(), model_data, idx);
+            self.trace::<T>(path.clone(), model_data, idx);
         });
 
         let elapsed = start_time.elapsed();

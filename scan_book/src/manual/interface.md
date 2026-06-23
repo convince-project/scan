@@ -95,18 +95,6 @@ via the new adaptive sampling method.
 This determines the number of necessary samples also based on the outcomes of the previous samples,
 so that this number cannot be known a-priori but has to be continually recalculated during the verification task.
 
-By default, the model passed to SCAN is assumed to be untimed.
-For timed models, use the `--duration` option to set the maximum duration (in model time) that the execution can take before being stopped.
-As the most appropriate value for this option may vary depending on the input model,
-the developer should set a suitable value manually.
-
-__WARNING:__ if verification seems to be hanging without making any progress,
-it might be due to a wrong (too small) duration value.
-Indeed, if the model is still running and the properties still undetermined when it reaches the time limit,
-the execution is discarded and does not count towards the result.
-If this happens systematically, all executions will be discarded.
-In such case, increase the duration to a value appropriate to your model.
-
 By default, SCAN only prints a short message informing the user that a verification task is underway,
 then it hangs silently until the task is finished (if ever).
 This is a fine behavior for use by other tools or in scripts,
@@ -138,7 +126,7 @@ scan [GLOBAL_OPTIONS] <MODEL> trace [OPTIONS] [PROPERTIES]
 
 where `TRACES` is the number of traces that are requested.
 
-The available options are `--duration` and `--single-thread`,
+The available option is `--single-thread`,
 with the same meaning as for the `verify` command.
 
 The traces produced during verification are saved in a `./traces_NN/` directory,

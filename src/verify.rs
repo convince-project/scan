@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time};
+use scan_core::{Oracle, Scan};
 
 use super::report::Report;
 
@@ -48,10 +48,6 @@ pub(crate) struct VerifyArgs {
     /// It has to be a value between 0 and 1 (bounds excluded).
     #[arg(short, long, default_value_t = 0.01)]
     pub(crate) precision: f64,
-    /// Max duration of execution (in model-time),
-    /// to prevent infinite executions.
-    #[arg(short, long, default_value_t = 0)]
-    pub(crate) duration: Time,
     /// Run the verification on a single thread.
     ///
     /// By default, SCAN uses multi-threading.
@@ -85,9 +81,9 @@ impl VerifyArgs {
         O: Oracle + Clone + Sync + 'a,
     {
         let report = if self.single_thread {
-            scan.adaptive(self.confidence, self.precision, self.duration)
+            scan.adaptive(self.confidence, self.precision)
         } else {
-            scan.par_adaptive(self.confidence, self.precision, self.duration)
+            scan.par_adaptive(self.confidence, self.precision)
         }
         .expect("verify");
         let successes = report.successes;
@@ -104,7 +100,6 @@ impl VerifyArgs {
             model,
             precision: self.precision,
             confidence: self.confidence,
-            duration: self.duration,
             rate,
             runs,
             successes,

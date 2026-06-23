@@ -1,4 +1,3 @@
-use scan_core::Time;
 use serde::Serialize;
 use std::fmt::Display;
 
@@ -7,7 +6,6 @@ pub(crate) struct Report {
     pub(crate) model: String,
     pub(crate) precision: f64,
     pub(crate) confidence: f64,
-    pub(crate) duration: Time,
     pub(crate) rate: f64,
     pub(crate) runs: u32,
     pub(crate) successes: u32,
