@@ -7,7 +7,10 @@ use super::{
     Action, Clock, EPSILON, Effect, Location, LocationIdx, PgError, PgGuard, ProgramGraph,
     Transition, TransitionsIterator, Var,
 };
-use crate::{BooleanExpr, Time, Val, program_graph::TimeRange};
+use crate::{
+    BooleanExpr, Time, Val,
+    program_graph::{ActionIdx, TimeRange},
+};
 
 /// Representation of a PG that can be executed transition-by-transition.
 ///
@@ -81,7 +84,7 @@ impl<'def> ProgramGraphRun<'def> {
             .map(|loc| self.def.locations[loc.0 as usize].0.iter())
             .collect_in::<bumpalo::collections::Vec<_>>(&self.bump)
             .into_bump_slice_mut();
-        TransitionsIterator::new(iters, &self.bump)
+        TransitionsIterator::new(iters, &self.bump, self.def.effects.len() as ActionIdx)
     }
 
     /// Iterates over all transitions that can be admitted in the current state.
