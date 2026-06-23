@@ -1420,7 +1420,8 @@ impl ModelBuilder {
     }
 
     fn build_model(mut self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
-        let mut model = TransitionSystem::new(self.cs);
+        let cs = self.cs.build();
+        let mut model = TransitionSystem::new(cs);
         let port_vars = self
             .port_vars
             .into_iter()
@@ -1428,10 +1429,10 @@ impl ModelBuilder {
             .collect::<Vec<_>>();
         self.ports.sort_unstable_by_key(|(c, _)| *c);
         for (channel, init) in &self.ports {
-            model.add_port(*channel, init.clone());
+            model.add_port(*channel, init.clone()).expect("add port");
         }
         for pred_expr in self.predicates {
-            model.add_predicate(pred_expr);
+            model.add_predicate(pred_expr).expect("add predicate");
         }
         // Shrink model storage (just an optimization);
         model.shrink();

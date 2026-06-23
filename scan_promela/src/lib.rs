@@ -92,7 +92,8 @@ fn process_file(path: &Path, debug_mode: bool) -> anyhow::Result<(Scan<PmtlOracl
 
     /* ---------- 5. build: AST → Channel System ------------------------------ */
     let cs = Builder::create_channel_system(ast)
-        .context("failed to create channel system from AST".to_string())?;
+        .context("failed to create channel system from AST".to_string())?
+        .build();
     info!("Channel system built successfully.");
     let tsd = TransitionSystem::new(cs);
     let oracle = PmtlOracle::new(&[], &[]);

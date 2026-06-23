@@ -102,7 +102,7 @@ where
     /// - If a variable included in the evaluation is not of [`Integer`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Integer {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, mut rng: Option<&mut R>) -> Integer {
         match self {
             IntegerExpr::Const(int) => *int,
             IntegerExpr::Var(var) => {
@@ -115,28 +115,26 @@ where
             IntegerExpr::Nat(natural_expr) => natural_expr.eval(vars, rng) as Integer,
             IntegerExpr::Rand(bounds) => {
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
-                let lower_bound = lower_bound_expr.eval(vars, rng);
-                let upper_bound = upper_bound_expr.eval(vars, rng);
-                rng.as_mut()
-                    .expect("rng")
-                    .random_range(lower_bound..upper_bound)
+                let lower_bound = lower_bound_expr.eval(vars, rng.as_deref_mut());
+                let upper_bound = upper_bound_expr.eval(vars, rng.as_deref_mut());
+                rng.expect("rng").random_range(lower_bound..upper_bound)
             }
             IntegerExpr::Opposite(integer_expr) => integer_expr.eval(vars, rng).strict_neg(),
-            IntegerExpr::Sum(integer_exprs) => integer_exprs
-                .iter()
-                .fold(0, |acc, expr| acc.strict_add(expr.eval(vars, rng))),
-            IntegerExpr::Product(integer_exprs) => integer_exprs
-                .iter()
-                .fold(1, |acc, expr| acc.strict_mul(expr.eval(vars, rng))),
+            IntegerExpr::Sum(integer_exprs) => integer_exprs.iter().fold(0, |acc, expr| {
+                acc.strict_add(expr.eval(vars, rng.as_deref_mut()))
+            }),
+            IntegerExpr::Product(integer_exprs) => integer_exprs.iter().fold(1, |acc, expr| {
+                acc.strict_mul(expr.eval(vars, rng.as_deref_mut()))
+            }),
             IntegerExpr::Div(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.strict_div(rhs)
             }
             IntegerExpr::Rem(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.strict_rem_euclid(rhs)
             }
@@ -144,7 +142,7 @@ where
             IntegerExpr::Ceil(float_expr) => float_expr.eval(vars, rng).ceil() as Integer,
             IntegerExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
-                if ite.eval(vars, rng) {
+                if ite.eval(vars, rng.as_deref_mut()) {
                     lhs.eval(vars, rng)
                 } else {
                     rhs.eval(vars, rng)
@@ -152,13 +150,13 @@ where
             }
             IntegerExpr::Min(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.min(rhs)
             }
             IntegerExpr::Max(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.max(rhs)
             }

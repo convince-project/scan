@@ -124,7 +124,7 @@ where
     ///
     /// - If a variable is not included in the evaluation;
     /// - If a variable included in the evaluation is not of Boolean type.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> bool {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, mut rng: Option<&mut R>) -> bool {
         match self {
             BooleanExpr::Const(b) => *b,
             BooleanExpr::Var(var) => {
@@ -135,68 +135,68 @@ where
                 }
             }
             BooleanExpr::Rand(float_expr) => {
-                let bernoulli = float_expr.eval(vars, rng);
+                let bernoulli = float_expr.eval(vars, rng.as_deref_mut());
                 rng.as_mut().expect("rng").random_bool(bernoulli)
             }
             BooleanExpr::And(boolean_exprs) => boolean_exprs
                 .iter()
-                .all(|boolean_expr| boolean_expr.eval(vars, rng)),
+                .all(|boolean_expr| boolean_expr.eval(vars, rng.as_deref_mut())),
             BooleanExpr::Or(boolean_exprs) => boolean_exprs
                 .iter()
-                .any(|boolean_expr| boolean_expr.eval(vars, rng)),
+                .any(|boolean_expr| boolean_expr.eval(vars, rng.as_deref_mut())),
             BooleanExpr::Implies(boolean_exprs) => {
                 let (lhs, rhs) = boolean_exprs.as_ref();
-                rhs.eval(vars, rng) || !lhs.eval(vars, rng)
+                rhs.eval(vars, rng.as_deref_mut()) || !lhs.eval(vars, rng)
             }
             BooleanExpr::Not(boolean_expr) => !&boolean_expr.eval(vars, rng),
             BooleanExpr::NatEqual(natural_expr_lhs, natural_expr_rhs) => {
-                natural_expr_lhs.eval(vars, rng) == natural_expr_rhs.eval(vars, rng)
+                natural_expr_lhs.eval(vars, rng.as_deref_mut()) == natural_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::IntEqual(integer_expr_lhs, integer_expr_rhs) => {
-                integer_expr_lhs.eval(vars, rng) == integer_expr_rhs.eval(vars, rng)
+                integer_expr_lhs.eval(vars, rng.as_deref_mut()) == integer_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::FloatEqual(float_expr_lhs, float_expr_rhs) => {
-                float_expr_lhs.eval(vars, rng) == float_expr_rhs.eval(vars, rng)
+                float_expr_lhs.eval(vars, rng.as_deref_mut()) == float_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::NatGreater(natural_expr_lhs, natural_expr_rhs) => {
-                natural_expr_lhs.eval(vars, rng) > natural_expr_rhs.eval(vars, rng)
+                natural_expr_lhs.eval(vars, rng.as_deref_mut()) > natural_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::IntGreater(integer_expr_lhs, integer_expr_rhs) => {
-                integer_expr_lhs.eval(vars, rng) > integer_expr_rhs.eval(vars, rng)
+                integer_expr_lhs.eval(vars, rng.as_deref_mut()) > integer_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::FloatGreater(float_expr_lhs, float_expr_rhs) => {
-                float_expr_lhs.eval(vars, rng) > float_expr_rhs.eval(vars, rng)
+                float_expr_lhs.eval(vars, rng.as_deref_mut()) > float_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::NatGreaterEq(natural_expr_lhs, natural_expr_rhs) => {
-                natural_expr_lhs.eval(vars, rng) >= natural_expr_rhs.eval(vars, rng)
+                natural_expr_lhs.eval(vars, rng.as_deref_mut()) >= natural_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::IntGreaterEq(integer_expr_lhs, integer_expr_rhs) => {
-                integer_expr_lhs.eval(vars, rng) >= integer_expr_rhs.eval(vars, rng)
+                integer_expr_lhs.eval(vars, rng.as_deref_mut()) >= integer_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::FloatGreaterEq(float_expr_lhs, float_expr_rhs) => {
-                float_expr_lhs.eval(vars, rng) >= float_expr_rhs.eval(vars, rng)
+                float_expr_lhs.eval(vars, rng.as_deref_mut()) >= float_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::NatLess(natural_expr_lhs, natural_expr_rhs) => {
-                natural_expr_lhs.eval(vars, rng) < natural_expr_rhs.eval(vars, rng)
+                natural_expr_lhs.eval(vars, rng.as_deref_mut()) < natural_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::IntLess(integer_expr_lhs, integer_expr_rhs) => {
-                integer_expr_lhs.eval(vars, rng) < integer_expr_rhs.eval(vars, rng)
+                integer_expr_lhs.eval(vars, rng.as_deref_mut()) < integer_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::FloatLess(float_expr_lhs, float_expr_rhs) => {
-                float_expr_lhs.eval(vars, rng) < float_expr_rhs.eval(vars, rng)
+                float_expr_lhs.eval(vars, rng.as_deref_mut()) < float_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::NatLessEq(natural_expr_lhs, natural_expr_rhs) => {
-                natural_expr_lhs.eval(vars, rng) <= natural_expr_rhs.eval(vars, rng)
+                natural_expr_lhs.eval(vars, rng.as_deref_mut()) <= natural_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::IntLessEq(integer_expr_lhs, integer_expr_rhs) => {
-                integer_expr_lhs.eval(vars, rng) <= integer_expr_rhs.eval(vars, rng)
+                integer_expr_lhs.eval(vars, rng.as_deref_mut()) <= integer_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::FloatLessEq(float_expr_lhs, float_expr_rhs) => {
-                float_expr_lhs.eval(vars, rng) <= float_expr_rhs.eval(vars, rng)
+                float_expr_lhs.eval(vars, rng.as_deref_mut()) <= float_expr_rhs.eval(vars, rng)
             }
             BooleanExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
-                if ite.eval(vars, rng) {
+                if ite.eval(vars, rng.as_deref_mut()) {
                     lhs.eval(vars, rng)
                 } else {
                     rhs.eval(vars, rng)
