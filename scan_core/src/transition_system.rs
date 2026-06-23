@@ -7,12 +7,30 @@ use log::trace;
 use rand::rngs::SmallRng;
 use rand::seq::IteratorRandom;
 use rand::{RngExt, SeedableRng, make_rng};
+use thiserror::Error;
 
 use crate::channel_system::{
-    Action, Channel, ChannelSystem, ChannelSystemBuilder, ChannelSystemRun, Event, EventType,
-    Location, PgId,
+    Action, Channel, ChannelSystem, ChannelSystemRun, CsError, Event, EventType, Location, PgId,
 };
 use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
+
+/// Errors produced by a [`TransitionSystem`].
+#[derive(Debug, Clone, Copy, Error)]
+pub enum TsError {
+    /// The CS returned an error of its own.
+    #[error("error from channel system {0:?}")]
+    ChannelSystem(CsError),
+    /// The default value set for the port is not the right type,
+    /// i.e., the type of messages of the channel.
+    #[error("default port value is not the type of the channel {0:?}")]
+    WrongPortType(Channel),
+}
+
+impl From<CsError> for TsError {
+    fn from(value: CsError) -> Self {
+        Self::ChannelSystem(value)
+    }
+}
 
 /// An atomic variable exposed by the [`ChannelSystem to the TransitionSystem`].
 #[derive(Debug, Clone, Copy)]
@@ -35,8 +53,7 @@ pub struct TransitionSystem {
 
 impl TransitionSystem {
     /// Creates a new [`CsModel`] from a [`ChannelSystemBuilder`].
-    pub fn new(cs: ChannelSystemBuilder) -> Self {
-        let cs = cs.build();
+    pub fn new(cs: ChannelSystem) -> Self {
         Self {
             ports: Vec::new(),
             vals: Vec::new(),
@@ -47,10 +64,12 @@ impl TransitionSystem {
 
     /// Adds a new port to the [`CsModel`],
     /// which is given by an [`Channel`] and a default [`Val`] value.
-    pub fn add_port(&mut self, channel: Channel, mut value: Vec<Val>) {
-        let len = self.cs.channels()[u16::from(channel) as usize].0.len();
-        assert_eq!(len, value.len());
-        // TODO FIXME: error handling and type checking.
+    pub fn add_port(&mut self, channel: Channel, mut value: Vec<Val>) -> Result<(), TsError> {
+        let types = self.cs.channel(channel)?.0;
+        if types.len() != value.len() || types.iter().zip(&value).any(|(t, val)| val.r#type() != *t)
+        {
+            return Err(TsError::WrongPortType(channel));
+        }
         // Keep ports list ordered
         // Don't insert duplicated ports
         if let Err(index) = self.ports.binary_search(&channel) {
@@ -60,11 +79,12 @@ impl TransitionSystem {
         }
         assert!(self.ports.is_sorted());
         assert_eq!(self.ports.len(), self.vals.len());
+        Ok(())
     }
 
     /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
-    pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) {
+    pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) -> Result<(), TsError> {
         // Make sure predicate type-checks
         let _ = predicate.eval::<SmallRng>(
             &|port| match port {
@@ -77,9 +97,10 @@ impl TransitionSystem {
                 }
                 Atom::Event(..) => Val::Boolean(false),
             },
-            &mut None,
+            None,
         );
         self.predicates.push(predicate);
+        Ok(())
     }
 
     /// Shrink ports storage to optimize space use.
@@ -189,7 +210,7 @@ impl<'def> TransitionSystemRun<'def> {
                         }))
                     }
                 },
-                &mut None,
+                None,
             )
         })
     }

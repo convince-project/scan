@@ -212,7 +212,7 @@ where
     ///
     /// Will assume the expression (with the variable assignment) is well-typed,
     /// and may panic if producing an unexpected type.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Val {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: Option<&mut R>) -> Val {
         match self {
             Expression::Boolean(boolean_expr) => Val::Boolean(boolean_expr.eval(vars, rng)),
             Expression::Natural(natural_expr) => Val::Natural(natural_expr.eval(vars, rng)),
@@ -228,17 +228,15 @@ where
     pub fn eval_deterministic(&self, vars: &dyn Fn(V) -> Val) -> Val {
         match self {
             Expression::Boolean(boolean_expr) => {
-                Val::Boolean(boolean_expr.eval::<SmallRng>(vars, &mut None))
+                Val::Boolean(boolean_expr.eval::<SmallRng>(vars, None))
             }
             Expression::Natural(natural_expr) => {
-                Val::Natural(natural_expr.eval::<SmallRng>(vars, &mut None))
+                Val::Natural(natural_expr.eval::<SmallRng>(vars, None))
             }
             Expression::Integer(integer_expr) => {
-                Val::Integer(integer_expr.eval::<SmallRng>(vars, &mut None))
+                Val::Integer(integer_expr.eval::<SmallRng>(vars, None))
             }
-            Expression::Float(float_expr) => {
-                Val::Float(float_expr.eval::<SmallRng>(vars, &mut None))
-            }
+            Expression::Float(float_expr) => Val::Float(float_expr.eval::<SmallRng>(vars, None)),
         }
     }
 
@@ -257,7 +255,7 @@ where
     /// Returns an error if expression contains variables.
     pub fn eval_constant(&self) -> Result<Val, TypeError> {
         if self.is_constant() {
-            Ok(self.eval::<rand::rngs::SmallRng>(&|_| panic!("no vars"), &mut None))
+            Ok(self.eval::<rand::rngs::SmallRng>(&|_| panic!("no vars"), None))
         } else {
             Err(TypeError::UnknownVar)
         }

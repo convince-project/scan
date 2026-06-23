@@ -94,7 +94,7 @@ where
     /// - If a variable included in the evaluation is not of [`Float`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Float {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, mut rng: Option<&mut R>) -> Float {
         match self {
             FloatExpr::Const(float) => *float,
             FloatExpr::Var(var) => {
@@ -110,29 +110,30 @@ where
             FloatExpr::Int(integer_expr) => integer_expr.eval(vars, rng) as f64,
             FloatExpr::Rand(bounds) => {
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
-                let lower_bound = lower_bound_expr.eval(vars, rng);
-                let upper_bound = upper_bound_expr.eval(vars, rng);
+                let lower_bound = lower_bound_expr.eval(vars, rng.as_deref_mut());
+                let upper_bound = upper_bound_expr.eval(vars, rng.as_deref_mut());
                 rng.as_mut()
                     .expect("rng")
                     .random_range(lower_bound..upper_bound)
             }
             FloatExpr::Opposite(float_expr) => -float_expr.eval(vars, rng),
-            FloatExpr::Sum(float_exprs) => {
-                float_exprs.iter().map(|expr| expr.eval(vars, rng)).sum()
-            }
+            FloatExpr::Sum(float_exprs) => float_exprs
+                .iter()
+                .map(|expr| expr.eval(vars, rng.as_deref_mut()))
+                .sum(),
             FloatExpr::Product(float_exprs) => float_exprs
                 .iter()
-                .map(|expr| expr.eval(vars, rng))
+                .map(|expr| expr.eval(vars, rng.as_deref_mut()))
                 .product(),
             FloatExpr::Div(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs / rhs
             }
             FloatExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
-                if ite.eval(vars, rng) {
+                if ite.eval(vars, rng.as_deref_mut()) {
                     lhs.eval(vars, rng)
                 } else {
                     rhs.eval(vars, rng)
@@ -140,13 +141,13 @@ where
             }
             FloatExpr::Min(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.min(rhs)
             }
             FloatExpr::Max(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.max(rhs)
             }

@@ -639,9 +639,10 @@ impl JaniBuilder {
             }
         }
 
+        let cs = cs.build();
         let mut cs_model = TransitionSystem::new(cs);
         // global state port, only one we need
-        cs_model.add_port(global_state_channel, global_state_init);
+        cs_model.add_port(global_state_channel, global_state_init)?;
 
         // Add properties
         let properties = if properties.is_empty() {
@@ -709,9 +710,7 @@ impl JaniBuilder {
         property_exprs
             .iter()
             .flat_map(|prop| extract_predicates(prop).into_iter())
-            .for_each(|predicate| {
-                cs_model.add_predicate(predicate);
-            });
+            .try_for_each(|predicate| cs_model.add_predicate(predicate))?;
         property_exprs
             .into_iter()
             .map(|p| extract_mtl(&p, &mut idx))

@@ -92,7 +92,7 @@ where
     /// - If a variable included in the evaluation is not of [`Natural`] type;
     /// - Division by 0;
     /// - Overflow.
-    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, rng: &mut Option<R>) -> Natural {
+    pub fn eval<R: Rng>(&self, vars: &dyn Fn(V) -> Val, mut rng: Option<&mut R>) -> Natural {
         match self {
             NaturalExpr::Const(nat) => *nat,
             NaturalExpr::Var(var) => {
@@ -104,34 +104,34 @@ where
             }
             NaturalExpr::Rand(bounds) => {
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
-                let lower_bound = lower_bound_expr.eval(vars, rng);
-                let upper_bound = upper_bound_expr.eval(vars, rng);
+                let lower_bound = lower_bound_expr.eval(vars, rng.as_deref_mut());
+                let upper_bound = upper_bound_expr.eval(vars, rng.as_deref_mut());
                 rng.as_mut()
                     .expect("rng")
                     .random_range(lower_bound..upper_bound)
             }
-            NaturalExpr::Sum(natural_exprs) => natural_exprs
-                .iter()
-                .fold(0, |acc, expr| acc.strict_add(expr.eval(vars, rng))),
-            NaturalExpr::Product(natural_exprs) => natural_exprs
-                .iter()
-                .fold(1, |acc, expr| acc.strict_mul(expr.eval(vars, rng))),
+            NaturalExpr::Sum(natural_exprs) => natural_exprs.iter().fold(0, |acc, expr| {
+                acc.strict_add(expr.eval(vars, rng.as_deref_mut()))
+            }),
+            NaturalExpr::Product(natural_exprs) => natural_exprs.iter().fold(1, |acc, expr| {
+                acc.strict_mul(expr.eval(vars, rng.as_deref_mut()))
+            }),
             NaturalExpr::Rem(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.strict_rem_euclid(rhs)
             }
             NaturalExpr::Div(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs / rhs
             }
             NaturalExpr::Abs(integer_expr) => integer_expr.eval(vars, rng).unsigned_abs(),
             NaturalExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
-                if ite.eval(vars, rng) {
+                if ite.eval(vars, rng.as_deref_mut()) {
                     lhs.eval(vars, rng)
                 } else {
                     rhs.eval(vars, rng)
@@ -139,13 +139,13 @@ where
             }
             NaturalExpr::Min(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.min(rhs)
             }
             NaturalExpr::Max(args) => {
                 let (lhs_expr, rhs_expr) = args.as_ref();
-                let lhs = lhs_expr.eval(vars, rng);
+                let lhs = lhs_expr.eval(vars, rng.as_deref_mut());
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.max(rhs)
             }

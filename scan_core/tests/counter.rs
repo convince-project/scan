@@ -23,10 +23,11 @@ fn counter_pg() {
         cs.add_transition(pg, initial, action, initial, Some(guard))
             .unwrap();
     }
-    let cs = TransitionSystem::new(cs);
-    let mut pg: TransitionSystemRun = cs.new_run();
-    pg.transition();
-    while pg.last_event().is_some() {
-        pg.transition();
+    let cs = cs.build();
+    let ts = TransitionSystem::new(cs);
+    let mut run: TransitionSystemRun = ts.new_run();
+    run.transition();
+    while run.last_event().is_some() {
+        run.transition();
     }
 }

@@ -365,6 +365,16 @@ impl ChannelSystem {
     pub fn channels(&self) -> &[(Vec<Type>, ChannelCapacity)] {
         &self.channels
     }
+
+    /// Returns the type and capacity of the given channel
+    /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
+    #[inline]
+    pub fn channel(&self, channel: Channel) -> Result<(&[Type], ChannelCapacity), CsError> {
+        self.channels
+            .get(channel.0 as usize)
+            .map(|(types, cap)| (types.as_slice(), *cap))
+            .ok_or(CsError::MissingChannel(channel))
+    }
 }
 
 #[cfg(test)]

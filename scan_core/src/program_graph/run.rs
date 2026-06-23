@@ -167,8 +167,7 @@ impl<'def> ProgramGraphRun<'def> {
         invariants: &[(Clock, TimeRange)],
         resets: &[Clock],
     ) -> bool {
-        guard
-            .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
+        guard.is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], None))
             && constraints.iter().all(|(c, range)| {
                 let time = self.clocks[c.0 as usize];
                 range.contains(&time)
@@ -190,8 +189,7 @@ impl<'def> ProgramGraphRun<'def> {
         constraints: &[(Clock, TimeRange)],
         invariants: &[(Clock, TimeRange)],
     ) -> bool {
-        guard
-            .is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], &mut None))
+        guard.is_none_or(|guard| guard.eval::<SmallRng>(&|var| self.vars[var.0 as usize], None))
             && constraints.iter().chain(invariants).all(|(c, range)| {
                 let time = self.clocks[c.0 as usize];
                 range.contains(&time)
@@ -267,9 +265,9 @@ impl<'def> ProgramGraphRun<'def> {
         } else if let Effect::Effects(ref effects, ref resets) = self.def.effects[action.0 as usize]
         {
             if self.active_transitions(action, post_states, resets) {
-                let rng = &mut Some(rng);
                 effects.iter().for_each(|(var, effect)| {
-                    self.vars[var.0 as usize] = effect.eval(&|var| self.vars[var.0 as usize], rng)
+                    self.vars[var.0 as usize] =
+                        effect.eval(&|var| self.vars[var.0 as usize], Some(rng))
                 });
                 resets
                     .iter()
@@ -324,10 +322,9 @@ impl<'def> ProgramGraphRun<'def> {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
             if let Effect::Send(effects) = &self.def.effects[action.0 as usize] {
-                let rng = &mut Some(rng);
                 let vals = effects
                     .iter()
-                    .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], rng))
+                    .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], Some(rng)))
                     .collect();
                 self.current_states.copy_from_slice(post_states);
                 Ok(vals)
