@@ -15,6 +15,6 @@ jobs:
     - name: Check fmt
       run: cargo fmt --all -- --check
     - name: Check
-      run: cargo check --verbose
+      run: cargo check --verbose --all-features
     - name: Run tests
-      run: cargo test --verbose --workspace --all-targets
+      run: cargo test --verbose --workspace --all-targets --all-features
