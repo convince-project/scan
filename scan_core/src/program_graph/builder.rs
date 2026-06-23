@@ -472,6 +472,7 @@ impl ProgramGraphBuilder {
                 let mut transitions = Vec::from_iter(transitions);
                 transitions.shrink_to_fit();
                 transitions.iter_mut().for_each(|(_, loc_transitions)| {
+                    assert!(!loc_transitions.is_empty());
                     loc_transitions.sort_unstable_by_key(|(p, ..)| *p);
                     loc_transitions.shrink_to_fit();
                 });
