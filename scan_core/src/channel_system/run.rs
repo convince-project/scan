@@ -345,4 +345,16 @@ impl<'def> ChannelSystemRun<'def> {
             Ok(())
         }
     }
+
+    /// Checks if it is possible to wait a given amount of time-units without violating the time invariants.
+    #[inline]
+    pub fn can_wait(&self, delta: Time) -> bool {
+        self.program_graphs.iter().all(|pg| pg.can_wait(delta))
+    }
+
+    /// Returns `true` if there is any transition from the current state that will be unlocked at some point in the future.
+    #[inline]
+    pub fn is_waiting(&self) -> bool {
+        self.can_wait(1) && self.program_graphs.iter().any(|pg| pg.is_waiting())
+    }
 }

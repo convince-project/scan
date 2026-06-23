@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan, Time, Tracer};
+use scan_core::{Oracle, Scan, Tracer};
 
 const ALL_PROPS_ERR: &str =
     "the --all flag is incompatible with individually-specified properties.\n
@@ -24,9 +24,6 @@ pub(crate) struct TraceArgs {
     /// Number of traces to save.
     #[arg(long, default_value_t = 1)]
     pub(crate) traces: usize,
-    /// Max duration of execution (in model-time).
-    #[arg(short, long, default_value_t = 0)]
-    pub(crate) duration: Time,
     /// Run the model execution on a single thread.
     ///
     /// By default, SCAN uses multi-threading.
@@ -58,9 +55,9 @@ impl TraceArgs {
         Tr::ModelData: Sync,
     {
         if self.single_thread {
-            scan.traces::<Tr>(self.traces, self.duration, path, model);
+            scan.traces::<Tr>(self.traces, path, model);
         } else {
-            scan.par_traces::<Tr>(self.traces, self.duration, path, model);
+            scan.par_traces::<Tr>(self.traces, path, model);
         }
     }
 }

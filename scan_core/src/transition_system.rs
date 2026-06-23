@@ -144,7 +144,7 @@ impl<'def> TransitionSystemRun<'def> {
     ///
     /// Used to generate Montecarlo-like executions
     pub fn transition(&mut self) {
-        self.last_event = self.montecarlo_execution();
+        self.last_event = self.montecarlo_transition();
         if let Some((_, ref event)) = self.last_event
             && let EventType::Send(ref vals) = event.event_type
             && let Ok(index) = self.ports.binary_search(&event.channel)
@@ -202,32 +202,27 @@ impl<'def> TransitionSystemRun<'def> {
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
     pub(crate) fn experiment<O: Oracle>(
         &mut self,
-        duration: Time,
         mut oracle: O,
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
-        trace!("new run starting");
         // reuse vector to avoid allocations
         let mut labels = Vec::from_iter(self.labels());
         // Initialize oracle with TS initial state
         oracle.update_state(&labels);
-        while self.time() <= duration {
+        while oracle.output_guarantees().any(|b| b.is_none()) {
             self.transition();
-            if self.last_event().is_some() {
-                labels.clear();
-                labels.extend(self.labels());
-                oracle.update_state(&labels);
-            } else {
-                self.time_tick();
-                oracle.update_time(self.time());
-            }
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
-            } else if oracle.output_guarantees().all(|b| b.is_some()) {
-                trace!("run complete early");
-                let verified = Vec::from_iter(oracle.output_guarantees().map(Option::unwrap));
-                return Some(verified);
+            } else if self.last_event().is_some() {
+                labels.clear();
+                labels.extend(self.labels());
+                oracle.update_state(&labels);
+            } else if self.cs.is_waiting() {
+                self.time_tick();
+                oracle.update_time(self.time());
+            } else {
+                break;
             }
         }
         trace!("run complete");
@@ -239,7 +234,6 @@ impl<'def> TransitionSystemRun<'def> {
     /// and process the execution trace via the given [`Tracer`].
     pub(crate) fn trace<T, O: Oracle>(
         &mut self,
-        duration: Time,
         mut oracle: O,
         mut tracer: T,
         model_data: &T::ModelData,
@@ -254,16 +248,18 @@ impl<'def> TransitionSystemRun<'def> {
         oracle.update_state(&labels);
         // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
         // Same issue for time-tick events
-        while self.time() <= duration {
+        while oracle.output_guarantees().any(|b| b.is_none()) {
             self.transition();
             if let Some((action, event)) = self.last_event() {
                 tracer.trace(model_data, *action, event, self.time(), self.state());
                 labels.clear();
                 labels.extend(self.labels());
                 oracle.update_state(&labels);
-            } else {
+            } else if self.cs.is_waiting() {
                 self.time_tick();
                 oracle.update_time(self.time());
+            } else {
+                break;
             }
         }
         trace!("run complete");
@@ -271,7 +267,7 @@ impl<'def> TransitionSystemRun<'def> {
         Some(verified)
     }
 
-    fn montecarlo_execution(&mut self) -> Option<(Action, Event)> {
+    fn montecarlo_transition(&mut self) -> Option<(Action, Event)> {
         let mut rand1 = SmallRng::from_rng(&mut self.rng);
         // Setting pgs_left as length resets the queue
         let mut pgs_left = self.pg_list.len();

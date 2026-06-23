@@ -331,8 +331,8 @@ where
 {
     if !json {
         println!(
-            "Verifying {model} (-p {} -c {} -d {}) {:?}",
-            args.precision, args.confidence, args.duration, args.properties
+            "Verifying {model} (-p {} -c {}) {:?}",
+            args.precision, args.confidence, args.properties
         );
     }
     if let Some(bar) = progress {

@@ -1,4 +1,4 @@
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 
 use bumpalo::{Bump, collections::CollectIn};
 use rand::{Rng, rngs::SmallRng};
@@ -7,10 +7,7 @@ use super::{
     Action, Clock, EPSILON, Effect, Location, LocationIdx, PgError, PgGuard, ProgramGraph,
     Transition, TransitionsIterator, Var,
 };
-use crate::{
-    BooleanExpr, Time, Val,
-    program_graph::{ActionIdx, TimeRange},
-};
+use crate::{BooleanExpr, Time, Val, program_graph::TimeRange};
 
 /// Representation of a PG that can be executed transition-by-transition.
 ///
@@ -84,7 +81,7 @@ impl<'def> ProgramGraphRun<'def> {
             .map(|loc| self.def.locations[loc.0 as usize].0.iter())
             .collect_in::<bumpalo::collections::Vec<_>>(&self.bump)
             .into_bump_slice_mut();
-        TransitionsIterator::new(iters, &self.bump, self.def.effects.len() as ActionIdx)
+        TransitionsIterator::new(iters, &self.bump)
     }
 
     /// Iterates over all transitions that can be admitted in the current state.
@@ -297,7 +294,8 @@ impl<'def> ProgramGraphRun<'def> {
                 // Invariants need to be satisfied during the whole wait.
                 let start_time = self.clocks[c.0 as usize];
                 let end_time = start_time + delta;
-                range.contains(&start_time) && range.contains(&end_time)
+                // range.contains(&start_time) &&
+                range.contains(&end_time)
             })
     }
 
@@ -366,8 +364,6 @@ impl<'def> ProgramGraphRun<'def> {
                         *self.vars.get_mut(var.0 as usize).expect("variable exists") = val
                     });
                     self.current_states.copy_from_slice(post_states);
-                    // self.current_states = post_states;
-                    // self.update_buf();
                     Ok(())
                 } else {
                     Err(PgError::TypeMismatch)
@@ -378,5 +374,40 @@ impl<'def> ProgramGraphRun<'def> {
         } else {
             Err(PgError::UnsatisfiedGuard)
         }
+    }
+
+    /// Returns `true` if there is any transition from the current state that will be unlocked at some point in the future,
+    /// either because of a temporal guard on the transition becoming true, or a time invariant on the post-location becoming true.
+    pub fn is_waiting(&self) -> bool {
+        let unsatisfied_lower_bound = |(c, range): &(Clock, TimeRange)| {
+            let time = self.clocks[c.0 as usize];
+            let bound = range.start_bound();
+            match bound {
+                Bound::Included(b) => time < *b,
+                Bound::Excluded(b) => time <= *b,
+                Bound::Unbounded => false,
+            }
+        };
+        let satisfied_upper_bound = |(c, range): &(Clock, TimeRange)| {
+            let time = self.clocks[c.0 as usize];
+            let bound = range.end_bound();
+            match bound {
+                Bound::Included(b) => time <= *b,
+                Bound::Excluded(b) => time < *b,
+                Bound::Unbounded => true,
+            }
+        };
+        self.can_wait(1)
+            && self.transitions().any(move |(_, loc_transitions)| {
+                loc_transitions.iter().any(move |transitions| {
+                    transitions.iter().any(move |(post_state, _, constraints)| {
+                        let invariants = self.def.locations[post_state.0 as usize].1.as_slice();
+                        (constraints.iter().any(unsatisfied_lower_bound)
+                            && constraints.iter().all(satisfied_upper_bound))
+                            || (invariants.iter().any(unsatisfied_lower_bound)
+                                && invariants.iter().all(satisfied_upper_bound))
+                    })
+                })
+            })
     }
 }
