@@ -1,5 +1,6 @@
 use std::ops::{Add, Div, Mul, Neg};
 
+use get_size2::GetSize;
 use rand::{Rng, RngExt};
 
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
 pub type Float = f64;
 
 /// Floating-point numerical expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GetSize)]
 pub enum FloatExpr<V>
 where
     V: Clone,

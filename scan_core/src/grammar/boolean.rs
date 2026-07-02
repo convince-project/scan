@@ -1,5 +1,6 @@
 use std::ops::{BitAnd, BitOr, Not};
 
+use get_size2::GetSize;
 use rand::{Rng, RngExt};
 
 use crate::{
@@ -8,7 +9,7 @@ use crate::{
 };
 
 /// Boolean expressions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GetSize)]
 pub enum BooleanExpr<V>
 where
     V: Clone,

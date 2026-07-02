@@ -6,6 +6,7 @@ use crate::channel_system::ChannelCapacity;
 use crate::grammar::{BooleanExpr, Type};
 use crate::program_graph::ProgramGraph;
 use crate::{Expression, TimeRange, Val};
+use get_size2::GetSize;
 use log::info;
 use std::collections::BTreeMap;
 
@@ -615,11 +616,6 @@ impl ChannelSystemBuilder {
 
     /// Produces a [`ChannelSystem`] defined by the [`ChannelSystemBuilder`]'s data and consuming it.
     pub fn build(mut self) -> ChannelSystem {
-        info!(
-            "create Channel System with:\n{} Program Graphs\n{} channels",
-            self.program_graphs.len(),
-            self.channels.len(),
-        );
         let mut program_graphs: Vec<ProgramGraph> = self
             .program_graphs
             .into_iter()
@@ -643,11 +639,20 @@ impl ChannelSystemBuilder {
 
         assert_eq!(communications_pg_idxs.len(), program_graphs.len() + 1);
 
-        ChannelSystem {
+        let cs = ChannelSystem {
             channels: self.channels,
             communications,
             communications_pg_idxs,
             program_graphs,
-        }
+        };
+
+        info!(
+            "create Channel System with: {} Program Graphs; {} channels; size {}",
+            cs.program_graphs.len(),
+            cs.channels.len(),
+            cs.get_size(),
+        );
+
+        cs
     }
 }

@@ -483,18 +483,20 @@ impl ProgramGraphBuilder {
             .collect::<Vec<_>>();
         locations.shrink_to_fit();
         // Build program graph
-        info!(
-            "create Program Graph with: {} locations; {} actions; {} vars",
-            locations.len(),
-            self.effects.len(),
-            self.vars.len()
-        );
-        ProgramGraph {
+        let pg = ProgramGraph {
             initial_states: self.initial_states,
             effects: self.effects,
             locations,
             vars: self.vars,
             clocks: self.clocks,
-        }
+        };
+        info!(
+            "create Program Graph with: {} locations; {} actions; {} vars; size {}",
+            pg.locations.len(),
+            pg.effects.len(),
+            pg.vars.len(),
+            pg.get_size()
+        );
+        pg
     }
 }

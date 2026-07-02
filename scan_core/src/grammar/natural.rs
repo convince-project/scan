@@ -1,5 +1,6 @@
 use std::ops::{Add, Div, Mul, Rem};
 
+use get_size2::GetSize;
 use rand::{Rng, RngExt};
 
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
 pub type Natural = u64;
 
 /// A [`Natural`] number expression
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GetSize)]
 pub enum NaturalExpr<V>
 where
     V: Clone,

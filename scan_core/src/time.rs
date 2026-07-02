@@ -1,5 +1,7 @@
 use std::ops::{Bound, RangeBounds};
 
+use get_size2::GetSize;
+
 /// The type that represents time.
 pub type Time = u32;
 
@@ -9,6 +11,8 @@ pub struct TimeRange {
     lower_bound: Bound<Time>,
     upper_bound: Bound<Time>,
 }
+
+impl GetSize for TimeRange {}
 
 impl RangeBounds<Time> for TimeRange {
     fn start_bound(&self) -> Bound<&Time> {

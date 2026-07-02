@@ -82,6 +82,7 @@ mod transitions;
 
 use crate::{TimeRange, grammar::*};
 pub use builder::*;
+use get_size2::GetSize;
 pub use run::ProgramGraphRun;
 use thiserror::Error;
 use transitions::TransitionsIterator;
@@ -93,7 +94,7 @@ pub type LocationIdx = u32;
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
 pub struct Location(LocationIdx);
 
 /// The index for [`Action`]s in a [`ProgramGraph`].
@@ -103,8 +104,7 @@ pub type ActionIdx = u32;
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
 pub struct Action(ActionIdx);
 
 impl From<Action> for ActionIdx {
@@ -122,14 +122,14 @@ pub(crate) const EPSILON: Action = Action(ActionIdx::MAX);
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize)]
 pub struct Var(u16);
 
 /// An indexing object for clocks in a PG.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
 pub struct Clock(u16);
 
 /// An expression using PG's [`Var`] as variables.
@@ -138,7 +138,7 @@ pub type PgExpression = Expression<Var>;
 /// A Boolean expression over [`Var`] variables.
 type PgGuard = BooleanExpr<Var>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GetSize)]
 enum Effect {
     Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
     Send(Vec<Expression<Var>>),
@@ -244,7 +244,7 @@ pub enum PgError {
 /// let mut rng: SmallRng = rand::make_rng();
 /// pg.transition(e, &[initial], &mut rng).expect("transition is active");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GetSize)]
 pub struct ProgramGraph {
     initial_states: Vec<Location>,
     effects: Vec<Effect>,

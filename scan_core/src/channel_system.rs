@@ -117,6 +117,7 @@ use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
 };
 pub use builder::*;
+use get_size2::GetSize;
 pub use run::ChannelSystemRun;
 use thiserror::Error;
 
@@ -126,7 +127,7 @@ type PgIndex = u16;
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
 pub struct PgId(PgIndex);
 
 impl From<PgId> for PgIndex {
@@ -140,7 +141,7 @@ impl From<PgId> for PgIndex {
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
 pub struct Channel(u16);
 
 impl From<Channel> for u16 {
@@ -177,11 +178,11 @@ pub struct Var(PgId, PgVar);
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 ///
 /// See also [`PgClock`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize)]
 pub struct Clock(PgId, PgClock);
 
 /// A message to be sent through a CS's channel.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize)]
 pub enum Message {
     /// Sending the computed value of an expression to a channel.
     Send,
@@ -252,7 +253,7 @@ pub enum CsError {
 }
 
 /// A Channel System event related to a channel.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, GetSize)]
 pub struct Event {
     /// The PG producing the event in the course of a transition.
     pub pg_id: PgId,
@@ -263,7 +264,7 @@ pub struct Event {
 }
 
 /// A Channel System event type related to a channel.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, GetSize)]
 pub enum EventType {
     /// Sending a value to a channel.
     Send(Vec<Val>),
@@ -276,7 +277,7 @@ pub enum EventType {
 }
 
 /// The capacity type of a channel:
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, GetSize)]
 pub enum ChannelCapacity {
     /// A (in)finite-capacity FIFO queue.
     Queue(Option<usize>),
@@ -318,7 +319,7 @@ pub enum ChannelCapacity {
 /// assert_eq!(post_loc, initial);
 /// cs.transition(pg_id, e, &[initial]).expect("transition is active");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GetSize)]
 pub struct ChannelSystem {
     channels: Vec<(Vec<Type>, ChannelCapacity)>,
     communications: Vec<Option<(Channel, Message)>>,

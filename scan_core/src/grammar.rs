@@ -10,6 +10,7 @@ mod float;
 mod integer;
 mod natural;
 
+use get_size2::GetSize;
 use rand::{Rng, rngs::SmallRng};
 use std::{
     hash::Hash,
@@ -38,7 +39,7 @@ pub enum TypeError {
 }
 
 /// The types supported by the language internally used by PGs and CSs.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize)]
 pub enum Type {
     /// Boolean type.
     Boolean,
@@ -64,7 +65,7 @@ impl Type {
 }
 
 /// Possible values for each [`Type`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, GetSize)]
 pub enum Val {
     /// Boolean values.
     Boolean(bool),
@@ -117,7 +118,7 @@ impl From<Float> for Val {
 /// [`Expression<V>`] encodes the language in which `V` is the type of variables.
 ///
 /// Note that not all expressions that can be formed are well-typed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, GetSize)]
 pub enum Expression<V>
 where
     V: Clone,
