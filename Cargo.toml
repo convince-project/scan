@@ -54,7 +54,7 @@ members = [
 ]
 
 [workspace.dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 csv = "1.4.0"
 log = "0.4.33"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -65,8 +65,8 @@ thiserror = "2.0.18"
 anyhow = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
 clap-verbosity-flag = "3.0.4"
-env_logger = "0.11.10"
-indicatif = { version = "0.18.4", features = ["improved_unicode"] }
+env_logger = "0.11.11"
+indicatif = { version = "0.18.6", features = ["improved_unicode"] }
 log = { workspace = true }
 smc_scan_core = { version = "0.2.0", path = "scan_core" }
 smc_scan_jani = { version = "0.2.0", path = "scan_jani", optional = true }
