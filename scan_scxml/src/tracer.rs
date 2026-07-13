@@ -16,7 +16,7 @@ impl Drop for TracePrinter {
 }
 
 impl TracePrinter {
-    const HEADER: [&'static str; 5] = ["Time", "Event", "Origin", "Target", "Values"];
+    const HEADER: [&'static str; 5] = ["Time", "Event", "Origin", "Target", "Params"];
 
     fn format_state(&self, model: &ScxmlModel, event: &Event, ports: &[Vec<Val>]) -> Vec<String> {
         // Assumes model.port_vals are ordered
@@ -234,7 +234,7 @@ fn format_val_from_def(
                 .collect::<Vec<_>>();
             if spread_structs {
                 // print on multiple lines
-                format!("{fields:#?}")
+                fields.join("\n")
             } else {
                 format!("{fields:?}")
             }
