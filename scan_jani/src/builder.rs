@@ -44,35 +44,31 @@ struct JaniBuilder {
 #[derive(Debug, Clone)]
 struct AutomatonBuilder {
     // tracks locations and their "idle" side-location
-    locations: HashMap<String, (Location, Natural)>,
+    locations: HashMap<String, Location>,
     local_vars: HashMap<String, (Var, Val, Type)>,
-    idle_locations: HashMap<Action, Location>,
-    return_location: Location,
+    idle_locations: HashMap<(Location, Action), Location>,
     // assign action name -> cs base action + destination actions
     dest_actions: HashMap<
         // triggering sync action
         Action,
         Vec<(
             // dest action
-            Action,
+            Option<Action>,
             // dest location
             Location,
         )>,
     >,
     rng: Var,
-    current_loc: Var,
 }
 
 impl AutomatonBuilder {
-    fn new(rng: Var, current_loc: Var, return_location: Location) -> Self {
+    fn new(rng: Var) -> Self {
         AutomatonBuilder {
             locations: HashMap::new(),
             local_vars: HashMap::new(),
             dest_actions: HashMap::new(),
             rng,
-            current_loc,
             idle_locations: HashMap::new(),
-            return_location,
         }
     }
 }
@@ -162,10 +158,8 @@ impl JaniBuilder {
 
         for element in jani_model.system.elements.iter() {
             let rng = cs.new_var(pg_id, Val::from(0.)).expect("new var");
-            let current_loc = cs.new_var(pg_id, Val::from(0 as Natural)).expect("new var");
-            let return_location = cs.new_location(pg_id).expect("new location");
 
-            let mut automaton_builder = AutomatonBuilder::new(rng, current_loc, return_location);
+            let mut automaton_builder = AutomatonBuilder::new(rng);
             let automaton = automata
                 .get(element.automaton.as_str())
                 .ok_or_else(|| anyhow!("missing automaton {}", element.automaton))?;
@@ -175,23 +169,14 @@ impl JaniBuilder {
             assert!(automaton_builder.locations.is_empty());
             automaton_builder
                 .locations
-                .insert(Self::INITIAL.to_string(), (initial, 0));
+                .insert(Self::INITIAL.to_string(), initial);
 
             // create locations
             for location in &automaton.locations {
                 let loc = cs.new_location(pg_id).expect("new location");
-                // Give every location an ID unique within the automaton
-                // (not necessarily globally unique)
-                let loc_id = automaton_builder.locations.len() as Natural;
                 automaton_builder
                     .locations
-                    .insert(location.name.clone(), (loc, loc_id));
-                let dest_guard = BooleanExpr::NatEqual(
-                    scan_core::NaturalExpr::from(loc_id),
-                    scan_core::NaturalExpr::Var(current_loc),
-                );
-                cs.add_autonomous_transition(pg_id, return_location, loc, Some(dest_guard))
-                    .expect("add transition");
+                    .insert(location.name.clone(), loc);
             }
 
             // Add local variables
@@ -252,39 +237,29 @@ impl JaniBuilder {
 
             // elements unaffected by sync must ignore the sync action in every location
             // by moving to idle location
-            let mut any_unaffected = false;
             for (element_idx, _) in sync
                 .synchronise
                 .iter()
                 .enumerate()
                 .filter(|(_, action)| action.is_none())
             {
-                any_unaffected = true;
                 let automaton_builder = self
                     .automaton_builders
                     .get_mut(element_idx)
                     .expect("automaton builder");
 
-                // Create idle location for this sync/automaton
-                let sync_idle_location = cs.new_location(pg_id).expect("new location");
-                automaton_builder
-                    .idle_locations
-                    .insert(sync_action, sync_idle_location);
-                cs.add_transition(
-                    pg_id,
-                    sync_idle_location,
-                    system_action,
-                    automaton_builder.return_location,
-                    None,
-                )
-                .expect("add transition");
-
-                for (location, loc_id) in automaton_builder.locations.values() {
+                for (name, location) in automaton_builder.locations.iter() {
                     // Skip initial location (not needed)
-                    if *loc_id == 0 {
+                    if name == Self::INITIAL {
                         continue;
                     }
+                    let sync_idle_location = cs.new_location(pg_id).unwrap();
+                    automaton_builder
+                        .idle_locations
+                        .insert((*location, sync_action), sync_idle_location);
                     cs.add_transition(pg_id, *location, sync_action, sync_idle_location, None)
+                        .expect("add transition");
+                    cs.add_transition(pg_id, sync_idle_location, system_action, *location, None)
                         .expect("add transition");
                 }
             }
@@ -354,20 +329,29 @@ impl JaniBuilder {
                         edge.action.as_deref().unwrap_or(Self::SILENT) == automaton_action
                     })
                 {
+                    let effectless_edge = edge.destinations.iter().all(|dest| {
+                        dest.assignments.is_empty()
+                            && automaton
+                                .locations
+                                .iter()
+                                .find(|loc| loc.name == dest.location)
+                                .is_some_and(|loc| loc.transient_values.is_empty())
+                    });
                     let automaton_builder = self
                         .automaton_builders
                         .get(element_idx)
                         .expect("automaton builder");
-                    let (pre_loc, _) = *automaton_builder
-                        .locations
-                        .get(&edge.location)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "missing location {} in automaton {}",
-                                edge.location,
-                                element.automaton
-                            )
-                        })?;
+                    let pre_loc =
+                        *automaton_builder
+                            .locations
+                            .get(&edge.location)
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "missing location {} in automaton {}",
+                                    edge.location,
+                                    element.automaton
+                                )
+                            })?;
 
                     // Sync actions initiate a transition so they need to reset transient variables
                     // WARN: We assume that no other automaton is setting the same transient global variables,
@@ -427,12 +411,15 @@ impl JaniBuilder {
                     // and allow them to execute first while current automaton sits on edge_location
                     for prev_automaton_builder in &mut self.automaton_builders[..element_idx] {
                         if let Some(v) = prev_automaton_builder.dest_actions.get(&sync_action) {
-                            for (prev_dest_action, _prev_dest_location) in v.iter() {
+                            for prev_dest_action in v
+                                .iter()
+                                .filter_map(|(prev_dest_action, _)| *prev_dest_action)
+                            {
                                 // for the same sync_action, add previous dest_actions loops in edge_location
                                 cs.add_transition(
                                     pg_id,
                                     edge_location,
-                                    *prev_dest_action,
+                                    prev_dest_action,
                                     edge_location,
                                     None,
                                 )
@@ -444,67 +431,11 @@ impl JaniBuilder {
                     let mut prob_lower_bound: Option<FloatExpr<_>> = None;
 
                     for dest in edge.destinations.iter() {
-                        let dest_action = cs.new_action(pg_id)?;
-                        let dest_location = cs.new_location(pg_id).expect("new location");
-
+                        let prob_expr;
                         let automaton_builder = self
                             .automaton_builders
                             .get(element_idx)
                             .expect("automaton builder");
-
-                        // add effects
-                        for assignment in &dest.assignments {
-                            if assignment.index > 0 {
-                                warn!("index of assignments unsupported; ignored");
-                            }
-                            let (var, _, r#type) = automaton_builder
-                                .local_vars
-                                .get(&assignment.r#ref)
-                                .or_else(|| self.global_vars.get(&assignment.r#ref))
-                                .ok_or_else(|| anyhow!("unknown variable {}", assignment.r#ref))?;
-                            let effect = self
-                                .build_expression(
-                                    &assignment.value,
-                                    Some(*r#type),
-                                    &automaton_builder.local_vars,
-                                )
-                                .with_context(|| {
-                                    format!(
-                                        "failed building expression for assignment of variable {}",
-                                        assignment.r#ref
-                                    )
-                                })?;
-                            cs.add_effect(pg_id, dest_action, *var, effect)
-                                .expect("add effect");
-                        }
-
-                        // dest actions need to also set transient variables of destination
-                        for transient in &automaton
-                            .locations
-                            .iter()
-                            .find(|loc| loc.name == dest.location)
-                            .ok_or_else(|| {
-                                anyhow!("transition destination {} not found", dest.location)
-                            })?
-                            .transient_values
-                        {
-                            let (var, _, r#type) = automaton_builder
-                                .local_vars
-                                .get(&transient.r#ref)
-                                .or_else(|| self.global_vars.get(&transient.r#ref))
-                                .ok_or_else(|| {
-                                    anyhow!("transient value {} not found", transient.r#ref)
-                                })?;
-                            let effect = self.build_expression(
-                                &transient.value,
-                                Some(*r#type),
-                                &automaton_builder.local_vars,
-                            )?;
-                            cs.add_effect(pg_id, dest_action, *var, effect)
-                                .expect("set transient value");
-                        }
-
-                        let prob_expr;
                         if let Some(ref prob) = dest.probability {
                             let probability;
                             if let scan_core::Expression::Float(prob) = self.build_expression(
@@ -546,60 +477,8 @@ impl JaniBuilder {
                                 prob_expr = None;
                             }
                         }
-                        cs.add_transition(
-                            pg_id,
-                            edge_location,
-                            dest_action,
-                            dest_location,
-                            prob_expr,
-                        )
-                        .expect("add transition");
 
-                        // consider previous occurrences of transitions triggered by same sync action
-                        for prev_automaton_builder in &mut self.automaton_builders[..element_idx] {
-                            if let Some(v) = prev_automaton_builder.dest_actions.get(&sync_action) {
-                                for (_prev_dest_action, prev_dest_location) in v.iter() {
-                                    // add dest_action loop in previous dest_locations for the same sync_action
-                                    cs.add_transition(
-                                        pg_id,
-                                        *prev_dest_location,
-                                        dest_action,
-                                        *prev_dest_location,
-                                        None,
-                                    )
-                                    .expect("add transition");
-                                }
-                            }
-                        }
-
-                        // elements unaffected by sync must ignore the dest action in every idle location
-                        for (automaton_builder, _) in self
-                            .automaton_builders
-                            .iter()
-                            .zip(&sync.synchronise)
-                            .filter(|(_, action)| action.is_none())
-                        {
-                            let idle_loc = *automaton_builder
-                                .idle_locations
-                                .get(&sync_action)
-                                .expect("idle location");
-                            cs.add_transition(pg_id, idle_loc, dest_action, idle_loc, None)
-                                .expect("add transition");
-                        }
-
-                        // need to borrow mutably now
-                        let automaton_builder = self
-                            .automaton_builders
-                            .get_mut(element_idx)
-                            .expect("automaton builder");
-
-                        automaton_builder
-                            .dest_actions
-                            .entry(sync_action)
-                            .or_default()
-                            .push((dest_action, dest_location));
-
-                        let (post_loc, post_loc_idx) = *automaton_builder
+                        let post_loc = *automaton_builder
                             .locations
                             .get(&dest.location)
                             .ok_or_else(|| {
@@ -610,27 +489,155 @@ impl JaniBuilder {
                                 )
                             })?;
 
-                        cs.add_effect(
-                            pg_id,
-                            dest_action,
-                            automaton_builder.current_loc,
-                            CsExpression::from(post_loc_idx),
-                        )
-                        .expect("set current location");
+                        if effectless_edge {
+                            // need to borrow mutably now
+                            let automaton_builder = self
+                                .automaton_builders
+                                .get_mut(element_idx)
+                                .expect("automaton builder");
 
-                        // Send global state to channel and transition to post location
-                        if any_unaffected {
+                            automaton_builder
+                                .dest_actions
+                                .entry(sync_action)
+                                .or_default()
+                                .push((None, edge_location));
+
+                            // Send global state to channel and transition to post location
                             cs.add_transition(
                                 pg_id,
-                                dest_location,
+                                edge_location,
                                 system_action,
-                                dest_location,
-                                None,
+                                post_loc,
+                                prob_expr,
                             )
                             .expect("add location");
-                            cs.add_autonomous_transition(pg_id, dest_location, post_loc, None)
-                                .expect("add location");
                         } else {
+                            let dest_action = cs.new_action(pg_id).unwrap();
+                            let dest_location = cs.new_location(pg_id).expect("new location");
+
+                            let automaton_builder = self
+                                .automaton_builders
+                                .get(element_idx)
+                                .expect("automaton builder");
+
+                            // add effects
+                            for assignment in &dest.assignments {
+                                if assignment.index > 0 {
+                                    warn!("index of assignments unsupported; ignored");
+                                }
+                                let (var, _, r#type) = automaton_builder
+                                    .local_vars
+                                    .get(&assignment.r#ref)
+                                    .or_else(|| self.global_vars.get(&assignment.r#ref))
+                                    .ok_or_else(|| {
+                                        anyhow!("unknown variable {}", assignment.r#ref)
+                                    })?;
+                                let effect = self
+                                    .build_expression(
+                                        &assignment.value,
+                                        Some(*r#type),
+                                        &automaton_builder.local_vars,
+                                    )
+                                    .with_context(|| {
+                                        format!(
+                                            "failed building expression for assignment of variable {}",
+                                            assignment.r#ref
+                                        )
+                                    })?;
+                                cs.add_effect(pg_id, dest_action, *var, effect)
+                                    .expect("add effect");
+                            }
+
+                            // dest actions need to also set transient variables of destination
+                            for transient in &automaton
+                                .locations
+                                .iter()
+                                .find(|loc| loc.name == dest.location)
+                                .ok_or_else(|| {
+                                    anyhow!("transition destination {} not found", dest.location)
+                                })?
+                                .transient_values
+                            {
+                                let (var, _, r#type) = automaton_builder
+                                    .local_vars
+                                    .get(&transient.r#ref)
+                                    .or_else(|| self.global_vars.get(&transient.r#ref))
+                                    .ok_or_else(|| {
+                                        anyhow!("transient value {} not found", transient.r#ref)
+                                    })?;
+                                let effect = self.build_expression(
+                                    &transient.value,
+                                    Some(*r#type),
+                                    &automaton_builder.local_vars,
+                                )?;
+                                cs.add_effect(pg_id, dest_action, *var, effect)
+                                    .expect("set transient value");
+                            }
+
+                            cs.add_transition(
+                                pg_id,
+                                edge_location,
+                                dest_action,
+                                dest_location,
+                                prob_expr,
+                            )
+                            .expect("add transition");
+
+                            // consider previous occurrences of transitions triggered by same sync action
+                            for prev_automaton_builder in
+                                &mut self.automaton_builders[..element_idx]
+                            {
+                                if let Some(v) =
+                                    prev_automaton_builder.dest_actions.get(&sync_action)
+                                {
+                                    for (_prev_dest_action, prev_dest_location) in v.iter() {
+                                        // add dest_action loop in previous dest_locations for the same sync_action
+                                        cs.add_transition(
+                                            pg_id,
+                                            *prev_dest_location,
+                                            dest_action,
+                                            *prev_dest_location,
+                                            None,
+                                        )
+                                        .expect("add transition");
+                                    }
+                                }
+                            }
+
+                            // elements unaffected by sync must ignore the dest action in every idle location
+                            for (automaton_builder, _) in self
+                                .automaton_builders
+                                .iter()
+                                .zip(&sync.synchronise)
+                                .filter(|(_, action)| action.is_none())
+                            {
+                                for (name, location) in automaton_builder.locations.iter() {
+                                    // Skip initial location (not needed)
+                                    if name == Self::INITIAL {
+                                        continue;
+                                    }
+                                    let idle_loc = *automaton_builder
+                                        .idle_locations
+                                        .get(&(*location, sync_action))
+                                        .expect("idle location");
+                                    cs.add_transition(pg_id, idle_loc, dest_action, idle_loc, None)
+                                        .expect("add transition");
+                                }
+                            }
+
+                            // need to borrow mutably now
+                            let automaton_builder = self
+                                .automaton_builders
+                                .get_mut(element_idx)
+                                .expect("automaton builder");
+
+                            automaton_builder
+                                .dest_actions
+                                .entry(sync_action)
+                                .or_default()
+                                .push((Some(dest_action), dest_location));
+
+                            // Send global state to channel and transition to post location
                             cs.add_transition(pg_id, dest_location, system_action, post_loc, None)
                                 .expect("add location");
                         }
