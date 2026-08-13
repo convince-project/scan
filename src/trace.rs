@@ -16,11 +16,7 @@ Examples:
 #[deny(missing_docs)]
 pub(crate) struct TraceArgs {
     /// Space-separated list of properties to verify while tracing.
-    pub(crate) properties: Vec<String>,
-    /// Verify all properties found in the model specification while tracing.
-    /// It is equivalent to listing all of the properties.
-    #[arg(short, long)]
-    pub(crate) all: bool,
+    pub(crate) property: String,
     /// Number of traces to save.
     #[arg(long, default_value_t = 1)]
     pub(crate) traces: usize,
@@ -41,7 +37,7 @@ pub(crate) struct TraceArgs {
 
 impl TraceArgs {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
-        if !self.properties.is_empty() && self.all {
+        if self.property.is_empty() {
             Err(anyhow!(ALL_PROPS_ERR))
         } else {
             Ok(())

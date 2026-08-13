@@ -26,7 +26,7 @@ use std::{
     fs::{File, create_dir, create_dir_all, rename},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::Instant,
@@ -60,8 +60,6 @@ pub struct Report {
     pub successes: u32,
     /// Failed executions.
     pub failures: u32,
-    /// Breakdown of violations by property.
-    pub violations: Vec<u32>,
 }
 
 // The possible outcomes of a model execution:
@@ -81,7 +79,6 @@ pub struct Scan<O> {
     running: Arc<AtomicBool>,
     successes: Arc<AtomicU32>,
     failures: Arc<AtomicU32>,
-    violations: Arc<Mutex<Vec<u32>>>,
 }
 
 impl<O> Scan<O> {
@@ -93,14 +90,12 @@ impl<O> Scan<O> {
             running: Arc::new(AtomicBool::new(false)),
             successes: Arc::new(AtomicU32::new(0)),
             failures: Arc::new(AtomicU32::new(0)),
-            violations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn reset(&self) {
         self.successes.store(0, Ordering::Relaxed);
         self.failures.store(0, Ordering::Relaxed);
-        self.violations.lock().unwrap().clear();
         self.running.store(true, Ordering::Relaxed);
     }
 
@@ -121,12 +116,6 @@ impl<O> Scan<O> {
     pub fn failures(&self) -> u32 {
         self.failures.load(Ordering::Relaxed)
     }
-
-    /// Returns a vector where each entry contains the number of violations of the associated property in the current verification run.
-    #[inline]
-    pub fn violations(&self) -> Vec<u32> {
-        self.violations.lock().expect("lock").clone()
-    }
 }
 
 impl<O: Oracle + Clone> Scan<O> {
@@ -136,14 +125,13 @@ impl<O: Oracle + Clone> Scan<O> {
 
         let result = self
             .model
-            .new_run()
             .experiment(self.oracle.clone(), self.running.clone());
-        if let Some(guarantees) = result
+        if let Some(result) = result
             && self.running.load(Ordering::Relaxed)
         {
             let local_successes;
             let local_failures;
-            if guarantees.iter().all(|b| *b) {
+            if result {
                 local_successes = self.successes.fetch_add(1, Ordering::Relaxed);
                 local_failures = self.failures.load(Ordering::Relaxed);
                 // If all guarantees are satisfied, the execution is successful
@@ -151,15 +139,6 @@ impl<O: Oracle + Clone> Scan<O> {
             } else {
                 local_successes = self.successes.load(Ordering::Relaxed);
                 local_failures = self.failures.fetch_add(1, Ordering::Relaxed);
-                let violations = &mut *self.violations.lock().unwrap();
-                violations.resize(violations.len().max(guarantees.len()), 0);
-                guarantees
-                    .into_iter()
-                    .zip(violations.iter_mut())
-                    .filter(|(success, _)| !success)
-                    .for_each(|(_, violations)| {
-                        *violations += 1;
-                    });
                 // If guarantee is violated, we have found a counter-example!
                 trace!("runs: {local_failures} failures");
             }
@@ -200,7 +179,6 @@ impl<O: Oracle + Clone> Scan<O> {
             runs,
             successes: self.successes(),
             failures: self.failures(),
-            violations: self.violations(),
         })
     }
 
@@ -289,7 +267,6 @@ where
             runs,
             successes: self.successes(),
             failures: self.failures(),
-            violations: self.violations(),
         })
     }
 

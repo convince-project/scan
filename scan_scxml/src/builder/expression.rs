@@ -172,9 +172,15 @@ pub(super) fn infer_type(
                 {
                     match simple_property_access.field() {
                         PropertyAccessField::Const(identifier) => {
-                            if identifier.sym() == interner.get("floor").unwrap() {
+                            if interner
+                                .get("floor")
+                                .is_some_and(|floor| identifier.sym() == floor)
+                            {
                                 Ok(OmgBaseType::Int64.into())
-                            } else if identifier.sym() == interner.get("random").unwrap() {
+                            } else if interner
+                                .get("random")
+                                .is_some_and(|rand| identifier.sym() == rand)
+                            {
                                 Ok(OmgBaseType::F64.into())
                             } else {
                                 Err(anyhow!(

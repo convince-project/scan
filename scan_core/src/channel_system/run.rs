@@ -110,6 +110,16 @@ impl<'def> ChannelSystemRun<'def> {
         })
     }
 
+    pub fn nosync_possible_transitions(
+        &self,
+    ) -> impl Iterator<Item = (PgId, Action, impl Iterator<Item = Location>)> {
+        self.def.program_graph_ids().flat_map(move |pg_id| {
+            self.nosync_possible_transitions_pg(pg_id)
+                .expect("pg exists")
+                .map(move |(action, transitions)| (pg_id, action, transitions))
+        })
+    }
+
     /// Iterates over all transitions that can be admitted in the current state for the [`ProgramGraph`] associated to the given [`PgId`].
     ///
     /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
@@ -127,7 +137,7 @@ impl<'def> ChannelSystemRun<'def> {
         self.program_graph(pg_id).map(|pg| {
             pg.possible_transitions().filter_map(move |(action, post)| {
                 let action = Action(pg_id, action);
-                if let Some((channel, message)) = self.def.communication(pg_id, action.1)
+                if let Some((channel, message)) = self.def.communication(action)
                     && !self.check_message(channel, message)
                 {
                     None
@@ -157,7 +167,7 @@ impl<'def> ChannelSystemRun<'def> {
             .map(|transitions| {
                 transitions.filter_map(move |(action, post)| {
                     let action = Action(pg_id, action);
-                    if let Some((channel, message)) = self.def.communication(pg_id, action.1)
+                    if let Some((channel, message)) = self.def.communication(action)
                         && !self.check_message(channel, message)
                     {
                         None
@@ -169,7 +179,26 @@ impl<'def> ChannelSystemRun<'def> {
             })
     }
 
-    fn check_message(&self, channel: Channel, message: Message) -> bool {
+    pub fn nosync_possible_transitions_action(
+        &self,
+        action: Action,
+    ) -> Result<impl Iterator<Item = Location>, CsError> {
+        let pg_id = action.0;
+        self.program_graph(pg_id)?
+            .nosync_possible_transitions_action(action.1)
+            .map_err(|err| CsError::ProgramGraph(pg_id, err))
+            .map(|transitions| {
+                self.def
+                    .communication(action)
+                    .is_none_or(|(channel, message)| self.check_message(channel, message))
+                    .then_some(transitions)
+                    .into_iter()
+                    .flatten()
+                    .map(move |loc| Location(pg_id, loc))
+            })
+    }
+
+    pub(crate) fn check_message(&self, channel: Channel, message: Message) -> bool {
         let channel_idx = channel.0 as usize;
         let (_, capacity) = self.def.channels[channel_idx];
         let len = self.message_queue[channel_idx].len();
@@ -198,7 +227,6 @@ impl<'def> ChannelSystemRun<'def> {
     /// See also [`ProgramGraphRun::transition`].
     pub fn transition(
         &mut self,
-        pg_id: PgId,
         action: Action,
         post: &[Location],
     ) -> Result<Option<Event>, CsError> {
@@ -206,6 +234,7 @@ impl<'def> ChannelSystemRun<'def> {
 
         self.bump.reset();
 
+        let pg_id = action.0;
         // If action is a communication, check it is legal
         if pg_id.0 >= self.program_graphs.len() as u16 {
             return Err(CsError::MissingPg(pg_id));
@@ -215,7 +244,7 @@ impl<'def> ChannelSystemRun<'def> {
             return Err(CsError::LocationNotInPg(*post, pg_id));
         }
         // If the action is a communication, send/receive the message
-        if let Some((channel, message)) = self.def.communication(pg_id, action.1) {
+        if let Some((channel, message)) = self.def.communication(action) {
             let (_, capacity) = self.def.channels[channel.0 as usize];
             let event_type = match message {
                 Message::Send

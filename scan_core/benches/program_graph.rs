@@ -1,8 +1,113 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use rand::SeedableRng;
 use rand::rngs::SmallRng;
+use rand::{SeedableRng, make_rng};
 use scan_core::program_graph::*;
 use scan_core::*;
+
+fn autonomous_transition(c: &mut Criterion) {
+    let mut pg = ProgramGraphBuilder::new();
+    let pre = pg.new_initial_location();
+    let post = pg.new_location();
+    pg.add_autonomous_transition(pre, post, None).unwrap();
+    let pg = pg.build();
+    let mut run = pg.new_instance();
+    c.bench_function("possible transitions", |b| {
+        b.iter(|| {
+            run.possible_transitions().for_each(|(_, trs)| {
+                trs.for_each(|post| {
+                    let _ = post.count();
+                })
+            })
+        })
+    });
+    c.bench_function("nosync possible transitions", |b| {
+        b.iter(|| {
+            run.nosync_possible_transitions()
+                .unwrap()
+                .for_each(|(_, post)| {
+                    let _ = post.count();
+                })
+        })
+    });
+    let mut rng: SmallRng = make_rng();
+    let (action, _) = run.nosync_possible_transitions().unwrap().next().unwrap();
+    c.bench_function("transition", |b| {
+        b.iter(|| run.transition(action, &[post], &mut rng))
+    });
+}
+
+fn guard(c: &mut Criterion) {
+    let mut pg = ProgramGraphBuilder::new();
+    let pre = pg.new_initial_location();
+    let post = pg.new_location();
+    // The goal is to measure transition time, not expr-evaluation time, so we use trivial guard
+    pg.add_autonomous_transition(pre, post, Some(BooleanExpr::Const(true)))
+        .unwrap();
+    let pg = pg.build();
+    let mut run = pg.new_instance();
+    c.bench_function("possible transitions with guard", |b| {
+        b.iter(|| {
+            run.possible_transitions().for_each(|(_, trs)| {
+                trs.for_each(|post| {
+                    let _ = post.count();
+                })
+            })
+        })
+    });
+    c.bench_function("nosync possible transitions with guard", |b| {
+        b.iter(|| {
+            run.nosync_possible_transitions()
+                .unwrap()
+                .for_each(|(_, post)| {
+                    let _ = post.count();
+                })
+        })
+    });
+    let mut rng: SmallRng = make_rng();
+    let (action, _) = run.nosync_possible_transitions().unwrap().next().unwrap();
+    c.bench_function("transition with guard", |b| {
+        b.iter(|| run.transition(action, &[post], &mut rng))
+    });
+}
+
+fn effect(c: &mut Criterion) {
+    let mut pg = ProgramGraphBuilder::new();
+    let pre = pg.new_initial_location();
+    let post = pg.new_location();
+    let var = pg.new_var(Val::from(false));
+    let action = pg.new_action();
+    pg.add_effect(action, var, Expression::from(true)).unwrap();
+    // The goal is to measure transition time, not expr-evaluation time, so we use trivial guard
+    pg.add_transition(pre, action, post, None).unwrap();
+    let pg = pg.build();
+    let mut run = pg.new_instance();
+    c.bench_function("possible transitions with effect", |b| {
+        b.iter(|| {
+            run.possible_transitions().for_each(|(_, trs)| {
+                trs.for_each(|post| {
+                    let _ = post.count();
+                })
+            })
+        })
+    });
+    c.bench_function("nosync possible transitions with effect", |b| {
+        b.iter(|| {
+            run.nosync_possible_transitions()
+                .unwrap()
+                .for_each(|(_, post)| {
+                    let _ = post.count();
+                })
+        })
+    });
+    let mut rng: SmallRng = make_rng();
+    let (action, _) = run.nosync_possible_transitions().unwrap().next().unwrap();
+    c.bench_function("transition with effect", |b| {
+        b.iter(|| run.transition(action, &[post], &mut rng))
+    });
+}
+
+criterion_group!(small_benches, autonomous_transition, guard, effect);
+criterion_main!(small_benches);
 
 #[inline(always)]
 fn run_to_completion(pg: &mut ProgramGraphRun) {
@@ -143,5 +248,5 @@ fn run(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, possible_transitions, run);
-criterion_main!(benches);
+// criterion_group!(benches, possible_transitions, run);
+// criterion_main!(benches);

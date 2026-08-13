@@ -6,6 +6,7 @@ use crate::channel_system::ChannelCapacity;
 use crate::grammar::{BooleanExpr, Type};
 use crate::program_graph::ProgramGraph;
 use crate::{Expression, TimeRange, Val};
+use fixedbitset::FixedBitSet;
 use get_size2::GetSize;
 use log::info;
 use std::collections::BTreeMap;
@@ -32,6 +33,8 @@ pub struct ChannelSystemBuilder {
     program_graphs: Vec<ProgramGraphBuilder>,
     channels: Vec<(Vec<Type>, ChannelCapacity)>,
     communications: BTreeMap<Action, Option<(Channel, Message)>>,
+    senders: Vec<FixedBitSet>,
+    receivers: Vec<FixedBitSet>,
 }
 
 impl Default for ChannelSystemBuilder {
@@ -48,6 +51,8 @@ impl ChannelSystemBuilder {
             program_graphs: Vec::new(),
             channels: Vec::new(),
             communications: BTreeMap::new(),
+            senders: Vec::new(),
+            receivers: Vec::new(),
         }
     }
 
@@ -466,6 +471,8 @@ impl ChannelSystemBuilder {
         let channel = Channel(self.channels.len() as u16);
         self.channels
             .push((var_types, ChannelCapacity::Queue(capacity)));
+        self.senders.push(FixedBitSet::new());
+        self.receivers.push(FixedBitSet::new());
         channel
     }
 
@@ -473,6 +480,8 @@ impl ChannelSystemBuilder {
     pub fn new_sink(&mut self, var_types: Vec<Type>) -> Channel {
         let channel = Channel(self.channels.len() as u16);
         self.channels.push((var_types, ChannelCapacity::Sink));
+        self.senders.push(FixedBitSet::new());
+        self.receivers.push(FixedBitSet::new());
         channel
     }
 
@@ -505,6 +514,7 @@ impl ChannelSystemBuilder {
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, Some((channel, Message::Send)));
+            self.senders[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
             Ok(action)
         }
     }
@@ -546,6 +556,7 @@ impl ChannelSystemBuilder {
                 let action = Action(pg_id, action);
                 self.communications
                     .insert(action, Some((channel, Message::Receive)));
+                self.receivers[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
                 Ok(action)
             }
         }
@@ -577,6 +588,7 @@ impl ChannelSystemBuilder {
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, Some((channel, Message::ProbeEmptyQueue)));
+            self.senders[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
             Ok(action)
         }
     }
@@ -610,6 +622,7 @@ impl ChannelSystemBuilder {
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, Some((channel, Message::ProbeFullQueue)));
+            self.receivers[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
             Ok(action)
         }
     }
@@ -624,6 +637,8 @@ impl ChannelSystemBuilder {
 
         program_graphs.shrink_to_fit();
         self.channels.shrink_to_fit();
+        self.senders.shrink_to_fit();
+        self.receivers.shrink_to_fit();
         let communications_map = Vec::from_iter(self.communications);
         let communications = Vec::from_iter(communications_map.iter().map(|&(_, comm)| comm));
         let mut index = 0;
@@ -644,6 +659,8 @@ impl ChannelSystemBuilder {
             communications,
             communications_pg_idxs,
             program_graphs,
+            senders: self.senders,
+            receivers: self.receivers,
         };
 
         info!(

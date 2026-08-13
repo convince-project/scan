@@ -117,6 +117,7 @@ use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
 };
 pub use builder::*;
+use fixedbitset::FixedBitSet;
 use get_size2::GetSize;
 pub use run::ChannelSystemRun;
 use thiserror::Error;
@@ -163,7 +164,7 @@ pub struct Location(PgId, PgLocation);
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Action(PgId, PgAction);
+pub struct Action(pub(crate) PgId, pub(crate) PgAction);
 
 /// An indexing object for typed variables in a CS.
 ///
@@ -325,6 +326,10 @@ pub struct ChannelSystem {
     communications: Vec<Option<(Channel, Message)>>,
     communications_pg_idxs: Vec<usize>,
     program_graphs: Vec<ProgramGraph>,
+    #[get_size(ignore)]
+    senders: Vec<FixedBitSet>,
+    #[get_size(ignore)]
+    receivers: Vec<FixedBitSet>,
 }
 
 impl ChannelSystem {
@@ -339,13 +344,37 @@ impl ChannelSystem {
     }
 
     #[inline]
-    fn communication(&self, pg_id: PgId, pg_action: PgAction) -> Option<(Channel, Message)> {
-        if pg_action == EPSILON {
+    pub fn communication(&self, action: Action) -> Option<(Channel, Message)> {
+        if action.1 == EPSILON {
             None
         } else {
-            let start = self.communications_pg_idxs[pg_id.0 as usize];
-            self.communications[start + ActionIdx::from(pg_action) as usize]
+            let start = self.communications_pg_idxs[action.0.0 as usize];
+            self.communications[start + ActionIdx::from(action.1) as usize]
         }
+    }
+
+    // #[inline]
+    // pub fn communicates_to(&self, pg_id: PgId, channel: Channel) -> bool {
+    //     self.communications[self.communications_pg_idxs[pg_id.0 as usize]
+    //         ..self.communications_pg_idxs[pg_id.0 as usize + 1]]
+    //         .iter()
+    //         .any(|comm| comm.is_some_and(|(ch, _)| ch == channel))
+    // }
+
+    #[inline]
+    pub fn senders_to(&self, channel: Channel) -> Result<impl Iterator<Item = PgId>, CsError> {
+        self.senders
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+            .map(|set| set.ones().map(|i| PgId(i as u16)))
+    }
+
+    #[inline]
+    pub fn receivers_from(&self, channel: Channel) -> Result<impl Iterator<Item = PgId>, CsError> {
+        self.receivers
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+            .map(|set| set.ones().map(|i| PgId(i as u16)))
     }
 
     /// Returns an immutable reference to the list of [`ProgramGraph`]s of the Channel System.
@@ -487,8 +516,8 @@ mod tests {
         // assert_eq!(cs.possible_transitions().count(), 1);
         assert_eq!(cs.def().communications_pg_idxs, vec![0, 2, 5]);
 
-        cs.transition(pg1, send, &[post1])?;
-        cs.transition(pg2, receive, &[post2])?;
+        cs.transition(send, &[post1])?;
+        cs.transition(receive, &[post2])?;
         // assert_eq!(cs.possible_transitions().count(), 0);
         Ok(())
     }

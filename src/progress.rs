@@ -17,7 +17,7 @@ impl Bar {
         &self,
         confidence: f64,
         precision: f64,
-        guarantees: &[String],
+        guarantees: &String,
         scan: &Scan<O>,
     ) {
         const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
@@ -42,37 +42,15 @@ impl Bar {
             .progress_chars(progress_chars);
 
         // Guarantees property bars
-        let mut bars_guarantees = Vec::new();
-        for name in guarantees.iter() {
-            let header = bars.add(
-                ProgressBar::new(0)
-                    .with_style(property_header_style.clone())
-                    .with_prefix(name.to_owned())
-                    .with_message("0/0"),
-            );
-            header.tick();
-            let property = bars.add(ProgressBar::new(0).with_style(property_style.clone()));
-            property.tick();
-            bars_guarantees.push((header, property));
-        }
-
-        let overall_bar;
-        let mut overall_line;
-        if guarantees.len() > 1 {
-            overall_line = ProgressBar::new(1)
-                .with_style(property_header_style)
-                .with_prefix("overall system")
-                .with_message("0/0");
-            overall_line = bars.add(overall_line);
-            overall_line.tick();
-
-            // Overall property bar
-            overall_bar = bars.add(ProgressBar::new(0).with_style(property_style));
-            overall_bar.tick();
-        } else {
-            overall_line = ProgressBar::hidden();
-            overall_bar = ProgressBar::hidden();
-        }
+        let header = bars.add(
+            ProgressBar::new(0)
+                .with_style(property_header_style.clone())
+                .with_prefix(guarantees.to_owned())
+                .with_message("0/0"),
+        );
+        header.tick();
+        let property = bars.add(ProgressBar::new(0).with_style(property_style.clone()));
+        property.tick();
 
         // Spinner
         // Trailing spaces because bar does not overwrite after itself
@@ -105,27 +83,12 @@ impl Bar {
                 // let derived_precision =
                 //     derive_precision(run_status.successes, run_status.failures, confidence);
                 // Status spinner
-                let violations = scan.violations();
-                for (i, (header, property)) in bars_guarantees.iter().enumerate() {
-                    let violations = violations.get(i).copied().unwrap_or(0);
-                    let pos = runs.saturating_sub(violations as u64);
-                    header.set_message(format!("{pos}/{violations}"));
-                    header.tick();
-                    property.set_position(pos);
-                    property.set_length(runs);
-                    property.tick();
-                }
-
-                // overall property bar
-                if !overall_line.is_hidden() {
-                    overall_line.set_message(format!("{successes}/{failures}"));
-                    overall_line.tick();
-                }
-                if !overall_bar.is_hidden() {
-                    overall_bar.set_position(successes.into());
-                    overall_bar.set_length(runs);
-                    overall_bar.tick();
-                }
+                let pos = runs.saturating_sub(failures as u64);
+                header.set_message(format!("{pos}/{failures}"));
+                header.tick();
+                property.set_position(pos);
+                property.set_length(runs);
+                property.tick();
 
                 // task progress bar
                 spinner.set_position(runs);
@@ -144,12 +107,8 @@ impl Bar {
 
         // Clean up terminal
         bars.set_move_cursor(false);
-        bars_guarantees.iter().for_each(|(header, property)| {
-            header.finish_and_clear();
-            property.finish_and_clear();
-        });
-        overall_line.finish_and_clear();
-        overall_bar.finish_and_clear();
+        header.finish_and_clear();
+        property.finish_and_clear();
         spinner.finish_and_clear();
         progress_bar.finish_and_clear();
     }

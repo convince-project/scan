@@ -25,10 +25,11 @@ crate-type = ["lib"]  # The crate types to generate.
 thiserror = { workspace = true }
 log = { workspace = true }
 flate2 = { version = "1.1.9", features = ["zlib-rs"], default-features = false }
-get-size2 = { version = "0.10.1", features = ["derive"] }
+get-size2 = { version = "0.11.0", features = ["derive"] }
 rand = { version = "0.10.2" }
 rayon = "1.12.0"
 bumpalo = { version = "3.20.3", features = ["collections"] }
+fixedbitset = "0.5.7"
 
 [dev-dependencies]
 criterion = "0.8.2"
