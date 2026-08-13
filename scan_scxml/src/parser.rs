@@ -20,6 +20,7 @@ use log::{error, info, trace};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::io::Read;
@@ -129,7 +130,7 @@ fn ecmascript(code: &str, scope: &Scope, interner: &mut Interner) -> anyhow::Res
 /// Represents a model specified in the CONVINCE-XML format.
 #[derive(Debug)]
 pub struct Parser {
-    pub(crate) processes: HashMap<String, Scxml>,
+    pub(crate) processes: BTreeMap<String, Scxml>,
     pub(crate) types: OmgTypes,
     pub(crate) properties: Properties,
     pub(crate) interner: Interner,
@@ -143,7 +144,7 @@ impl Parser {
     pub fn parse(path: &Path) -> anyhow::Result<Self> {
         info!(target: "parser", "creating parser");
         let mut parser = Parser {
-            processes: HashMap::new(),
+            processes: BTreeMap::new(),
             types: OmgTypes::new(),
             properties: Properties::new(),
             interner: Interner::new(),
@@ -184,8 +185,9 @@ impl Parser {
         let mut model_found = false;
         for entry in std::fs::read_dir(path)
             .with_context(|| format!("failed to read directory '{}'", path.display()))?
+            .map(|entry| entry.map(|e| e.path()))
         {
-            let path = entry.context("failed to read directory entry")?.path();
+            let path = entry.context("failed to read directory entry")?;
             if path.is_dir() {
                 model_found |= self.parse_directory_check(&path)?;
             } else {

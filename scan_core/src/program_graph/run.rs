@@ -167,6 +167,25 @@ impl<'def> ProgramGraphRun<'def> {
         }
     }
 
+    pub fn nosync_active_actions(&self) -> Result<impl Iterator<Item = Action>, PgError> {
+        if self.current_states.len() == 1 {
+            let current_loc = self.current_states[0];
+            Ok(self.def.locations[current_loc.0 as usize]
+                .0
+                .iter()
+                .filter(move |(action, transitions)| {
+                    transitions
+                        .iter()
+                        .any(move |(post_state, guard, constraints)| {
+                            self.check_transition(*action, *post_state, guard.as_ref(), constraints)
+                        })
+                })
+                .map(|(action, _)| *action))
+        } else {
+            Err(PgError::Sync)
+        }
+    }
+
     fn check_transition(
         &self,
         action: Action,

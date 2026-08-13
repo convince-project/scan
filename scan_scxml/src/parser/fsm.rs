@@ -8,7 +8,7 @@ use log::{error, info, trace};
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion, events};
 use scan_core::Time;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{BufRead, Read};
 use std::str;
@@ -332,7 +332,7 @@ pub struct Scxml {
     pub(crate) name: String,
     pub(crate) initial: String,
     pub(crate) datamodel: Vec<Data>,
-    pub(crate) states: HashMap<String, State>,
+    pub(crate) states: BTreeMap<String, State>,
 }
 
 impl Scxml {
@@ -348,7 +348,7 @@ impl Scxml {
             name: attrs[ATTR_NAME].clone(),
             initial: attrs[ATTR_INITIAL].clone(),
             datamodel: Vec::new(),
-            states: HashMap::new(),
+            states: BTreeMap::new(),
         })
     }
 }

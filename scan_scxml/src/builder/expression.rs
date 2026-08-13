@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use anyhow::{Context, anyhow, bail};
 use boa_ast::expression::{
@@ -13,7 +13,7 @@ use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
 
 pub(super) fn infer_type(
     expr: &boa_ast::Expression,
-    vars: &HashMap<String, OmgType>,
+    vars: &BTreeMap<String, OmgType>,
     interner: &Interner,
     type_hint: Option<&OmgType>,
     omg_types: &OmgTypes,
@@ -245,7 +245,7 @@ pub(super) fn infer_type(
 pub(super) fn expression<V, E>(
     expr: &boa_ast::Expression,
     interner: &Interner,
-    vars: &HashMap<String, (OmgType, Vec<E>)>,
+    vars: &BTreeMap<String, (OmgType, Vec<E>)>,
     expr_type: Option<&OmgType>,
     omg_types: &mut OmgTypes,
 ) -> anyhow::Result<Vec<Expression<V>>>

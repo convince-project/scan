@@ -112,12 +112,17 @@ impl<'def> ChannelSystemRun<'def> {
 
     pub fn nosync_possible_transitions(
         &self,
-    ) -> impl Iterator<Item = (PgId, Action, impl Iterator<Item = Location>)> {
+    ) -> impl Iterator<Item = (Action, impl Iterator<Item = Location>)> {
         self.def.program_graph_ids().flat_map(move |pg_id| {
             self.nosync_possible_transitions_pg(pg_id)
                 .expect("pg exists")
-                .map(move |(action, transitions)| (pg_id, action, transitions))
         })
+    }
+
+    pub fn nosync_active_actions(&self) -> impl Iterator<Item = Action> {
+        self.def
+            .program_graph_ids()
+            .flat_map(move |pg_id| self.nosync_active_actions_pg(pg_id).expect("pg exists"))
     }
 
     /// Iterates over all transitions that can be admitted in the current state for the [`ProgramGraph`] associated to the given [`PgId`].
@@ -179,23 +184,42 @@ impl<'def> ChannelSystemRun<'def> {
             })
     }
 
+    pub fn nosync_active_actions_pg(
+        &self,
+        pg_id: PgId,
+    ) -> Result<impl Iterator<Item = Action>, CsError> {
+        self.program_graph(pg_id)?
+            .nosync_active_actions()
+            .map_err(|err| CsError::ProgramGraph(pg_id, err))
+            .map(|transitions| {
+                transitions.filter_map(move |action| {
+                    let action = Action(pg_id, action);
+                    self.def
+                        .communication(action)
+                        .is_none_or(|(channel, message)| self.check_message(channel, message))
+                        .then_some(action)
+                })
+            })
+    }
+
     pub fn nosync_possible_transitions_action(
         &self,
         action: Action,
     ) -> Result<impl Iterator<Item = Location>, CsError> {
         let pg_id = action.0;
-        self.program_graph(pg_id)?
-            .nosync_possible_transitions_action(action.1)
-            .map_err(|err| CsError::ProgramGraph(pg_id, err))
-            .map(|transitions| {
-                self.def
-                    .communication(action)
-                    .is_none_or(|(channel, message)| self.check_message(channel, message))
-                    .then_some(transitions)
-                    .into_iter()
-                    .flatten()
+        let posts = self
+            .def
+            .communication(action)
+            .is_none_or(|(channel, message)| self.check_message(channel, message))
+            .then_some({
+                self.program_graph(pg_id)?
+                    .nosync_possible_transitions_action(action.1)
+                    .map_err(|err| CsError::ProgramGraph(pg_id, err))?
                     .map(move |loc| Location(pg_id, loc))
             })
+            .into_iter()
+            .flatten();
+        Ok(posts)
     }
 
     pub(crate) fn check_message(&self, channel: Channel, message: Message) -> bool {
