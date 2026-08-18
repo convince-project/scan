@@ -600,11 +600,6 @@ impl<'def> TransitionSystemRun<'def> {
             }
         }
 
-        let len = min_ample.len();
-        min_ample.sort_unstable();
-        min_ample.dedup();
-        assert_eq!(min_ample.len(), len);
-
         min_ample.into_bump_slice()
     }
 
@@ -706,7 +701,7 @@ impl<'def> TransitionSystemRun<'def> {
                         }
                         Message::Receive => {
                             if !channels_senders.put(u16::from(channel) as usize) {
-                                self.add_senders_strict_to_ample(
+                                self.add_senders_to_ample(
                                     channel,
                                     ample,
                                     pgs,
@@ -738,46 +733,6 @@ impl<'def> TransitionSystemRun<'def> {
         probe_empty_queues: &mut FixedBitSet,
     ) -> Result<(), ()> {
         for pg_id in self.ts.cs.senders_to(channel).unwrap() {
-            if !pgs.put(u16::from(pg_id) as usize) {
-                self.add_pg_to_ample(
-                    pg_id,
-                    ample,
-                    pgs,
-                    channels_senders,
-                    channels_receivers,
-                    probe_empty_queues,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn add_senders_strict_to_ample(
-        &self,
-        channel: Channel,
-        ample: &mut bumpalo::collections::Vec<Action>,
-        pgs: &mut FixedBitSet,
-        channels_senders: &mut FixedBitSet,
-        channels_receivers: &mut FixedBitSet,
-        probe_empty_queues: &mut FixedBitSet,
-    ) -> Result<(), ()> {
-        for pg_id in self.ts.cs.senders_to(channel).unwrap() {
-            let pg = self.cs.program_graph(pg_id).unwrap();
-            if pg.nosync_active_actions().unwrap().all(|action| {
-                self.ts
-                    .cs
-                    .communication(Action(pg_id, action))
-                    .is_some_and(|(channel, message)| {
-                        !self.cs.check_message(channel, message)
-                            && ((matches!(message, Message::Receive)
-                                && channels_senders.contains(u16::from(channel) as usize))
-                                || (matches!(message, Message::ProbeEmptyQueue)
-                                    && channels_receivers.contains(u16::from(channel) as usize)))
-                    })
-            }) {
-                continue;
-            }
             if !pgs.put(u16::from(pg_id) as usize) {
                 self.add_pg_to_ample(
                     pg_id,
