@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -136,15 +137,15 @@ impl TransitionSystem {
         // Initialize oracle with TS initial state
         oracle.update_state(&labels);
         run.fastforward();
-        let mut executions_stack: Vec<(O, TransitionSystemRun)> = vec![(oracle, run)];
+        let mut executions_stack: Vec<(O, TransitionSystemRun, usize)> = vec![(oracle, run, 0)];
         let mut bump = Bump::new();
 
         let mut pgs = FixedBitSet::with_capacity(self.pg_list.len());
         let mut channels_senders = FixedBitSet::with_capacity(self.cs.channels().len());
         let mut channels_receivers = FixedBitSet::with_capacity(self.cs.channels().len());
+        let mut probe_empty_queues = FixedBitSet::with_capacity(self.cs.channels().len());
         // FILO stack: depth-first search
-        while let Some((mut oracle, mut run)) = executions_stack.pop() {
-            trace!("new branching");
+        while let Some((mut oracle, mut run, len)) = executions_stack.pop() {
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
@@ -154,35 +155,47 @@ impl TransitionSystem {
                 &mut pgs,
                 &mut channels_senders,
                 &mut channels_receivers,
+                &mut probe_empty_queues,
                 &bump,
             );
             if !ample.is_empty() {
                 for &action in ample {
                     for post in run.cs.nosync_possible_transitions_action(action).unwrap() {
-                        trace!("processing {:?} with post location {:?}", action, post);
-                        let mut run = run.clone();
-                        let mut oracle = oracle.clone();
-                        run.transition(&mut oracle, action, post).unwrap();
-                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                        let mut branch_run = run.clone();
+                        let mut branch_oracle = oracle.clone();
+                        branch_run
+                            .transition(&mut branch_oracle, action, post)
+                            .unwrap();
+                        if branch_oracle
+                            .output_guarantees()
+                            .any(|b| b.is_some_and(|b| !b))
+                        {
                             // Guarantee violated
                             trace!("run violates a guarantee");
                             return Some(false);
-                        }
-                        if oracle.output_guarantees().any(|b| b.is_none()) {
-                            run.fastforward_pg(action.0);
-                            executions_stack.push((oracle, run));
+                        } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
+                            branch_run.fastforward_pg(action.0);
+                            executions_stack.push((branch_oracle, branch_run, len + 1));
+                        } else {
+                            trace!("execution branch terminates successfully (partial execution)");
                         }
                     }
                 }
             } else if run.cs.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
-                run.fastforward();
-                executions_stack.push((oracle, run));
-            } else if oracle.final_output_guarantees().any(|b| !b) {
-                // Guarantee violated
-                trace!("run violates a guarantee");
-                return Some(false);
+                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                    // Guarantee violated
+                    trace!("execution branch violates a guarantee (partial execution)");
+                    return Some(false);
+                } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                    run.fastforward();
+                    executions_stack.push((oracle, run, len + 1));
+                } else {
+                    trace!("execution branch terminates successfully (partial execution)");
+                }
+            } else {
+                trace!("execution branch terminates successfully (full execution)");
             }
         }
         trace!("run verifies all guarantees");
@@ -365,11 +378,12 @@ impl<'def> TransitionSystemRun<'def> {
                 self.vals[index].copy_from_slice(vals);
                 let labels = Vec::from_iter(self.labels());
                 oracle.update_state(&labels);
+                // trace!("event {action:?} {event:?}");
             }
+            Ok(())
         } else {
             unimplemented!()
         }
-        Ok(())
     }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
@@ -547,6 +561,7 @@ impl<'def> TransitionSystemRun<'def> {
         pgs: &mut FixedBitSet,
         channels_senders: &mut FixedBitSet,
         channels_receivers: &mut FixedBitSet,
+        probe_empty_queues: &mut FixedBitSet,
         bump: &'a Bump,
     ) -> &'a [Action] {
         let mut min_ample: bumpalo::collections::Vec<Action> =
@@ -562,22 +577,33 @@ impl<'def> TransitionSystemRun<'def> {
             pgs.clear();
             channels_senders.clear();
             channels_receivers.clear();
+            probe_empty_queues.clear();
             pgs.insert(u16::from(pg_id) as usize);
             if self
-                .add_pg_to_ample(pg_id, &mut ample, pgs, channels_senders, channels_receivers)
+                .add_pg_to_ample(
+                    pg_id,
+                    &mut ample,
+                    pgs,
+                    channels_senders,
+                    channels_receivers,
+                    probe_empty_queues,
+                )
                 .is_ok()
                 && !ample.is_empty()
                 && min_ample.len() > ample.len()
             {
-                // fastest way to copy vec on another vec (of greater length)
-                min_ample.truncate(ample.len());
-                min_ample.copy_from_slice(&ample);
+                mem::swap(&mut ample, &mut min_ample);
                 // early exit if ample set is minimal
                 if min_ample.len() == 1 {
                     break;
                 }
             }
         }
+
+        let len = min_ample.len();
+        min_ample.sort_unstable();
+        min_ample.dedup();
+        assert_eq!(min_ample.len(), len);
 
         min_ample.into_bump_slice()
     }
@@ -589,6 +615,7 @@ impl<'def> TransitionSystemRun<'def> {
         pgs: &mut FixedBitSet,
         channels_senders: &mut FixedBitSet,
         channels_receivers: &mut FixedBitSet,
+        probe_empty_queues: &mut FixedBitSet,
     ) -> Result<(), ()> {
         for action in self
             .cs
@@ -600,21 +627,41 @@ impl<'def> TransitionSystemRun<'def> {
             let action = Action(pg_id, action);
             if let Some((channel, message)) = self.ts.cs.communication(action) {
                 if self.cs.check_message(channel, message) {
-                    if matches!(message, Message::Send | Message::ProbeEmptyQueue)
-                        && self.ts.ports.contains(&channel)
-                    {
+                    if matches!(message, Message::Send) && self.ts.ports.contains(&channel) {
                         // Channel is a port so action is not stutter
                         return Err(());
                     }
-                    if !channels_receivers.put(u16::from(channel) as usize) {
+                    // If channel is empty, no message can be received until a message is sent to the channel first
+                    // NOTE: if channel is empty and action is active then action must be a `Send`
+                    if !self.cs.is_empty(channel)
+                        // WARN: last condition has effects!
+                        && !channels_receivers.put(u16::from(channel) as usize)
+                    {
                         self.add_receivers_to_ample(
                             channel,
                             ample,
                             pgs,
                             channels_senders,
                             channels_receivers,
+                            probe_empty_queues,
                         )?;
                     }
+                    // Probings are independent from one another so there is no need to add other probings
+                    if matches!(message, Message::Send | Message::Receive)
+                        // WARN: last condition has effects!
+                        && !probe_empty_queues.put(u16::from(channel) as usize)
+                    {
+                        self.add_empty_queues_to_ample(
+                            channel,
+                            ample,
+                            pgs,
+                            channels_senders,
+                            channels_receivers,
+                            probe_empty_queues,
+                        )?;
+                    }
+                    // TODO: add ProbeFullQueue
+                    // TODO: add full-queue condition
                     if !channels_senders.put(u16::from(channel) as usize) {
                         self.add_senders_to_ample(
                             channel,
@@ -622,15 +669,18 @@ impl<'def> TransitionSystemRun<'def> {
                             pgs,
                             channels_senders,
                             channels_receivers,
+                            probe_empty_queues,
                         )?;
                     }
                     ample.push(action);
                 } else {
                     // non-active action is not added to ample set,
                     // but ample set must contain all actions which could potentially activate it.
+                    // Probes (empty/full-queue) never need to be added
                     match message {
-                        Message::Send | Message::ProbeEmptyQueue => {
-                            let size = ample.len();
+                        // Channel is a port so action is not stutter
+                        Message::Send if self.ts.ports.contains(&channel) => return Err(()),
+                        Message::Send => {
                             if !channels_receivers.put(u16::from(channel) as usize) {
                                 self.add_receivers_to_ample(
                                     channel,
@@ -638,30 +688,39 @@ impl<'def> TransitionSystemRun<'def> {
                                     pgs,
                                     channels_senders,
                                     channels_receivers,
+                                    probe_empty_queues,
                                 )?;
                             }
-                            // We can accept the ample set if the port is not active
-                            // and cannot be activated by a sequence of actions, i.e.,
-                            // if adding its receivers to the ample set actually adds no action.
-                            if self.ts.ports.contains(&channel) && ample.len() > size {
-                                // Channel is a port so action is not stutter
-                                return Err(());
-                            }
                         }
-                        Message::Receive | Message::ProbeFullQueue => {
-                            if !channels_senders.put(u16::from(channel) as usize) {
-                                self.add_senders_to_ample(
+                        Message::ProbeEmptyQueue => {
+                            if !channels_receivers.put(u16::from(channel) as usize) {
+                                self.add_receivers_to_ample(
                                     channel,
                                     ample,
                                     pgs,
                                     channels_senders,
                                     channels_receivers,
+                                    probe_empty_queues,
                                 )?;
                             }
                         }
+                        Message::Receive => {
+                            if !channels_senders.put(u16::from(channel) as usize) {
+                                self.add_senders_strict_to_ample(
+                                    channel,
+                                    ample,
+                                    pgs,
+                                    channels_senders,
+                                    channels_receivers,
+                                    probe_empty_queues,
+                                )?;
+                            }
+                        }
+                        Message::ProbeFullQueue => todo!(),
                     }
                 }
             } else {
+                // The PG's non-communication active actions are all in the ample set
                 ample.push(action);
             }
         }
@@ -676,10 +735,58 @@ impl<'def> TransitionSystemRun<'def> {
         pgs: &mut FixedBitSet,
         channels_senders: &mut FixedBitSet,
         channels_receivers: &mut FixedBitSet,
+        probe_empty_queues: &mut FixedBitSet,
     ) -> Result<(), ()> {
         for pg_id in self.ts.cs.senders_to(channel).unwrap() {
             if !pgs.put(u16::from(pg_id) as usize) {
-                self.add_pg_to_ample(pg_id, ample, pgs, channels_senders, channels_receivers)?;
+                self.add_pg_to_ample(
+                    pg_id,
+                    ample,
+                    pgs,
+                    channels_senders,
+                    channels_receivers,
+                    probe_empty_queues,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn add_senders_strict_to_ample(
+        &self,
+        channel: Channel,
+        ample: &mut bumpalo::collections::Vec<Action>,
+        pgs: &mut FixedBitSet,
+        channels_senders: &mut FixedBitSet,
+        channels_receivers: &mut FixedBitSet,
+        probe_empty_queues: &mut FixedBitSet,
+    ) -> Result<(), ()> {
+        for pg_id in self.ts.cs.senders_to(channel).unwrap() {
+            let pg = self.cs.program_graph(pg_id).unwrap();
+            if pg.nosync_active_actions().unwrap().all(|action| {
+                self.ts
+                    .cs
+                    .communication(Action(pg_id, action))
+                    .is_some_and(|(channel, message)| {
+                        !self.cs.check_message(channel, message)
+                            && ((matches!(message, Message::Receive)
+                                && channels_senders.contains(u16::from(channel) as usize))
+                                || (matches!(message, Message::ProbeEmptyQueue)
+                                    && channels_receivers.contains(u16::from(channel) as usize)))
+                    })
+            }) {
+                continue;
+            }
+            if !pgs.put(u16::from(pg_id) as usize) {
+                self.add_pg_to_ample(
+                    pg_id,
+                    ample,
+                    pgs,
+                    channels_senders,
+                    channels_receivers,
+                    probe_empty_queues,
+                )?;
             }
         }
         Ok(())
@@ -693,10 +800,43 @@ impl<'def> TransitionSystemRun<'def> {
         pgs: &mut FixedBitSet,
         channels_senders: &mut FixedBitSet,
         channels_receivers: &mut FixedBitSet,
+        probe_empty_queues: &mut FixedBitSet,
     ) -> Result<(), ()> {
         for pg_id in self.ts.cs.receivers_from(channel).unwrap() {
             if !pgs.put(u16::from(pg_id) as usize) {
-                self.add_pg_to_ample(pg_id, ample, pgs, channels_senders, channels_receivers)?;
+                self.add_pg_to_ample(
+                    pg_id,
+                    ample,
+                    pgs,
+                    channels_senders,
+                    channels_receivers,
+                    probe_empty_queues,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn add_empty_queues_to_ample(
+        &self,
+        channel: Channel,
+        ample: &mut bumpalo::collections::Vec<Action>,
+        pgs: &mut FixedBitSet,
+        channels_senders: &mut FixedBitSet,
+        channels_receivers: &mut FixedBitSet,
+        probe_empty_queues: &mut FixedBitSet,
+    ) -> Result<(), ()> {
+        for pg_id in self.ts.cs.probe_empty_queue(channel).unwrap() {
+            if !pgs.put(u16::from(pg_id) as usize) {
+                self.add_pg_to_ample(
+                    pg_id,
+                    ample,
+                    pgs,
+                    channels_senders,
+                    channels_receivers,
+                    probe_empty_queues,
+                )?;
             }
         }
         Ok(())

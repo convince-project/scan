@@ -244,6 +244,12 @@ impl<'def> ChannelSystemRun<'def> {
         }
     }
 
+    #[inline]
+    pub(crate) fn is_empty(&self, channel: Channel) -> bool {
+        let channel_idx = channel.0 as usize;
+        self.message_queue[channel_idx].is_empty()
+    }
+
     /// Executes a transition on the given PG characterized by the argument action and post-state.
     ///
     /// Fails if the requested transition is not admissible.
@@ -312,7 +318,7 @@ impl<'def> ChannelSystemRun<'def> {
                                 .as_slice(),
                             vals.as_slice(),
                         )
-                        .expect("communication has been verified before");
+                        .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     EventType::Receive(vals)
                 }
                 Message::ProbeEmptyQueue | Message::ProbeFullQueue

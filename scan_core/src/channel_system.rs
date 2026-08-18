@@ -329,7 +329,11 @@ pub struct ChannelSystem {
     #[get_size(ignore)]
     senders: Vec<FixedBitSet>,
     #[get_size(ignore)]
+    probe_empty_queues: Vec<FixedBitSet>,
+    #[get_size(ignore)]
     receivers: Vec<FixedBitSet>,
+    #[get_size(ignore)]
+    probe_full_queues: Vec<FixedBitSet>,
 }
 
 impl ChannelSystem {
@@ -372,6 +376,28 @@ impl ChannelSystem {
     #[inline]
     pub fn receivers_from(&self, channel: Channel) -> Result<impl Iterator<Item = PgId>, CsError> {
         self.receivers
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+            .map(|set| set.ones().map(|i| PgId(i as u16)))
+    }
+
+    #[inline]
+    pub fn probe_empty_queue(
+        &self,
+        channel: Channel,
+    ) -> Result<impl Iterator<Item = PgId>, CsError> {
+        self.probe_empty_queues
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+            .map(|set| set.ones().map(|i| PgId(i as u16)))
+    }
+
+    #[inline]
+    pub fn probe_full_queue(
+        &self,
+        channel: Channel,
+    ) -> Result<impl Iterator<Item = PgId>, CsError> {
+        self.probe_full_queues
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
             .map(|set| set.ones().map(|i| PgId(i as u16)))

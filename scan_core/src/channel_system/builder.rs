@@ -34,7 +34,9 @@ pub struct ChannelSystemBuilder {
     channels: Vec<(Vec<Type>, ChannelCapacity)>,
     communications: BTreeMap<Action, Option<(Channel, Message)>>,
     senders: Vec<FixedBitSet>,
+    probe_empty_queues: Vec<FixedBitSet>,
     receivers: Vec<FixedBitSet>,
+    probe_full_queues: Vec<FixedBitSet>,
 }
 
 impl Default for ChannelSystemBuilder {
@@ -52,7 +54,9 @@ impl ChannelSystemBuilder {
             channels: Vec::new(),
             communications: BTreeMap::new(),
             senders: Vec::new(),
+            probe_empty_queues: Vec::new(),
             receivers: Vec::new(),
+            probe_full_queues: Vec::new(),
         }
     }
 
@@ -473,6 +477,8 @@ impl ChannelSystemBuilder {
             .push((var_types, ChannelCapacity::Queue(capacity)));
         self.senders.push(FixedBitSet::new());
         self.receivers.push(FixedBitSet::new());
+        self.probe_empty_queues.push(FixedBitSet::new());
+        self.probe_full_queues.push(FixedBitSet::new());
         channel
     }
 
@@ -482,6 +488,8 @@ impl ChannelSystemBuilder {
         self.channels.push((var_types, ChannelCapacity::Sink));
         self.senders.push(FixedBitSet::new());
         self.receivers.push(FixedBitSet::new());
+        self.probe_empty_queues.push(FixedBitSet::new());
+        self.probe_full_queues.push(FixedBitSet::new());
         channel
     }
 
@@ -588,7 +596,7 @@ impl ChannelSystemBuilder {
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, Some((channel, Message::ProbeEmptyQueue)));
-            self.senders[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
+            self.probe_empty_queues[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
             Ok(action)
         }
     }
@@ -616,13 +624,13 @@ impl ChannelSystemBuilder {
                 .program_graphs
                 .get_mut(pg_id.0 as usize)
                 .ok_or(CsError::MissingPg(pg_id))?
-                // create a vacuous send action so the PG knows it's a communication
-                .new_send(Vec::new())
+                // create a vacuous receive action so the PG knows it's a communication
+                .new_receive(Vec::new())
                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
             let action = Action(pg_id, action);
             self.communications
                 .insert(action, Some((channel, Message::ProbeFullQueue)));
-            self.receivers[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
+            self.probe_full_queues[channel.0 as usize].grow_and_insert(pg_id.0 as usize);
             Ok(action)
         }
     }
@@ -661,6 +669,8 @@ impl ChannelSystemBuilder {
             program_graphs,
             senders: self.senders,
             receivers: self.receivers,
+            probe_empty_queues: self.probe_empty_queues,
+            probe_full_queues: self.probe_full_queues,
         };
 
         info!(
