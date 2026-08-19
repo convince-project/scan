@@ -15,25 +15,12 @@ use crate::{BooleanExpr, Time, Val, program_graph::TimeRange};
 /// meaning that it is not possible to introduce new locations, actions, variables, etc.
 /// Though, this restriction makes it so that cloning the [`ProgramGraphRun`] is cheap,
 /// because only the internal state needs to be duplicated.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProgramGraphRun<'def> {
     current_states: Vec<Location>,
     vars: Vec<Val>,
     clocks: Vec<Time>,
     def: &'def ProgramGraph,
-    bump: Bump,
-}
-
-impl<'def> Clone for ProgramGraphRun<'def> {
-    fn clone(&self) -> Self {
-        Self {
-            current_states: self.current_states.clone(),
-            vars: self.vars.clone(),
-            clocks: self.clocks.clone(),
-            def: self.def,
-            bump: Bump::new(),
-        }
-    }
 }
 
 impl<'def> ProgramGraphRun<'def> {
@@ -44,7 +31,6 @@ impl<'def> ProgramGraphRun<'def> {
             vars: program_graph.vars.clone(),
             clocks: vec![0; program_graph.clocks as usize],
             def: program_graph,
-            bump: Bump::new(),
         }
     }
 
@@ -74,14 +60,15 @@ impl<'def> ProgramGraphRun<'def> {
     #[inline]
     fn transitions<'a>(
         &'a self,
+        bump: &'a Bump,
     ) -> TransitionsIterator<'a, impl Iterator<Item = &'a (Action, Vec<Transition>)>> {
         let iters = self
             .current_states
             .iter()
             .map(|loc| self.def.locations[loc.0 as usize].0.iter())
-            .collect_in::<bumpalo::collections::Vec<_>>(&self.bump)
+            .collect_in::<bumpalo::collections::Vec<_>>(bump)
             .into_bump_slice_mut();
-        TransitionsIterator::new(iters, &self.bump)
+        TransitionsIterator::new(iters, bump)
     }
 
     /// Iterates over all transitions that can be admitted in the current state.
@@ -89,22 +76,29 @@ impl<'def> ProgramGraphRun<'def> {
     /// An admissible transition is characterized by the required action and the post-state
     /// (the pre-state being necessarily the current state of the machine).
     /// The guard (if any) is guaranteed to be satisfied.
-    pub fn possible_transitions(
-        &self,
+    pub fn possible_transitions<'a>(
+        &'a self,
+        bump: &'a Bump,
     ) -> impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)> {
-        self.transitions().map(move |(action, loc_transitions)| {
-            (
-                action,
-                loc_transitions.iter().map(move |transitions| {
-                    transitions
-                        .iter()
-                        .filter(move |(post_state, guard, constraints)| {
-                            self.check_transition(action, *post_state, guard.as_ref(), constraints)
-                        })
-                        .map(|(post_state, ..)| *post_state)
-                }),
-            )
-        })
+        self.transitions(bump)
+            .map(move |(action, loc_transitions)| {
+                (
+                    action,
+                    loc_transitions.iter().map(move |transitions| {
+                        transitions
+                            .iter()
+                            .filter(move |(post_state, guard, constraints)| {
+                                self.check_transition(
+                                    action,
+                                    *post_state,
+                                    guard.as_ref(),
+                                    constraints,
+                                )
+                            })
+                            .map(|(post_state, ..)| *post_state)
+                    }),
+                )
+            })
     }
 
     /// Iterates over all transitions that can be admitted in the current state,
@@ -289,7 +283,6 @@ impl<'def> ProgramGraphRun<'def> {
         post_states: &[Location],
         rng: &mut R,
     ) -> Result<(), PgError> {
-        self.bump.reset();
         if post_states.len() != self.current_states.len() {
             return Err(PgError::MismatchingPostStates);
         }
@@ -345,7 +338,6 @@ impl<'def> ProgramGraphRun<'def> {
     /// Returns error if the waiting would violate the current location's time invariant (if any).
     #[inline]
     pub fn wait(&mut self, delta: Time) -> Result<(), PgError> {
-        self.bump.reset();
         if self.can_wait(delta) {
             self.clocks.iter_mut().for_each(|t| *t += delta);
             Ok(())
@@ -360,7 +352,6 @@ impl<'def> ProgramGraphRun<'def> {
         post_states: &[Location],
         rng: &'a mut R,
     ) -> Result<Vec<Val>, PgError> {
-        self.bump.reset();
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {
@@ -385,7 +376,6 @@ impl<'def> ProgramGraphRun<'def> {
         post_states: &[Location],
         vals: &[Val],
     ) -> Result<(), PgError> {
-        self.bump.reset();
         if action == EPSILON {
             Err(PgError::NotReceive(action))
         } else if self.active_transitions(action, post_states, &[]) {
@@ -418,7 +408,7 @@ impl<'def> ProgramGraphRun<'def> {
 
     /// Returns `true` if there is any transition from the current state that will be unlocked at some point in the future,
     /// either because of a temporal guard on the transition becoming true, or a time invariant on the post-location becoming true.
-    pub fn is_waiting(&self) -> bool {
+    pub fn is_waiting<'a>(&'a self, bump: &'a Bump) -> bool {
         let unsatisfied_lower_bound = |(c, range): &(Clock, TimeRange)| {
             let time = self.clocks[c.0 as usize];
             let bound = range.start_bound();
@@ -438,7 +428,7 @@ impl<'def> ProgramGraphRun<'def> {
             }
         };
         self.can_wait(1)
-            && self.transitions().any(move |(_, loc_transitions)| {
+            && self.transitions(bump).any(move |(_, loc_transitions)| {
                 loc_transitions.iter().any(move |transitions| {
                     transitions.iter().any(move |(post_state, _, constraints)| {
                         let invariants = self.def.locations[post_state.0 as usize].1.as_slice();

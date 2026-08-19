@@ -16,27 +16,13 @@ use std::collections::VecDeque;
 /// meaning that it is not possible to introduce new PGs or modifying them, or add new channels.
 /// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
 /// because only the internal state needs to be duplicated.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChannelSystemRun<'def> {
     rng: SmallRng,
     time: Time,
     message_queue: Vec<VecDeque<Val>>,
     program_graphs: Vec<ProgramGraphRun<'def>>,
     def: &'def ChannelSystem,
-    bump: Bump,
-}
-
-impl<'def> Clone for ChannelSystemRun<'def> {
-    fn clone(&self) -> Self {
-        Self {
-            rng: self.rng.clone(),
-            time: self.time,
-            message_queue: self.message_queue.clone(),
-            program_graphs: self.program_graphs.clone(),
-            def: self.def,
-            bump: Bump::new(),
-        }
-    }
 }
 
 impl<'def> ChannelSystemRun<'def> {
@@ -64,7 +50,6 @@ impl<'def> ChannelSystemRun<'def> {
                 ChannelCapacity::Sink => VecDeque::new(),
             })),
             def: cs,
-            bump: Bump::new(),
         }
     }
 
@@ -94,8 +79,9 @@ impl<'def> ChannelSystemRun<'def> {
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
     /// See also [`ProgramGraphRun::possible_transitions`].
-    pub fn possible_transitions(
-        &self,
+    pub fn possible_transitions<'a>(
+        &'a self,
+        bump: &'a Bump,
     ) -> impl Iterator<
         Item = (
             PgId,
@@ -104,7 +90,7 @@ impl<'def> ChannelSystemRun<'def> {
         ),
     > {
         self.def.program_graph_ids().flat_map(move |pg_id| {
-            self.possible_transitions_pg(pg_id)
+            self.possible_transitions_pg(pg_id, bump)
                 .expect("pg exists")
                 .map(move |(action, transitions)| (pg_id, action, transitions))
         })
@@ -132,25 +118,27 @@ impl<'def> ChannelSystemRun<'def> {
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
     /// See also [`ProgramGraphRun::possible_transitions`].
-    pub fn possible_transitions_pg(
-        &self,
+    pub fn possible_transitions_pg<'a>(
+        &'a self,
         pg_id: PgId,
+        bump: &'a Bump,
     ) -> Result<
         impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)>,
         CsError,
     > {
         self.program_graph(pg_id).map(|pg| {
-            pg.possible_transitions().filter_map(move |(action, post)| {
-                let action = Action(pg_id, action);
-                if let Some((channel, message)) = self.def.communication(action)
-                    && !self.check_message(channel, message)
-                {
-                    None
-                } else {
-                    let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
-                    Some((action, post))
-                }
-            })
+            pg.possible_transitions(bump)
+                .filter_map(move |(action, post)| {
+                    let action = Action(pg_id, action);
+                    if let Some((channel, message)) = self.def.communication(action)
+                        && !self.check_message(channel, message)
+                    {
+                        None
+                    } else {
+                        let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
+                        Some((action, post))
+                    }
+                })
         })
     }
 
@@ -255,14 +243,13 @@ impl<'def> ChannelSystemRun<'def> {
     /// Fails if the requested transition is not admissible.
     ///
     /// See also [`ProgramGraphRun::transition`].
-    pub fn transition(
-        &mut self,
+    pub fn transition<'a>(
+        &'a mut self,
         action: Action,
-        post: &[Location],
+        post: &'a [Location],
+        bump: &'a Bump,
     ) -> Result<Option<Event>, CsError> {
         use bumpalo::collections::Vec as BumpVec;
-
-        self.bump.reset();
 
         let pg_id = action.0;
         // If action is a communication, check it is legal
@@ -291,7 +278,7 @@ impl<'def> ChannelSystemRun<'def> {
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                .collect_in::<BumpVec<PgLocation>>(bump)
                                 .as_slice(),
                             &mut self.rng,
                         )
@@ -314,7 +301,7 @@ impl<'def> ChannelSystemRun<'def> {
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                .collect_in::<BumpVec<PgLocation>>(bump)
                                 .as_slice(),
                             vals.as_slice(),
                         )
@@ -335,7 +322,7 @@ impl<'def> ChannelSystemRun<'def> {
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                .collect_in::<BumpVec<PgLocation>>(bump)
                                 .as_slice(),
                             &mut self.rng,
                         )
@@ -353,7 +340,7 @@ impl<'def> ChannelSystemRun<'def> {
                                     action.1,
                                     post.iter()
                                         .map(|loc| loc.1)
-                                        .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                        .collect_in::<BumpVec<PgLocation>>(bump)
                                         .as_slice(),
                                     &mut self.rng,
                                 )
@@ -378,7 +365,7 @@ impl<'def> ChannelSystemRun<'def> {
                     action.1,
                     post.iter()
                         .map(|loc| loc.1)
-                        .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                        .collect_in::<BumpVec<PgLocation>>(bump)
                         .as_slice(),
                     &mut self.rng,
                 )
@@ -413,7 +400,7 @@ impl<'def> ChannelSystemRun<'def> {
 
     /// Returns `true` if there is any transition from the current state that will be unlocked at some point in the future.
     #[inline]
-    pub fn is_waiting(&self) -> bool {
-        self.can_wait(1) && self.program_graphs.iter().any(|pg| pg.is_waiting())
+    pub fn is_waiting<'a>(&'a self, bump: &'a Bump) -> bool {
+        self.can_wait(1) && self.program_graphs.iter().any(|pg| pg.is_waiting(bump))
     }
 }
