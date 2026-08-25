@@ -477,9 +477,6 @@ impl ModelBuilder {
             .enumerate()
             // only consider events that can activate some transition and that some other process is sending.
             .filter(|(_, eb)| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
-            .map(|(index, eb)| (index, eb.clone()))
-            // WARN TODO Necessary to satisfy the borrow checker but it should be possible to avoid cloning.
-            .collect::<Vec<_>>()
         {
             let mut param_vars_vec = Vec::new();
             let mut param_types_vec = Vec::new();
