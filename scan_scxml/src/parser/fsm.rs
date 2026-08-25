@@ -10,7 +10,7 @@ use quick_xml::{Reader, XmlVersion, events};
 use scan_core::Time;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::io::{BufRead, Read};
+use std::io::BufRead;
 use std::str;
 
 #[derive(Debug)]
@@ -58,7 +58,7 @@ pub struct Data {
 
 impl Data {
     fn parse(
-        tag: events::BytesStart<'_>,
+        tag: &events::BytesStart<'_>,
         omg_type: Option<OmgType>,
         interner: &mut Interner,
         omg_types: &OmgTypes,
@@ -101,7 +101,7 @@ pub struct State {
 }
 
 impl State {
-    fn parse(tag: events::BytesStart<'_>, xml_version: XmlVersion) -> anyhow::Result<State> {
+    fn parse(tag: &events::BytesStart<'_>, xml_version: XmlVersion) -> anyhow::Result<State> {
         let attrs = attrs(tag, &[ATTR_ID], &[], xml_version)?;
         Ok(State {
             id: attrs[ATTR_ID].clone(),
@@ -131,7 +131,7 @@ pub struct Transition {
 
 impl Transition {
     fn parse(
-        tag: events::BytesStart<'_>,
+        tag: &events::BytesStart<'_>,
         interner: &mut Interner,
         xml_version: XmlVersion,
     ) -> anyhow::Result<Transition> {
@@ -179,7 +179,7 @@ pub enum Executable {
 
 impl Executable {
     fn parse_raise(
-        tag: events::BytesStart<'_>,
+        tag: &events::BytesStart<'_>,
         xml_version: XmlVersion,
     ) -> anyhow::Result<Executable> {
         let attrs = attrs(tag, &[ATTR_EVENT], &[], xml_version)?;
@@ -188,7 +188,7 @@ impl Executable {
     }
 
     fn parse_assign(
-        tag: events::BytesStart<'_>,
+        tag: &events::BytesStart<'_>,
         interner: &mut Interner,
         xml_version: XmlVersion,
     ) -> anyhow::Result<Executable> {
@@ -233,7 +233,7 @@ pub struct Send {
 
 impl Send {
     fn parse(
-        tag: events::BytesStart<'_>,
+        tag: &events::BytesStart<'_>,
         interner: &mut Interner,
         xml_version: XmlVersion,
     ) -> anyhow::Result<Send> {
@@ -276,7 +276,7 @@ pub struct If {
 
 impl If {
     fn parse(
-        tag: events::BytesStart<'_>,
+        tag: &events::BytesStart<'_>,
         interner: &mut Interner,
         xml_version: XmlVersion,
     ) -> anyhow::Result<boa_ast::Expression> {
@@ -294,7 +294,7 @@ pub struct Param {
 
 impl Param {
     fn parse(
-        tag: events::BytesStart<'_>,
+        tag: &events::BytesStart<'_>,
         omg_type: Option<OmgType>,
         interner: &mut Interner,
         omg_types: &OmgTypes,
@@ -336,7 +336,7 @@ pub struct Scxml {
 }
 
 impl Scxml {
-    fn parse(tag: events::BytesStart<'_>, xml_version: XmlVersion) -> anyhow::Result<Scxml> {
+    fn parse(tag: &events::BytesStart<'_>, xml_version: XmlVersion) -> anyhow::Result<Scxml> {
         let attrs = attrs(
             tag,
             &[ATTR_NAME, ATTR_INITIAL],
@@ -369,17 +369,14 @@ pub(super) fn parse<R: BufRead>(
             .context("failed reading event")?
         {
             Event::Start(tag) => {
-                let tag_name = reader
-                    .decoder()
-                    .decode(tag.name().into_inner())?
-                    .into_owned();
+                let tag_name = tag.name().into_inner();
                 trace!(target: "parser", "start tag '{tag_name}'");
-                let tag_obj = parse_start_tag(tag_name, &stack, tag, interner, xml_version)?;
+                let tag_obj = parse_start_tag(&stack, &tag, interner, xml_version)?;
                 stack.push(tag_obj);
                 type_annotation = None;
             }
             Event::End(tag) => {
-                let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                let tag_name = tag.name().into_inner();
                 if let Some(tag) = stack.pop() {
                     if <&str>::from(&tag) == tag_name {
                         trace!(target: "parser", "end tag '{tag_name}'");
@@ -459,14 +456,9 @@ pub(super) fn parse<R: BufRead>(
                 type_annotation = None;
             }
             Event::Empty(tag) => {
-                let tag_name = reader
-                    .decoder()
-                    .decode(tag.name().into_inner())?
-                    .into_owned();
                 parse_empty_tag(
-                    tag_name,
                     &mut stack,
-                    tag,
+                    &tag,
                     &mut type_annotation.take(),
                     interner,
                     omg_types,
@@ -474,8 +466,6 @@ pub(super) fn parse<R: BufRead>(
                 )?;
             }
             Event::Text(text) => {
-                let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
-                let text = String::from_utf8(text)?;
                 if !text.trim().is_empty() {
                     error!(target: "parser", "text elements not allowed, ignoring");
                 }
@@ -483,11 +473,8 @@ pub(super) fn parse<R: BufRead>(
             }
             Event::Comment(comment) => {
                 // Convert comment into string (is there no easier way?)
-                let comment = comment
-                    .bytes()
-                    .collect::<Result<Vec<u8>, std::io::Error>>()?;
-                let comment = String::from_utf8(comment)?;
-                type_annotation = parse_comment(comment, omg_types)?;
+                let comment = comment.into_inner();
+                type_annotation = parse_comment(comment.as_ref(), omg_types)?;
             }
             Event::CData(_) => {
                 bail!("CData not supported");
@@ -513,16 +500,16 @@ pub(super) fn parse<R: BufRead>(
 }
 
 fn parse_empty_tag(
-    tag_name: String,
     stack: &mut [ScxmlTag],
-    tag: events::BytesStart<'_>,
+    tag: &events::BytesStart<'_>,
     type_annotation: &mut Option<OmgType>,
     interner: &mut Interner,
     omg_types: &OmgTypes,
     xml_version: XmlVersion,
 ) -> Result<(), anyhow::Error> {
+    let tag_name = tag.name().into_inner();
     trace!(target: "parser", "'{tag_name}' empty tag");
-    match tag_name.as_str() {
+    match tag_name {
         TAG_DATA
             if stack
                 .last()
@@ -535,7 +522,7 @@ fn parse_empty_tag(
                 omg_types,
                 xml_version,
             )
-            .with_context(|| ParserError::Tag(tag_name))?;
+            .with_context(|| ParserError::Tag(tag_name.to_string()))?;
             Data::push(data, stack)?;
         }
         TAG_STATE
@@ -543,8 +530,8 @@ fn parse_empty_tag(
                 .last()
                 .is_some_and(|tag| matches!(*tag, ScxmlTag::Scxml(_))) =>
         {
-            let state =
-                State::parse(tag, xml_version).with_context(|| ParserError::Tag(tag_name))?;
+            let state = State::parse(tag, xml_version)
+                .with_context(|| ParserError::Tag(tag_name.to_string()))?;
             state.push(stack)?;
         }
         TAG_TRANSITION
@@ -553,23 +540,23 @@ fn parse_empty_tag(
                 .is_some_and(|tag| matches!(*tag, ScxmlTag::State(_))) =>
         {
             let transition = Transition::parse(tag, interner, xml_version)
-                .with_context(|| ParserError::Tag(tag_name))?;
+                .with_context(|| ParserError::Tag(tag_name.to_string()))?;
             transition.push(stack)?;
         }
         // we `rev()` the iterator only because we expect the relevant tag to be towards the end of the stack
         TAG_RAISE if stack.last().is_some_and(|tag| tag.is_executable()) => {
             let raise = Executable::parse_raise(tag, xml_version)
-                .with_context(|| ParserError::Tag(tag_name))?;
+                .with_context(|| ParserError::Tag(tag_name.to_string()))?;
             raise.push(stack)?;
         }
         TAG_SEND if stack.last().is_some_and(|tag| tag.is_executable()) => {
             let send = Send::parse(tag, interner, xml_version)
-                .with_context(|| ParserError::Tag(tag_name))?;
+                .with_context(|| ParserError::Tag(tag_name.to_string()))?;
             Executable::Send(send).push(stack)?;
         }
         TAG_ASSIGN if stack.last().is_some_and(|tag| tag.is_executable()) => {
             let assign = Executable::parse_assign(tag, interner, xml_version)
-                .with_context(|| ParserError::Tag(tag_name))?;
+                .with_context(|| ParserError::Tag(tag_name.to_string()))?;
             assign.push(stack)?;
         }
         TAG_PARAM
@@ -584,7 +571,7 @@ fn parse_empty_tag(
                 omg_types,
                 xml_version,
             )
-            .with_context(|| ParserError::Tag(tag_name))?;
+            .with_context(|| ParserError::Tag(tag_name.to_string()))?;
             if let ScxmlTag::Send(send) = stack.last_mut().expect("param must be inside other tag")
             {
                 send.params.push(param);
@@ -614,7 +601,7 @@ fn parse_empty_tag(
         {
             if let Some(ScxmlTag::If(r#if)) = stack.last_mut() {
                 let cond = If::parse(tag, interner, xml_version)
-                    .with_context(|| ParserError::Tag(tag_name))?;
+                    .with_context(|| ParserError::Tag(tag_name.to_string()))?;
                 r#if.elif.push((cond, Vec::new()));
             } else {
                 unreachable!()
@@ -629,13 +616,13 @@ fn parse_empty_tag(
 }
 
 fn parse_start_tag(
-    tag_name: String,
     stack: &[ScxmlTag],
-    tag: events::BytesStart<'_>,
+    tag: &events::BytesStart<'_>,
     interner: &mut Interner,
     xml_version: XmlVersion,
 ) -> Result<ScxmlTag, anyhow::Error> {
-    match tag_name.as_str() {
+    let tag_name = tag.name().into_inner();
+    match tag_name {
         TAG_SCXML if stack.is_empty() => Scxml::parse(tag, xml_version).map(ScxmlTag::Scxml),
         TAG_DATAMODEL
             if stack
@@ -691,7 +678,7 @@ fn parse_start_tag(
     .with_context(|| ParserError::Tag(tag_name.to_string()))
 }
 
-fn parse_comment(comment: String, omg_types: &OmgTypes) -> anyhow::Result<Option<OmgType>> {
+fn parse_comment(comment: &str, omg_types: &OmgTypes) -> anyhow::Result<Option<OmgType>> {
     let mut iter = comment.split_whitespace();
     let keyword = iter.next().ok_or(anyhow!("no keyword"))?;
     if keyword == "TYPE" {

@@ -6,10 +6,7 @@ use boa_interner::Interner;
 use log::{error, info, trace};
 use quick_xml::{Reader, XmlVersion, events::Event};
 use scan_pmtl::Pmtl;
-use std::{
-    collections::HashMap,
-    io::{BufRead, Read},
-};
+use std::{collections::HashMap, io::BufRead};
 
 const TAG_PORTS: &str = "ports";
 const TAG_PORT: &str = "scxml_event_send";
@@ -86,8 +83,7 @@ impl Properties {
                 .context("failed reading event")?
             {
                 Event::Start(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = std::str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     trace!("'{tag_name}' open tag");
                     match tag_name {
                         TAG_PROPERTIES if stack.is_empty() => {
@@ -106,7 +102,7 @@ impl Properties {
                                 .is_some_and(|tag| matches!(*tag, PropertyTag::Ports)) =>
                         {
                             let attrs = attrs(
-                                tag,
+                                &tag,
                                 &[ATTR_EVENT, ATTR_ORIGIN, ATTR_TARGET],
                                 &[],
                                 xml_version,
@@ -141,7 +137,7 @@ impl Properties {
                     }
                 }
                 Event::End(tag) => {
-                    let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                    let tag_name = tag.name().into_inner();
                     if stack
                         .pop()
                         .is_some_and(|state| Into::<&str>::into(&state) == tag_name)
@@ -153,8 +149,7 @@ impl Properties {
                     }
                 }
                 Event::Empty(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = std::str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     trace!("'{tag_name}' empty tag");
                     match tag_name {
                         TAG_EVENT_VAR
@@ -163,9 +158,10 @@ impl Properties {
                                 .is_some_and(|tag| matches!(*tag, PropertyTag::Port(_, _, _))) =>
                         {
                             if let Some(PropertyTag::Port(event, origin, target)) = stack.last() {
-                                let attrs = attrs(tag, &[ATTR_ID], &[], xml_version).with_context(
-                                    || format!("failed to parse '{TAG_EVENT_VAR}' tag attributes"),
-                                )?;
+                                let attrs = attrs(&tag, &[ATTR_ID], &[], xml_version)
+                                    .with_context(|| {
+                                        format!("failed to parse '{TAG_EVENT_VAR}' tag attributes")
+                                    })?;
                                 let id = attrs[ATTR_ID].clone();
                                 self.ports.insert(
                                     id,
@@ -189,7 +185,7 @@ impl Properties {
                             if let Some(PropertyTag::Port(event, origin, target)) = stack.last_mut()
                             {
                                 let attrs = attrs(
-                                    tag,
+                                    &tag,
                                     &[ATTR_ID, ATTR_PARAM, ATTR_EXPR, ATTR_TYPE],
                                     &[],
                                     xml_version,
@@ -222,7 +218,7 @@ impl Properties {
                         }
                         TAG_PROPERTY => {
                             let attrs =
-                                attrs(tag, &[ATTR_ID, ATTR_EXPR], &[ATTR_LOGIC], xml_version)
+                                attrs(&tag, &[ATTR_ID, ATTR_EXPR], &[ATTR_LOGIC], xml_version)
                                     .with_context(|| {
                                         format!("failed to parse '{TAG_PROPERTY}' tag attributes")
                                     })?;
@@ -258,8 +254,6 @@ impl Properties {
                     }
                 }
                 Event::Text(text) => {
-                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
-                    let text = String::from_utf8(text)?;
                     if !text.trim().is_empty() {
                         error!(target: "parser", "text elements not allowed, ignoring");
                     }
