@@ -6,7 +6,7 @@ use boa_interner::Interner;
 use log::{error, info, trace};
 use quick_xml::{Reader, XmlVersion, events::Event};
 use scan_pmtl::Pmtl;
-use std::{collections::HashMap, io::BufRead};
+use std::{collections::BTreeMap, io::BufRead};
 
 const TAG_PORTS: &str = "ports";
 const TAG_PORT: &str = "scxml_event_send";
@@ -51,7 +51,7 @@ impl From<&PropertyTag> for &'static str {
 
 #[derive(Debug, Clone)]
 pub struct Properties {
-    pub(crate) ports: HashMap<String, ParserPort>,
+    pub(crate) ports: BTreeMap<String, ParserPort>,
     pub(crate) predicates: Vec<boa_ast::Expression>,
     pub(crate) guarantees: Vec<(String, Pmtl<usize>)>,
     pub(crate) assumes: Vec<(String, Pmtl<usize>)>,
@@ -60,7 +60,7 @@ pub struct Properties {
 impl Properties {
     pub fn new() -> Self {
         Properties {
-            ports: HashMap::new(),
+            ports: BTreeMap::new(),
             predicates: Vec::new(),
             guarantees: Vec::new(),
             assumes: Vec::new(),
@@ -71,7 +71,6 @@ impl Properties {
         &mut self,
         reader: &mut Reader<R>,
         interner: &mut Interner,
-        // omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
         let mut buf = Vec::new();
         let mut stack: Vec<PropertyTag> = Vec::new();

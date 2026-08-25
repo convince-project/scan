@@ -12,7 +12,7 @@ use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
 use scan_pmtl::{Pmtl, PmtlOracle};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 // TODO:
 //
@@ -22,11 +22,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub struct ScxmlModel {
     // u16 here represents PgId
     // TODO: turn into indexed Vec<String>
-    pub fsm_names: HashMap<u16, String>,
+    pub fsm_names: BTreeMap<u16, String>,
     // usize here represents event index
-    pub parameters: HashMap<Channel, (PgId, PgId, usize)>,
-    pub int_queues: HashSet<Channel>,
-    pub ext_queues: HashMap<Channel, PgId>,
+    pub parameters: BTreeMap<Channel, (PgId, PgId, usize)>,
+    pub int_queues: BTreeSet<Channel>,
+    pub ext_queues: BTreeMap<Channel, PgId>,
     pub events: Vec<(String, Option<OmgTypeDef>)>,
     pub port_vars: Vec<(String, OmgType, Vec<Expression<Atom>>)>,
     pub ports: Vec<Channel>,
@@ -46,8 +46,8 @@ struct EventBuilder {
     // Associates parameter's name with its type's name.
     name: String,
     params: BTreeMap<String, Option<OmgType>>,
-    senders: HashSet<PgId>,
-    receivers: HashSet<PgId>,
+    senders: BTreeSet<PgId>,
+    receivers: BTreeSet<PgId>,
 }
 
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
@@ -57,26 +57,26 @@ pub struct ModelBuilder {
     // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
     // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
     // QUESTION: Is there a better way?
-    // structs: HashMap<(String, String), usize>,
+    // structs: BTreeMap<(String, String), usize>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
-    fsm_names: HashMap<u16, String>,
-    fsm_builders: HashMap<String, FsmBuilder>,
+    fsm_names: BTreeMap<u16, String>,
+    fsm_builders: BTreeMap<String, FsmBuilder>,
     // Each event is associated to a unique global index and parameter(s).
     // WARN FIXME TODO: name clashes
     events: Vec<EventBuilder>,
-    event_indexes: HashMap<String, usize>,
-    parameter_channels: HashMap<(PgId, PgId, usize), Channel>,
+    event_indexes: BTreeMap<String, usize>,
+    parameter_channels: BTreeMap<(PgId, PgId, usize), Channel>,
     // Properties
     guarantees: Vec<(String, Pmtl<usize>)>,
     assumes: Vec<(String, Pmtl<usize>)>,
     predicates: Vec<BooleanExpr<Atom>>,
     // port vars are (in general) expressions over atoms on the same channel
-    port_vars: HashMap<String, (OmgType, Vec<Expression<Atom>>)>,
+    port_vars: BTreeMap<String, (OmgType, Vec<Expression<Atom>>)>,
     // ports are defined by a channel and a vec of init values.
     ports: Vec<(Channel, Vec<Val>)>,
     // extra data
-    int_queues: HashSet<Channel>,
+    int_queues: BTreeSet<Channel>,
 }
 
 impl ModelBuilder {
@@ -105,7 +105,7 @@ impl ModelBuilder {
                         name: id.clone(),
                         initial: String::from("init"),
                         datamodel: Vec::new(),
-                        states: HashMap::from([(
+                        states: BTreeMap::from([(
                             String::from("init"),
                             State {
                                 id: String::from("init"),
@@ -142,8 +142,8 @@ impl ModelBuilder {
             self.events.push(EventBuilder {
                 name: id.to_string(),
                 params: BTreeMap::new(),
-                senders: HashSet::new(),
-                receivers: HashSet::new(),
+                senders: BTreeSet::new(),
+                receivers: BTreeSet::new(),
             });
             self.event_indexes.insert(id.to_owned(), index);
             index
@@ -191,7 +191,7 @@ impl ModelBuilder {
         interner: &Interner,
         omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
-        let mut vars: HashMap<String, OmgType> = HashMap::new();
+        let mut vars: BTreeMap<String, OmgType> = BTreeMap::new();
         for data in &fmt.datamodel {
             if let Some(r#type) = &data.omg_type
                 // need to know len of arrays
@@ -243,7 +243,7 @@ impl ModelBuilder {
         &mut self,
         pg_id: PgId,
         executable: &mut Executable,
-        vars: &HashMap<String, OmgType>,
+        vars: &BTreeMap<String, OmgType>,
         interner: &Interner,
         omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
@@ -377,8 +377,8 @@ impl ModelBuilder {
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
         // Initialize variables from datamodel
-        // NOTE vars cannot be initialized using previously defined vars because datamodel is an HashMap
-        let mut vars: HashMap<String, (OmgType, Vec<(Var, Type)>)> = HashMap::new();
+        // NOTE vars cannot be initialized using previously defined vars because datamodel is an BTreeMap
+        let mut vars: BTreeMap<String, (OmgType, Vec<(Var, Type)>)> = BTreeMap::new();
         for data in scxml.datamodel.iter() {
             let mut omg_type = data
                 .omg_type
@@ -391,7 +391,7 @@ impl ModelBuilder {
                     .as_ref()
                     .ok_or_else(|| anyhow!("expression for data '{}' required", data.id))
                     .and_then(|expr| {
-                        infer_type(expr, &HashMap::new(), interner, Some(&omg_type), omg_types)
+                        infer_type(expr, &BTreeMap::new(), interner, Some(&omg_type), omg_types)
                     })?;
             }
             let vars_types = if let Some(expr) = data.expression.as_ref() {
@@ -427,7 +427,7 @@ impl ModelBuilder {
         // Transition initializing datamodel variables.
         // After initializing datamodel, transition to location representing point-of-entry of initial state of State Chart.
         // Map FSM's state ids to corresponding CS's locations.
-        let mut states = HashMap::new();
+        let mut states = BTreeMap::new();
         // Conventionally, the entry-point for a state is a location associated to the id of the state.
         states.insert(scxml.initial.to_owned(), initial_loc);
         // Var representing the current event
@@ -470,7 +470,7 @@ impl ModelBuilder {
         // Use BTreeMap to iter in fixed order
         let mut params_vars: BTreeMap<(usize, String), (OmgType, Vec<(Var, Type)>)> =
             BTreeMap::new(); // maps (event_idx, param_name) -> (omg_type, (param_vars, var_types))
-        let mut params_actions: HashMap<(PgId, usize), Action> = HashMap::new(); // maps (sender_pg_id, event) -> param_action
+        let mut params_actions: BTreeMap<(PgId, usize), Action> = BTreeMap::new(); // maps (sender_pg_id, event) -> param_action
         for (event_index, event_builder) in self
             .events
             .iter()
@@ -902,7 +902,7 @@ impl ModelBuilder {
         pg_id: PgId,
         int_queue: Channel,
         loc: Location,
-        vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
+        vars: &BTreeMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
         omg_types: &mut OmgTypes,
     ) -> Result<Location, anyhow::Error> {
@@ -1181,7 +1181,7 @@ impl ModelBuilder {
         params: &[Param],
         event_idx: usize,
         param_loc: Location,
-        vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
+        vars: &BTreeMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
         omg_types: &mut OmgTypes,
     ) -> Result<Location, anyhow::Error> {
@@ -1275,7 +1275,7 @@ impl ModelBuilder {
                 let init = expression::<Var, Expression<Var>>(
                     init,
                     &parser.interner,
-                    &HashMap::new(),
+                    &BTreeMap::new(),
                     param_type.as_ref(),
                     &mut parser.types,
                 )

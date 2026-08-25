@@ -13,11 +13,11 @@ use scan_core::{
 };
 use scan_mtl::{Mtl, MtlOracle};
 use serde::de::IgnoredAny;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct JaniModelData {
-    pub actions: HashMap<Action, String>,
+    pub actions: BTreeMap<Action, String>,
     pub ports: Vec<(String, Type)>,
     pub guarantees: Vec<String>,
 }
@@ -32,23 +32,23 @@ pub(crate) fn build(
 
 #[derive(Default, Debug, Clone)]
 struct JaniBuilder {
-    system_actions: HashMap<String, Action>,
+    system_actions: BTreeMap<String, Action>,
     // Associating name to variable, initial value and type.
     global_state_channel: Option<Channel>,
-    global_vars: HashMap<String, (Var, Val, Type)>,
+    global_vars: BTreeMap<String, (Var, Val, Type)>,
     global_state_vec: Vec<String>,
-    global_constants: HashMap<String, Val>,
+    global_constants: BTreeMap<String, Val>,
     automaton_builders: Vec<AutomatonBuilder>,
 }
 
 #[derive(Debug, Clone)]
 struct AutomatonBuilder {
     // tracks locations and their "idle" side-location
-    locations: HashMap<String, Location>,
-    local_vars: HashMap<String, (Var, Val, Type)>,
-    idle_locations: HashMap<(Location, Action), Location>,
+    locations: BTreeMap<String, Location>,
+    local_vars: BTreeMap<String, (Var, Val, Type)>,
+    idle_locations: BTreeMap<(Location, Action), Location>,
     // assign action name -> cs base action + destination actions
-    dest_actions: HashMap<
+    dest_actions: BTreeMap<
         // triggering sync action
         Action,
         Vec<(
@@ -64,11 +64,11 @@ struct AutomatonBuilder {
 impl AutomatonBuilder {
     fn new(rng: Var) -> Self {
         AutomatonBuilder {
-            locations: HashMap::new(),
-            local_vars: HashMap::new(),
-            dest_actions: HashMap::new(),
+            locations: BTreeMap::new(),
+            local_vars: BTreeMap::new(),
+            dest_actions: BTreeMap::new(),
             rng,
-            idle_locations: HashMap::new(),
+            idle_locations: BTreeMap::new(),
         }
     }
 }
@@ -94,7 +94,7 @@ impl JaniBuilder {
     ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
         let mut cs = ChannelSystemBuilder::new();
         let pg_id = cs.new_program_graph();
-        let automata: HashMap<&str, &Automaton> = jani_model
+        let automata: BTreeMap<&str, &Automaton> = jani_model
             .automata
             .iter()
             .map(|automaton| (automaton.name.as_str(), automaton))
@@ -736,7 +736,7 @@ impl JaniBuilder {
             .value
             .as_ref()
             .and_then(|expr| {
-                self.build_expression(expr, Some(c_type), &HashMap::new())
+                self.build_expression(expr, Some(c_type), &BTreeMap::new())
                     .and_then(|e| e.eval_constant().map_err(|err| anyhow!(err)))
                     .ok()
             })
@@ -750,7 +750,7 @@ impl JaniBuilder {
         cs: &mut ChannelSystemBuilder,
         pg_id: PgId,
         var: &VariableDeclaration,
-        local_vars: &mut HashMap<String, (Var, Val, Type)>,
+        local_vars: &mut BTreeMap<String, (Var, Val, Type)>,
     ) -> anyhow::Result<()> {
         // TODO WARN FIXME: in JANI initial values are random?
         let var_type = (&var.r#type).try_into().expect("convert type");
@@ -772,7 +772,7 @@ impl JaniBuilder {
                 .system_actions
                 .into_iter()
                 .map(|(name, action)| (action, name))
-                .collect::<HashMap<_, _>>(),
+                .collect::<BTreeMap<_, _>>(),
             ports: self
                 .global_state_vec
                 .into_iter()
@@ -791,7 +791,7 @@ impl JaniBuilder {
         &self,
         expr: &Expression,
         type_hint: Option<Type>,
-        local_vars: &HashMap<String, (Var, Val, Type)>,
+        local_vars: &BTreeMap<String, (Var, Val, Type)>,
     ) -> anyhow::Result<CsExpression> {
         match expr {
             Expression::ConstantValue(constant_value) => match constant_value {

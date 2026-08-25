@@ -155,7 +155,7 @@ impl From<Channel> for u16 {
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Location(PgId, PgLocation);
 
 /// An indexing object for actions in a CS.
@@ -169,7 +169,7 @@ pub struct Action(PgId, PgAction);
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Var(PgId, PgVar);
 
 /// An indexing object for clocks in a CS.
@@ -178,7 +178,7 @@ pub struct Var(PgId, PgVar);
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 ///
 /// See also [`PgClock`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize, PartialOrd, Ord)]
 pub struct Clock(PgId, PgClock);
 
 /// A message to be sent through a CS's channel.
