@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use anyhow::{Context, anyhow, bail};
 use boa_ast::expression::{
@@ -13,7 +13,7 @@ use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
 
 pub(super) fn infer_type(
     expr: &boa_ast::Expression,
-    vars: &HashMap<String, OmgType>,
+    vars: &BTreeMap<String, OmgType>,
     interner: &Interner,
     type_hint: Option<&OmgType>,
     omg_types: &OmgTypes,
@@ -239,7 +239,7 @@ pub(super) fn infer_type(
 pub(super) fn expression<V, E>(
     expr: &boa_ast::Expression,
     interner: &Interner,
-    vars: &HashMap<String, (OmgType, Vec<E>)>,
+    vars: &BTreeMap<String, (OmgType, Vec<E>)>,
     expr_type: Option<&OmgType>,
     omg_types: &mut OmgTypes,
 ) -> anyhow::Result<Vec<Expression<V>>>
@@ -414,26 +414,20 @@ where
             };
             match bin.op() {
                 BinaryOp::Arithmetic(ar_bin) => {
-                    let lhs_hint;
-                    let rhs_hint;
-                    match ar_bin {
+                    let (lhs_hint, rhs_hint) = match ar_bin {
                         ArithmeticOp::Add
                         | ArithmeticOp::Sub
                         | ArithmeticOp::Mul
-                        | ArithmeticOp::Exp => {
-                            lhs_hint = expr_type;
-                            rhs_hint = expr_type;
-                        }
+                        | ArithmeticOp::Exp => (expr_type, expr_type),
                         ArithmeticOp::Div => {
                             // WARN: Type inference is tricky: integer division could produce a float
-                            lhs_hint = None;
-                            rhs_hint = None;
+                            (None, None)
                         }
-                        ArithmeticOp::Mod => {
-                            lhs_hint = Some(&OmgType::Base(OmgBaseType::Uint64));
-                            rhs_hint = Some(&OmgType::Base(OmgBaseType::Uint64));
-                        }
-                    }
+                        ArithmeticOp::Mod => (
+                            Some(&OmgType::Base(OmgBaseType::Uint64)),
+                            Some(&OmgType::Base(OmgBaseType::Uint64)),
+                        ),
+                    };
                     let lhs = expression(bin.lhs(), interner, vars, lhs_hint, omg_types)?;
                     if lhs.len() != 1 {
                         bail!("expression lhs does not support arithmetic binary operator");

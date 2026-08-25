@@ -122,7 +122,7 @@ pub(crate) const EPSILON: Action = Action(ActionIdx::MAX);
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, GetSize, PartialOrd, Ord)]
 pub struct Var(u16);
 
 /// An indexing object for clocks in a PG.

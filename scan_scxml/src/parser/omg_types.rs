@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    io::BufRead,
-};
+use std::{collections::BTreeMap, io::BufRead};
 
 use anyhow::{Context, anyhow, bail};
 use log::{error, info, trace, warn};
@@ -118,18 +115,18 @@ impl From<OmgBaseType> for OmgType {
 
 #[derive(Debug, Clone)]
 pub struct OmgTypes {
-    pub type_defs: HashMap<String, OmgTypeDef>,
+    pub type_defs: BTreeMap<String, OmgTypeDef>,
     strings: Vec<String>,
-    strings_idx: HashMap<String, usize>,
+    strings_idx: BTreeMap<String, usize>,
 }
 
 impl OmgTypes {
     pub fn new() -> Self {
         Self {
-            type_defs: HashMap::new(),
+            type_defs: BTreeMap::new(),
             // Empty string is default value so it should always be there
             strings: vec![String::new()],
-            strings_idx: HashMap::from([(String::new(), 0)]),
+            strings_idx: BTreeMap::from([(String::new(), 0)]),
         }
     }
 

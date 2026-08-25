@@ -20,7 +20,7 @@ use log::{error, info, trace};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::io::Seek;
 use std::path::{Path, PathBuf};
@@ -74,8 +74,8 @@ fn attrs(
     keys: &[&str],
     opt_keys: &[&str],
     xml_version: XmlVersion,
-) -> anyhow::Result<HashMap<String, String>> {
-    let mut attrs = HashMap::new();
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut attrs = BTreeMap::new();
     for attr in tag.attributes() {
         let attr = attr?;
         let key = attr.key.into_inner();
@@ -128,7 +128,7 @@ fn ecmascript(code: &str, scope: &Scope, interner: &mut Interner) -> anyhow::Res
 /// Represents a model specified in the CONVINCE-XML format.
 #[derive(Debug)]
 pub struct Parser {
-    pub(crate) processes: HashMap<String, Scxml>,
+    pub(crate) processes: BTreeMap<String, Scxml>,
     pub(crate) types: OmgTypes,
     pub(crate) properties: Properties,
     pub(crate) interner: Interner,
@@ -142,7 +142,7 @@ impl Parser {
     pub fn parse(path: &Path) -> anyhow::Result<Self> {
         info!(target: "parser", "creating parser");
         let mut parser = Parser {
-            processes: HashMap::new(),
+            processes: BTreeMap::new(),
             types: OmgTypes::new(),
             properties: Properties::new(),
             interner: Interner::new(),
