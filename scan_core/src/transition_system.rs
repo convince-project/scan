@@ -1,9 +1,12 @@
+use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bumpalo::Bump;
+use bumpalo::collections::CollectIn;
 use fixedbitset::FixedBitSet;
-use log::trace;
+use itertools::Itertools;
+use log::{info, trace};
 use rand::rngs::SmallRng;
 use thiserror::Error;
 
@@ -116,6 +119,11 @@ impl TransitionSystem {
     pub fn new_run(&self) -> TransitionSystemRun<'_> {
         let mut vals = self.vals.clone();
         vals.shrink_to_fit();
+        info!(
+            "create new transition system run with {} ports and {} predicates",
+            self.ports.len(),
+            self.predicates.len(),
+        );
         TransitionSystemRun {
             ts: self,
             cs: self.cs.new_instance(),
@@ -129,28 +137,34 @@ impl TransitionSystem {
         mut oracle: O,
         running: Arc<AtomicBool>,
     ) -> Option<bool> {
+        let mut executions_stack: Vec<(O, TransitionSystemRun)> = Vec::new();
         let mut bump = Bump::new();
         let mut run = self.new_run();
         let labels = Vec::from_iter(run.labels());
         // Initialize oracle with TS initial state
         oracle.update_state(&labels);
         run.fastforward(&bump);
-        let mut executions_stack: Vec<(O, TransitionSystemRun)> = Vec::new();
+        let mut branches: u32 = 0;
 
-        let mut pgs = FixedBitSet::with_capacity(self.pg_list.len());
-        let mut channels_senders = FixedBitSet::with_capacity(self.cs.channels().len());
-        let mut channels_receivers = FixedBitSet::with_capacity(self.cs.channels().len());
-        let mut probe_empty_queues = FixedBitSet::with_capacity(self.cs.channels().len());
+        let mut pgs: FixedBitSet = FixedBitSet::with_capacity(self.pg_list.len());
+        let mut channels_senders: FixedBitSet =
+            FixedBitSet::with_capacity(self.cs.channels().len());
+        let mut channels_receivers: FixedBitSet =
+            FixedBitSet::with_capacity(self.cs.channels().len());
+        let mut probe_empty_queues: FixedBitSet =
+            FixedBitSet::with_capacity(self.cs.channels().len());
+
         // FILO stack: depth-first search
         'l: loop {
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
             }
+            bump.reset();
             if run
                 .cs
                 .nosync_possible_transitions()
-                .flat_map(|(action, transitions)| transitions.map(move |post| (action, post)))
+                .flat_map(|(_, transitions)| transitions)
                 .next()
                 .is_some()
             {
@@ -160,11 +174,8 @@ impl TransitionSystem {
                     &mut channels_receivers,
                     &mut probe_empty_queues,
                 );
-                if pgs.is_clear() {
-                    pgs.insert_range(..);
-                }
-                assert!(!pgs.is_clear());
-                let mut transitions = self
+                // assert!(ample.is_none_or(|ample| !ample.is_clear()));
+                let mut ample_transitions = self
                     .pg_list
                     .iter()
                     .filter(|&&pg_id| pgs.contains(u16::from(pg_id) as usize))
@@ -177,10 +188,12 @@ impl TransitionSystem {
                             })
                     })
                     .peekable();
-                assert!(transitions.peek().is_some());
-                'w: while let Some((action, post)) = transitions.next() {
-                    if transitions.peek().is_none() {
-                        drop(transitions);
+                // There must be active transitions because we checked earlier
+                // assert!(ample_transitions.peek().is_some());
+                'w: while let Some((action, post)) = ample_transitions.next() {
+                    if ample_transitions.peek().is_none() {
+                        drop(ample_transitions);
+                        bump.reset();
                         run.transition(&mut oracle, action, post, &bump).unwrap();
                         if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                             // Guarantee violated
@@ -188,14 +201,17 @@ impl TransitionSystem {
                             return Some(false);
                         } else if oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
-                            run.fastforward_pg(action.0, &bump);
+                            run.fastforward(&bump);
                             // continue loop with same run and oracle
                             continue 'l;
                         } else {
-                            trace!("execution branch terminates successfully (partial execution)");
+                            branches += 1;
+                            if branches.is_power_of_two() {
+                                trace!("executed branches: {branches}");
+                            }
+                            // No transitions left in this branch so exit transitions iteration
+                            break 'w;
                         }
-                        // No transitions left in this branch so exit transitions iteration
-                        break 'w;
                     } else {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
@@ -212,16 +228,20 @@ impl TransitionSystem {
                             return Some(false);
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
-                            branch_run.fastforward_pg(action.0, &bump);
+                            branch_run.fastforward(&bump);
                             executions_stack.push((branch_oracle, branch_run));
                         } else {
-                            trace!("execution branch terminates successfully (partial execution)");
+                            branches += 1;
+                            if branches.is_power_of_two() {
+                                trace!("executed branches: {branches}");
+                            }
                         }
                     }
                 }
             } else if run.cs.is_waiting(&bump) {
                 run.time_tick();
                 oracle.update_time(run.time());
+                trace!("time: {}", run.time());
                 if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                     // Guarantee violated
                     trace!("execution branch violates a guarantee (partial execution)");
@@ -232,11 +252,161 @@ impl TransitionSystem {
                     // continue loop with same run and oracle
                     continue 'l;
                 } else {
-                    trace!("execution branch terminates successfully (partial execution)");
+                    branches += 1;
+                    if branches.is_power_of_two() {
+                        trace!("executed branches: {branches}");
+                    }
                 }
             } else {
-                trace!("execution branch terminates successfully (full execution)");
+                branches += 1;
+                if branches.is_power_of_two() {
+                    trace!("executed branches: {branches}");
+                }
             }
+
+            if let Some((branch_oracle, branch_run)) = executions_stack.pop() {
+                // continue loop with next run and oracle
+                run = branch_run;
+                oracle = branch_oracle;
+            } else {
+                // run terminated
+                trace!("run verifies all guarantees");
+                return Some(true);
+            }
+        }
+    }
+
+    pub(crate) fn fast_experiment<O: Oracle + Clone>(
+        &self,
+        mut oracle: O,
+        running: Arc<AtomicBool>,
+    ) -> Option<bool> {
+        let mut executions_stack: Vec<(O, TransitionSystemRun)> = Vec::new();
+        let mut bump = Bump::new();
+        let mut run = self.new_run();
+        let labels = Vec::from_iter(run.labels());
+        // Initialize oracle with TS initial state
+        oracle.update_state(&labels);
+        run.fastforward(&bump);
+        let mut branches: u32 = 0;
+
+        // FILO stack: depth-first search
+        'l: loop {
+            if !running.load(Ordering::Relaxed) {
+                trace!("run stopped");
+                return None;
+            }
+            bump.reset();
+            if run
+                .cs
+                .nosync_possible_transitions()
+                .flat_map(|(_, transitions)| transitions)
+                .next()
+                .is_some()
+            {
+                // assert!(!amples.is_empty());
+                let mut ample_transitions = run
+                    .fast_ample(&bump)
+                    .map(|ample| {
+                        self.pg_list
+                            .iter()
+                            .filter(|&&pg_id| ample.contains(u16::from(pg_id) as usize))
+                            .flat_map(|&pg_id| {
+                                run.cs
+                                    .nosync_possible_transitions_pg(pg_id)
+                                    .unwrap()
+                                    .flat_map(|(action, transitions)| {
+                                        transitions.map(move |post| (action, post))
+                                    })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .multi_cartesian_product()
+                    .peekable();
+                assert!(
+                    ample_transitions.peek().is_some(),
+                    "ample: {ample_transitions:?}"
+                );
+                // There must be active transitions because we checked earlier
+                // assert!(ample_transitions.peek().is_some());
+                'w: while let Some(transitions) = ample_transitions.next() {
+                    if ample_transitions.peek().is_none() {
+                        drop(ample_transitions);
+                        for (action, post) in transitions {
+                            bump.reset();
+                            run.transition(&mut oracle, action, post, &bump).unwrap();
+                        }
+                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                            // Guarantee violated
+                            trace!("run violates a guarantee");
+                            return Some(false);
+                        } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                            bump.reset();
+                            run.fastforward(&bump);
+                            // continue loop with same run and oracle
+                            continue 'l;
+                        } else {
+                            branches += 1;
+                            if branches.is_power_of_two() {
+                                trace!("executed branches: {branches}");
+                            }
+                            // No transitions left in this branch so exit transitions iteration
+                            break 'w;
+                        }
+                    } else {
+                        let mut branch_run = run.clone();
+                        let mut branch_oracle = oracle.clone();
+                        for (action, post) in transitions {
+                            bump.reset();
+                            branch_run
+                                .transition(&mut branch_oracle, action, post, &bump)
+                                .unwrap();
+                        }
+                        if branch_oracle
+                            .output_guarantees()
+                            .any(|b| b.is_some_and(|b| !b))
+                        {
+                            // Guarantee violated
+                            trace!("run violates a guarantee");
+                            return Some(false);
+                        } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
+                            bump.reset();
+                            branch_run.fastforward(&bump);
+                            executions_stack.push((branch_oracle, branch_run));
+                        } else {
+                            branches += 1;
+                            if branches.is_power_of_two() {
+                                trace!("executed branches: {branches}");
+                            }
+                        }
+                    }
+                }
+            } else if run.cs.is_waiting(&bump) {
+                run.time_tick();
+                oracle.update_time(run.time());
+                trace!("time: {}", run.time());
+                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                    // Guarantee violated
+                    trace!("execution branch violates a guarantee (partial execution)");
+                    return Some(false);
+                } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                    bump.reset();
+                    run.fastforward(&bump);
+                    // continue loop with same run and oracle
+                    continue 'l;
+                } else {
+                    branches += 1;
+                    if branches.is_power_of_two() {
+                        trace!("executed branches: {branches}");
+                    }
+                }
+            } else {
+                branches += 1;
+                if branches.is_power_of_two() {
+                    trace!("executed branches: {branches}");
+                }
+            }
+
             if let Some((branch_oracle, branch_run)) = executions_stack.pop() {
                 // continue loop with next run and oracle
                 run = branch_run;
@@ -602,36 +772,142 @@ impl<'def> TransitionSystemRun<'def> {
         channels_receivers: &mut FixedBitSet,
         probe_empty_queues: &mut FixedBitSet,
     ) {
+        pgs.insert_range(..);
+        let mut ample_len = pgs.count_ones(..);
+        assert_eq!(ample_len, self.ts.pg_list.len());
+        let mut ample = FixedBitSet::with_capacity(self.ts.pg_list.len());
         // Consider only PGs that have active transitions
         for pg_id in self.ts.pg_list.iter().copied().filter(|&pg_id| {
             self.cs
                 .nosync_possible_transitions_pg(pg_id)
                 .unwrap()
-                .flat_map(|(action, transitions)| transitions.map(move |post| (action, post)))
+                .flat_map(|(_, transitions)| transitions)
                 .next()
                 .is_some()
         }) {
-            pgs.clear();
+            ample.clear();
             channels_senders.clear();
             channels_receivers.clear();
             probe_empty_queues.clear();
-            pgs.insert(u16::from(pg_id) as usize);
+            ample.insert(u16::from(pg_id) as usize);
             if self
                 .add_pg_to_ample(
                     pg_id,
-                    pgs,
+                    &mut ample,
                     channels_senders,
                     channels_receivers,
                     probe_empty_queues,
                 )
                 .is_ok()
+                && ample.count_ones(..) < ample_len
             {
-                return;
+                ample_len = ample.count_ones(..);
+                mem::swap(pgs, &mut ample);
+                if ample_len == 1 {
+                    return;
+                }
             }
         }
         // pgs might include PG's that have no active transitions but that does not invalidate the result
-        // if no ample set found, clear pgs
-        pgs.clear();
+    }
+
+    fn fast_ample<'a>(&self, bump: &'a Bump) -> impl Iterator<Item = &'a FixedBitSet> {
+        let mut amples: bumpalo::collections::Vec<_> = self
+            .ts
+            .pg_list
+            .iter()
+            .map(|&pg_id| self.fast_ample_pg(pg_id))
+            .collect_in(bump);
+        let diag = FixedBitSet::from_iter(
+            amples
+                .iter()
+                .enumerate()
+                .filter(|&(i, set_i)| set_i.contains(i))
+                .map(|(i, _)| i),
+        );
+        for i in 0..amples.len() {
+            let i_set = amples[i].clone();
+            for j_set in amples.iter_mut().filter(|j_set| j_set.contains(i)) {
+                j_set.remove(i);
+                j_set.union_with(&i_set);
+            }
+        }
+        amples.iter_mut().for_each(|set| set.intersect_with(&diag));
+        amples.retain(|set| !set.is_clear());
+        amples.sort_unstable_by_key(|set| set.count_ones(..));
+        let amples = amples.into_bump_slice();
+        amples
+            .iter()
+            .enumerate()
+            .filter(|(i, set)| amples[..*i].iter().all(|prev| set.is_disjoint(prev)))
+            .map(|(_, set)| set)
+    }
+
+    fn fast_ample_pg(&self, pg_id: PgId) -> FixedBitSet {
+        let mut ample_pg = FixedBitSet::with_capacity(self.ts.pg_list.len());
+        let mut ample_self = false;
+        for action in self
+            .cs
+            .program_graph(pg_id)
+            .unwrap()
+            .nosync_active_actions()
+            .unwrap()
+        {
+            let action = Action(pg_id, action);
+            if let Some((channel, message)) = self.ts.cs.communication(action) {
+                if self.cs.check_message(channel, message) {
+                    ample_self = true;
+                    if matches!(message, Message::Send) && self.ts.ports.contains(&channel) {
+                        // Channel is a port so action is not stutter
+                        ample_pg.insert_range(..);
+                        break;
+                    }
+                    // If channel is empty, no message can be received until a message is sent to the channel first
+                    // NOTE: if channel is empty and action is active then action must be a `Send`
+                    if !self.cs.is_empty(channel) {
+                        ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
+                    }
+                    // NOTE: Probings are independent from one another so there is no need to add other probings.
+                    // NOTE: If an execution branch has a ProbeEmptyQueue action on a channel that is not currently empty,
+                    // then it must be preceded by a Receive action, which is in the ample set;
+                    // so, if the channel is not empty, ProbeEmptyQueue does not need to belong to the ample set.
+                    // If the channel is empty, instead, we add ProbeEmptyQueue actions to the ample set.
+                    if !matches!(message, Message::ProbeEmptyQueue | Message::ProbeFullQueue)
+                        && self.cs.is_empty(channel)
+                    {
+                        ample_pg.union_with(self.ts.cs.probe_empty_queue_set(channel).unwrap());
+                    }
+                    // TODO: add ProbeFullQueue
+                    // TODO: add full-queue condition
+                    ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
+                } else {
+                    // non-active action is not added to ample set,
+                    // but ample set must contain all actions which could potentially activate it.
+                    // Probes (empty/full-queue) never need to be added
+                    match message {
+                        // Channel is a port so action is not stutter
+                        Message::Send if self.ts.ports.contains(&channel) => {
+                            ample_pg.insert_range(..);
+                            break;
+                        }
+                        Message::Send => {
+                            ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
+                        }
+                        Message::ProbeEmptyQueue => {
+                            ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
+                        }
+                        Message::Receive => {
+                            ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
+                        }
+                        Message::ProbeFullQueue => todo!(),
+                    }
+                }
+            } else {
+                ample_self = true;
+            }
+        }
+        ample_pg.set(u16::from(pg_id) as usize, ample_self);
+        ample_pg
     }
 
     fn add_pg_to_ample(
@@ -657,7 +933,7 @@ impl<'def> TransitionSystemRun<'def> {
                         return Err(());
                     }
                     // If channel is empty, no message can be received until a message is sent to the channel first
-                    // NOTE: if channel is empty and action is active then action must be a `Send`
+                    // NOTE: if channel is empty and action is active then action must be a `Send` or `ProbeEmptyQueue`
                     if !self.cs.is_empty(channel)
                         // WARN: last condition has effects!
                         && !channels_receivers.put(u16::from(channel) as usize)
@@ -670,8 +946,12 @@ impl<'def> TransitionSystemRun<'def> {
                             probe_empty_queues,
                         )?;
                     }
-                    // Probings are independent from one another so there is no need to add other probings
-                    if matches!(message, Message::Send | Message::Receive)
+                    // NOTE: Probings are independent from one another so there is no need to add other probings.
+                    // NOTE: If an execution branch has a ProbeEmptyQueue action on a channel that is not currently empty,
+                    // then it must be preceded by a Receive action, which is in the ample set;
+                    // so, if the channel is not empty, ProbeEmptyQueue does not need to belong to the ample set.
+                    // If the channel is empty, instead, we add ProbeEmptyQueue actions to the ample set.
+                    if !matches!(message, Message::ProbeEmptyQueue | Message::ProbeFullQueue) && self.cs.is_empty(channel)
                         // WARN: last condition has effects!
                         && !probe_empty_queues.put(u16::from(channel) as usize)
                     {
@@ -701,23 +981,24 @@ impl<'def> TransitionSystemRun<'def> {
                     // Probes (empty/full-queue) never need to be added
                     match message {
                         // Channel is a port so action is not stutter
-                        Message::Send if self.ts.ports.contains(&channel) => return Err(()),
-                        Message::Send => {
-                            if !channels_receivers.put(u16::from(channel) as usize) {
-                                self.add_receivers_to_ample(
-                                    channel,
-                                    pgs,
-                                    channels_senders,
-                                    channels_receivers,
-                                    probe_empty_queues,
-                                )?;
-                            }
-                        }
+                        Message::Send => unreachable!("Send is always possible"),
+                        // Message::Send if self.ts.ports.contains(&channel) => return Err(()),
+                        // Message::Send => {
+                        //     if !channels_receivers.put(u16::from(channel) as usize) {
+                        //         self.add_receivers_to_ample(
+                        //             channel,
+                        //             pgs,
+                        //             channels_senders,
+                        //             channels_receivers,
+                        //             probe_empty_queues,
+                        //         )?;
+                        //     }
+                        // }
                         Message::ProbeEmptyQueue => {
+                            // NOTE: channel must be non-empty
                             if !channels_receivers.put(u16::from(channel) as usize) {
                                 self.add_receivers_to_ample(
                                     channel,
-                                    // ample,
                                     pgs,
                                     channels_senders,
                                     channels_receivers,
@@ -726,6 +1007,7 @@ impl<'def> TransitionSystemRun<'def> {
                             }
                         }
                         Message::Receive => {
+                            // NOTE: channel must be empty
                             if !channels_senders.put(u16::from(channel) as usize) {
                                 self.add_senders_to_ample(
                                     channel,

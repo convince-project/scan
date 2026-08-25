@@ -10,7 +10,7 @@ use quick_xml::{Reader, XmlVersion, events};
 use scan_core::Time;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::{BufRead, Read};
+use std::io::BufRead;
 use std::str;
 
 #[derive(Debug)]
@@ -369,17 +369,14 @@ pub(super) fn parse<R: BufRead>(
             .context("failed reading event")?
         {
             Event::Start(tag) => {
-                let tag_name = reader
-                    .decoder()
-                    .decode(tag.name().into_inner())?
-                    .into_owned();
+                let tag_name = tag.name().into_inner().to_string();
                 trace!(target: "parser", "start tag '{tag_name}'");
                 let tag_obj = parse_start_tag(tag_name, &stack, tag, interner, xml_version)?;
                 stack.push(tag_obj);
                 type_annotation = None;
             }
             Event::End(tag) => {
-                let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                let tag_name = tag.name().into_inner();
                 if let Some(tag) = stack.pop() {
                     if <&str>::from(&tag) == tag_name {
                         trace!(target: "parser", "end tag '{tag_name}'");
@@ -459,10 +456,7 @@ pub(super) fn parse<R: BufRead>(
                 type_annotation = None;
             }
             Event::Empty(tag) => {
-                let tag_name = reader
-                    .decoder()
-                    .decode(tag.name().into_inner())?
-                    .into_owned();
+                let tag_name = tag.name().into_inner().to_string();
                 parse_empty_tag(
                     tag_name,
                     &mut stack,
@@ -474,8 +468,6 @@ pub(super) fn parse<R: BufRead>(
                 )?;
             }
             Event::Text(text) => {
-                let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
-                let text = String::from_utf8(text)?;
                 if !text.trim().is_empty() {
                     error!(target: "parser", "text elements not allowed, ignoring");
                 }
@@ -483,10 +475,7 @@ pub(super) fn parse<R: BufRead>(
             }
             Event::Comment(comment) => {
                 // Convert comment into string (is there no easier way?)
-                let comment = comment
-                    .bytes()
-                    .collect::<Result<Vec<u8>, std::io::Error>>()?;
-                let comment = String::from_utf8(comment)?;
+                let comment = comment.to_string();
                 type_annotation = parse_comment(comment, omg_types)?;
             }
             Event::CData(_) => {

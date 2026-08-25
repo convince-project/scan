@@ -366,6 +366,13 @@ impl ChannelSystem {
     // }
 
     #[inline]
+    pub fn senders_to_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+        self.senders
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+    }
+
+    #[inline]
     pub fn senders_to(&self, channel: Channel) -> Result<impl Iterator<Item = PgId>, CsError> {
         self.senders
             .get(channel.0 as usize)
@@ -374,11 +381,25 @@ impl ChannelSystem {
     }
 
     #[inline]
+    pub fn receivers_from_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+        self.receivers
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+    }
+
+    #[inline]
     pub fn receivers_from(&self, channel: Channel) -> Result<impl Iterator<Item = PgId>, CsError> {
         self.receivers
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
             .map(|set| set.ones().map(|i| PgId(i as u16)))
+    }
+
+    #[inline]
+    pub fn probe_empty_queue_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+        self.probe_empty_queues
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]

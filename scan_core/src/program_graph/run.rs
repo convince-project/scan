@@ -210,11 +210,8 @@ impl<'def> ProgramGraphRun<'def> {
                 range.contains(&time)
             })
             && invariants.iter().all(|(c, range)| {
-                let time = if resets.binary_search(c).is_ok() {
-                    0
-                } else {
-                    self.clocks[c.0 as usize]
-                };
+                // branchless expression
+                let time = resets.binary_search(c).is_err() as Time * self.clocks[c.0 as usize];
                 range.contains(&time)
             })
     }
