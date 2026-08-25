@@ -172,14 +172,17 @@ pub(super) fn infer_type(
                 {
                     match simple_property_access.field() {
                         PropertyAccessField::Const(identifier) => {
-                            if identifier.sym() == interner.get("floor").unwrap() {
-                                Ok(OmgBaseType::Int64.into())
-                            } else if identifier.sym() == interner.get("random").unwrap() {
-                                Ok(OmgBaseType::F64.into())
-                            } else {
-                                Err(anyhow!(
+                            match interner
+                                .resolve(identifier.sym())
+                                .expect("identify symbol")
+                                .utf8()
+                                .ok_or_else(|| anyhow!("non-valid UTF8 encoding"))?
+                            {
+                                "floor" => Ok(OmgBaseType::Int64.into()),
+                                "random" => Ok(OmgBaseType::F64.into()),
+                                _ => Err(anyhow!(
                                     "unknown expression '{expr:?}', unable to infer type"
-                                ))
+                                )),
                             }
                         }
                         PropertyAccessField::Expr(expression) => Err(anyhow!(
