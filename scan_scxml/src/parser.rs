@@ -22,7 +22,6 @@ use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use std::collections::HashMap;
 use std::io::BufRead;
-use std::io::Read;
 use std::io::Seek;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -71,7 +70,7 @@ impl From<ConvinceTag> for &'static str {
 }
 
 fn attrs(
-    tag: quick_xml::events::BytesStart<'_>,
+    tag: &quick_xml::events::BytesStart<'_>,
     keys: &[&str],
     opt_keys: &[&str],
     xml_version: XmlVersion,
@@ -79,7 +78,7 @@ fn attrs(
     let mut attrs = HashMap::new();
     for attr in tag.attributes() {
         let attr = attr?;
-        let key = str::from_utf8(attr.key.into_inner())?;
+        let key = attr.key.into_inner();
         if keys.contains(&key) || opt_keys.contains(&key) {
             let val = attr.normalized_value(xml_version)?.to_string();
             attrs.insert(key.to_string(), val);
@@ -256,7 +255,7 @@ impl Parser {
                 .context("failed reading event")?
             {
                 Event::Start(tag) => {
-                    let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                    let tag_name = tag.name().into_inner();
                     trace!(target: "parser", "start tag '{tag_name}'");
                     let new_tag = match tag_name {
                         TAG_SPECIFICATION if stack.is_empty() => ConvinceTag::Specification,
@@ -280,7 +279,7 @@ impl Parser {
                     stack.push(new_tag);
                 }
                 Event::End(tag) => {
-                    let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                    let tag_name = tag.name().into_inner();
                     if stack
                         .pop()
                         .is_some_and(|state| Into::<&str>::into(state) == tag_name)
@@ -292,7 +291,7 @@ impl Parser {
                     }
                 }
                 Event::Empty(tag) => {
-                    let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                    let tag_name = tag.name().into_inner();
                     trace!(target: "parser", "empty tag '{tag_name}'");
                     match tag_name {
                         TAG_TYPES
@@ -300,7 +299,7 @@ impl Parser {
                                 .last()
                                 .is_some_and(|e| *e == ConvinceTag::Specification) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_PATH], &[], xml_version)
+                            let attrs = attrs(&tag, &[ATTR_PATH], &[], xml_version)
                                 .context("failed to parse 'types' tag attributes")?;
                             let mut path = parent.to_owned();
                             path.extend(&PathBuf::from(attrs.get(ATTR_PATH).unwrap()));
@@ -319,7 +318,7 @@ impl Parser {
                                 .last()
                                 .is_some_and(|e| *e == ConvinceTag::Specification) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_PATH], &[], xml_version)
+                            let attrs = attrs(&tag, &[ATTR_PATH], &[], xml_version)
                                 .context("failed to parse 'properties' tag attributes")?;
                             let mut path = parent.to_owned();
                             path.extend(&PathBuf::from(attrs.get(ATTR_PATH).unwrap()));
@@ -340,8 +339,9 @@ impl Parser {
                         TAG_PROCESS
                             if stack.last().is_some_and(|e| *e == ConvinceTag::ProcessList) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC], xml_version)
-                                .context("failed to parse 'process' tag attributes")?;
+                            let attrs =
+                                attrs(&tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC], xml_version)
+                                    .context("failed to parse 'process' tag attributes")?;
                             if let Some(moc) = attrs.get(ATTR_MOC)
                                 && moc != "fsm"
                             {
@@ -378,8 +378,6 @@ impl Parser {
                     }
                 }
                 Event::Text(text) => {
-                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
-                    let text = String::from_utf8(text)?;
                     if !text.trim().is_empty() {
                         error!(target: "parser", "text elements not allowed, ignoring");
                     }

@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    io::{BufRead, Read},
+    io::BufRead,
 };
 
 use anyhow::{Context, anyhow, bail};
@@ -180,8 +180,7 @@ impl OmgTypes {
         loop {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     trace!("'{tag_name}' open tag");
                     match tag_name {
                         TAG_DATA_TYPE_LIST if stack.is_empty() => {
@@ -192,7 +191,7 @@ impl OmgTypes {
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
-                            let id = self.parse_id(tag)?;
+                            let id = self.parse_id(&tag)?;
                             self.type_defs
                                 .insert(id.to_owned(), OmgTypeDef::Enumeration(Vec::new()));
                             stack.push(ConvinceTag::Enumeration(id));
@@ -202,7 +201,7 @@ impl OmgTypes {
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
-                            let id = self.parse_id(tag)?;
+                            let id = self.parse_id(&tag)?;
                             self.type_defs
                                 .insert(id.to_owned(), OmgTypeDef::Structure(BTreeMap::new()));
                             stack.push(ConvinceTag::Structure(id));
@@ -215,8 +214,7 @@ impl OmgTypes {
                     }
                 }
                 Event::End(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     if stack.pop().is_some_and(|tag| <&str>::from(tag) == tag_name) {
                         trace!("'{tag_name}' end tag");
                     } else {
@@ -227,8 +225,7 @@ impl OmgTypes {
                     }
                 }
                 Event::Empty(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     trace!("'{tag_name}' empty tag");
                     match tag_name {
                         TAG_LABEL
@@ -237,7 +234,7 @@ impl OmgTypes {
                                 .is_some_and(|tag| matches!(*tag, ConvinceTag::Enumeration(_))) =>
                         {
                             if let Some(ConvinceTag::Enumeration(id)) = stack.last() {
-                                let label = self.parse_id(tag)?;
+                                let label = self.parse_id(&tag)?;
                                 let omg_type = self.type_defs.get_mut(id).unwrap();
                                 if let OmgTypeDef::Enumeration(labels) = omg_type {
                                     if labels.binary_search(&label).is_ok() {
@@ -261,7 +258,7 @@ impl OmgTypes {
                         {
                             if let Some(ConvinceTag::Structure(id)) = stack.last() {
                                 let (field_id, field_type) =
-                                    self.parse_struct(tag).with_context(|| {
+                                    self.parse_struct(&tag).with_context(|| {
                                         format!("failed parsing field of struct {id}")
                                     })?;
                                 let omg_type = self.type_defs.get_mut(id).unwrap();
@@ -280,8 +277,6 @@ impl OmgTypes {
                     }
                 }
                 Event::Text(text) => {
-                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
-                    let text = String::from_utf8(text)?;
                     if !text.trim().is_empty() {
                         error!(target: "parser", "text elements not allowed, ignoring");
                     }
@@ -316,15 +311,15 @@ impl OmgTypes {
         Ok(())
     }
 
-    fn parse_id(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<String> {
+    fn parse_id(&mut self, tag: &events::BytesStart<'_>) -> anyhow::Result<String> {
         let mut id: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
-            match str::from_utf8(attr.key.as_ref())? {
+            match attr.key.as_ref() {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.value.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -335,19 +330,19 @@ impl OmgTypes {
         id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))
     }
 
-    fn parse_struct(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<(String, OmgType)> {
+    fn parse_struct(&mut self, tag: &events::BytesStart<'_>) -> anyhow::Result<(String, OmgType)> {
         let mut id: Option<String> = None;
         let mut field_type: Option<String> = None;
         for attr in tag
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
-            match str::from_utf8(attr.key.as_ref())? {
+            match attr.key.as_ref() {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.value.into_owned());
                 }
                 ATTR_TYPE => {
-                    field_type = Some(String::from_utf8(attr.value.into_owned())?);
+                    field_type = Some(attr.value.to_string());
                 }
                 key => {
                     error!("found unknown attribute {key}");

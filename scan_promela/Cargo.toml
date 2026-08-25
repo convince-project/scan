@@ -22,14 +22,14 @@ name = "scan_promela"  # The name of the target.
 crate-type = ["lib"]  # The crate types to generate.
 
 [build-dependencies]
-cfgrammar = "0.14"
-lrlex = "0.14.2"
-lrpar = "0.14.2"
+cfgrammar = "0.15"
+lrlex = "0.15.0"
+lrpar = "0.15.0"
 
 [dependencies]
-cfgrammar = "0.14"
-lrlex = "0.14.2"
-lrpar = "0.14.2"
+cfgrammar = "0.15"
+lrlex = "0.15.0"
+lrpar = "0.15.0"
 regex = "1"
 smc_scan_core = { version = "0.2.0", path = "../scan_core" }
 smc_scan_pmtl = { version = "0.1.0", path = "../scan_pmtl" }

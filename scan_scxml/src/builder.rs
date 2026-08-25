@@ -166,7 +166,7 @@ impl ModelBuilder {
     }
 
     fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
-        for (id, _fsm) in parser.processes.iter_mut() {
+        for id in parser.processes.keys() {
             let _ = self.add_fsm_builder(id).expect("add FSM builder");
         }
         for (id, fsm) in parser.processes.iter_mut() {
@@ -203,7 +203,7 @@ impl ModelBuilder {
                 vars.insert(data.id.to_owned(), r#type);
             }
         }
-        for (_, state) in fmt.states.iter_mut() {
+        for state in fmt.states.values_mut() {
             for exec in state.on_entry.iter_mut() {
                 self.prebuild_exec(pg_id, exec, &vars, interner, omg_types)
                     .with_context(|| {
