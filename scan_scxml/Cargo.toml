@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan_scxml"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "SCXML frontend for the Scan model checker."
 documentation = "https://convince-project.github.io/scan/crates/scan_scxml/index.html"

@@ -1618,7 +1618,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "smc_scan"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1650,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_jani"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "csv",
@@ -1694,7 +1694,7 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_scxml"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "boa_ast",
