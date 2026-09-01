@@ -24,7 +24,7 @@ pub struct JaniModelData {
 
 pub(crate) fn build(
     jani_model: Model,
-    properties: &[String],
+    properties: &String,
 ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
     builder.build(jani_model, properties)
@@ -90,7 +90,7 @@ impl JaniBuilder {
     pub(crate) fn build(
         mut self,
         jani_model: Model,
-        properties: &[String],
+        property: &String,
     ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
         let mut cs = ChannelSystemBuilder::new();
         let pg_id = cs.new_program_graph();
@@ -651,21 +651,10 @@ impl JaniBuilder {
         // global state port, only one we need
         cs_model.add_port(global_state_channel, global_state_init)?;
 
-        // Add properties
-        let properties = if properties.is_empty() {
-            jani_model
-                .properties
-                .iter()
-                .map(|p| p.name.clone())
-                .collect()
-        } else {
-            properties.to_vec()
-        };
-
         let property_exprs = jani_model
             .properties
             .iter()
-            .filter(|p| properties.contains(&p.name))
+            .find(|p| property == &p.name)
             .map(|p| {
                 self.build_property(&p.expression).and_then(|p| match p {
                     Either::Left(expr) => {
@@ -678,7 +667,7 @@ impl JaniBuilder {
                     Either::Right(mtl) => Ok(mtl),
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .transpose()?;
         fn extract_predicates(
             prop: &Mtl<scan_core::BooleanExpr<Atom>>,
         ) -> Vec<scan_core::BooleanExpr<Atom>> {
@@ -725,7 +714,13 @@ impl JaniBuilder {
 
         // Finalize, build and return everything
         // , global_vars, predicates);
-        let data = self.data(properties);
+        let data = self.data(
+            jani_model
+                .properties
+                .iter()
+                .map(|p| p.name.clone())
+                .collect(),
+        );
         Ok((cs_model, oracle, data))
     }
 

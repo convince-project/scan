@@ -12,7 +12,7 @@ use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
 use scan_pmtl::{Pmtl, PmtlOracle};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 // TODO:
 //
@@ -22,11 +22,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub struct ScxmlModel {
     // u16 here represents PgId
     // TODO: turn into indexed Vec<String>
-    pub fsm_names: HashMap<u16, String>,
+    pub fsm_names: BTreeMap<u16, String>,
     // usize here represents event index
-    pub parameters: HashMap<Channel, (PgId, PgId, usize)>,
-    pub int_queues: HashSet<Channel>,
-    pub ext_queues: HashMap<Channel, PgId>,
+    pub parameters: BTreeMap<Channel, (PgId, PgId, usize)>,
+    pub int_queues: BTreeSet<Channel>,
+    pub ext_queues: BTreeMap<Channel, PgId>,
     pub events: Vec<(String, Option<OmgTypeDef>)>,
     pub port_vars: Vec<(String, OmgType, Vec<Expression<Atom>>)>,
     pub ports: Vec<Channel>,
@@ -46,8 +46,8 @@ struct EventBuilder {
     // Associates parameter's name with its type's name.
     name: String,
     params: BTreeMap<String, Option<OmgType>>,
-    senders: HashSet<PgId>,
-    receivers: HashSet<PgId>,
+    senders: BTreeSet<PgId>,
+    receivers: BTreeSet<PgId>,
 }
 
 /// Builder turning a [`Parser`] into a [`ChannelSystem`].
@@ -60,23 +60,23 @@ pub struct ModelBuilder {
     // structs: HashMap<(String, String), usize>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
-    fsm_names: HashMap<u16, String>,
-    fsm_builders: HashMap<String, FsmBuilder>,
+    fsm_names: BTreeMap<u16, String>,
+    fsm_builders: BTreeMap<String, FsmBuilder>,
     // Each event is associated to a unique global index and parameter(s).
     // WARN FIXME TODO: name clashes
     events: Vec<EventBuilder>,
-    event_indexes: HashMap<String, usize>,
-    parameter_channels: HashMap<(PgId, PgId, usize), Channel>,
+    event_indexes: BTreeMap<String, usize>,
+    parameter_channels: BTreeMap<(PgId, PgId, usize), Channel>,
     // Properties
     guarantees: Vec<(String, Pmtl<usize>)>,
     assumes: Vec<(String, Pmtl<usize>)>,
     predicates: Vec<BooleanExpr<Atom>>,
     // port vars are (in general) expressions over atoms on the same channel
-    port_vars: HashMap<String, (OmgType, Vec<Expression<Atom>>)>,
+    port_vars: BTreeMap<String, (OmgType, Vec<Expression<Atom>>)>,
     // ports are defined by a channel and a vec of init values.
     ports: Vec<(Channel, Vec<Val>)>,
     // extra data
-    int_queues: HashSet<Channel>,
+    int_queues: BTreeSet<Channel>,
 }
 
 impl ModelBuilder {
@@ -87,8 +87,7 @@ impl ModelBuilder {
     /// or references to non-existing items.
     pub fn build(
         mut parser: Parser,
-        properties: &[String],
-        all_properties: bool,
+        property: &String,
     ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder
@@ -105,7 +104,7 @@ impl ModelBuilder {
                         name: id.clone(),
                         initial: String::from("init"),
                         datamodel: Vec::new(),
-                        states: HashMap::from([(
+                        states: BTreeMap::from([(
                             String::from("init"),
                             State {
                                 id: String::from("init"),
@@ -128,7 +127,7 @@ impl ModelBuilder {
             .build_ports(&mut parser)
             .context("failed building ports")?;
         model_builder
-            .build_properties(&mut parser, properties, all_properties)
+            .build_properties(&mut parser, property)
             .context("failed building properties")?;
 
         let model = model_builder.build_model(parser);
@@ -142,8 +141,8 @@ impl ModelBuilder {
             self.events.push(EventBuilder {
                 name: id.to_string(),
                 params: BTreeMap::new(),
-                senders: HashSet::new(),
-                receivers: HashSet::new(),
+                senders: BTreeSet::new(),
+                receivers: BTreeSet::new(),
             });
             self.event_indexes.insert(id.to_owned(), index);
             index
@@ -166,7 +165,7 @@ impl ModelBuilder {
     }
 
     fn prebuild_processes(&mut self, parser: &mut Parser) -> anyhow::Result<()> {
-        for (id, _fsm) in parser.processes.iter_mut() {
+        for id in parser.processes.keys() {
             let _ = self.add_fsm_builder(id).expect("add FSM builder");
         }
         for (id, fsm) in parser.processes.iter_mut() {
@@ -191,7 +190,7 @@ impl ModelBuilder {
         interner: &Interner,
         omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
-        let mut vars: HashMap<String, OmgType> = HashMap::new();
+        let mut vars: BTreeMap<String, OmgType> = BTreeMap::new();
         for data in &fmt.datamodel {
             if let Some(r#type) = &data.omg_type
                 // need to know len of arrays
@@ -203,7 +202,7 @@ impl ModelBuilder {
                 vars.insert(data.id.to_owned(), r#type);
             }
         }
-        for (_, state) in fmt.states.iter_mut() {
+        for state in fmt.states.values_mut() {
             for exec in state.on_entry.iter_mut() {
                 self.prebuild_exec(pg_id, exec, &vars, interner, omg_types)
                     .with_context(|| {
@@ -243,7 +242,7 @@ impl ModelBuilder {
         &mut self,
         pg_id: PgId,
         executable: &mut Executable,
-        vars: &HashMap<String, OmgType>,
+        vars: &BTreeMap<String, OmgType>,
         interner: &Interner,
         omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
@@ -378,7 +377,7 @@ impl ModelBuilder {
         let ext_queue = pg_builder.ext_queue;
         // Initialize variables from datamodel
         // NOTE vars cannot be initialized using previously defined vars because datamodel is an HashMap
-        let mut vars: HashMap<String, (OmgType, Vec<(Var, Type)>)> = HashMap::new();
+        let mut vars: BTreeMap<String, (OmgType, Vec<(Var, Type)>)> = BTreeMap::new();
         for data in scxml.datamodel.iter() {
             let mut omg_type = data
                 .omg_type
@@ -391,7 +390,7 @@ impl ModelBuilder {
                     .as_ref()
                     .ok_or_else(|| anyhow!("expression for data '{}' required", data.id))
                     .and_then(|expr| {
-                        infer_type(expr, &HashMap::new(), interner, Some(&omg_type), omg_types)
+                        infer_type(expr, &BTreeMap::new(), interner, Some(&omg_type), omg_types)
                     })?;
             }
             let vars_types = if let Some(expr) = data.expression.as_ref() {
@@ -477,9 +476,6 @@ impl ModelBuilder {
             .enumerate()
             // only consider events that can activate some transition and that some other process is sending.
             .filter(|(_, eb)| eb.receivers.contains(&pg_id) && !eb.senders.is_empty())
-            .map(|(index, eb)| (index, eb.clone()))
-            // WARN TODO Necessary to satisfy the borrow checker but it should be possible to avoid cloning.
-            .collect::<Vec<_>>()
         {
             let mut param_vars_vec = Vec::new();
             let mut param_types_vec = Vec::new();
@@ -532,8 +528,8 @@ impl ModelBuilder {
             }
         }
         // Make non-mut
-        let param_vars = params_vars;
-        let param_actions = params_actions;
+        let params_vars = params_vars;
+        let params_actions = params_actions;
 
         // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
@@ -619,8 +615,7 @@ impl ModelBuilder {
             let mut known_events = Vec::new();
             // Retrieve external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
-            // from any possible other FSM,
-            // and for any parameter of the event.
+            // and from any possible other FSM.
             for (event_index, event_builder) in self
                 .events
                 .iter()
@@ -639,7 +634,7 @@ impl ModelBuilder {
                     );
                     // Add event (and sender) to list of known events.
                     known_events.push(is_event_sender.to_owned());
-                    if let Some(&read_params) = param_actions.get(&(sender_id, event_index)) {
+                    if let Some(&read_params) = params_actions.get(&(sender_id, event_index)) {
                         self.cs
                             .add_transition(
                                 pg_id,
@@ -662,11 +657,8 @@ impl ModelBuilder {
                 }
             }
             // Proceed if event is unknown (without retrieving parameters).
-            let unknown_event = if known_events.is_empty() {
-                None
-            } else {
-                Some(!(BooleanExpr::Or(known_events)))
-            };
+            let unknown_event =
+                (!known_events.is_empty()).then(|| !(BooleanExpr::Or(known_events)));
             self.cs
                 .add_autonomous_transition(
                     pg_id,
@@ -706,7 +698,7 @@ impl ModelBuilder {
                     .or_insert_with(|| self.cs.new_location(pg_id).expect("pg_id should exist"));
 
                 // Set up origin and parameters for conditional/executable content.
-                if let Some(event_name) = transition.event.as_ref() {
+                if let Some(ref event_name) = transition.event {
                     let event_index = *self
                         .event_indexes
                         .get(event_name)
@@ -715,7 +707,7 @@ impl ModelBuilder {
                         (
                             String::from("_EventDataType"),
                             OmgTypeDef::Structure(BTreeMap::from_iter(
-                                param_vars
+                                params_vars
                                     .iter()
                                     .filter(|((ev_ix, _), _)| *ev_ix == event_index)
                                     .map(|((_, param_name), (t, _))| {
@@ -738,7 +730,7 @@ impl ModelBuilder {
                         .params
                         .keys()
                         .flat_map(|param_name| {
-                            &param_vars
+                            &params_vars
                                 .get(&(event_index, param_name.clone()))
                                 .expect("param")
                                 .1
@@ -902,7 +894,7 @@ impl ModelBuilder {
         pg_id: PgId,
         int_queue: Channel,
         loc: Location,
-        vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
+        vars: &BTreeMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
         omg_types: &mut OmgTypes,
     ) -> Result<Location, anyhow::Error> {
@@ -1181,7 +1173,7 @@ impl ModelBuilder {
         params: &[Param],
         event_idx: usize,
         param_loc: Location,
-        vars: &HashMap<String, (OmgType, Vec<(Var, Type)>)>,
+        vars: &BTreeMap<String, (OmgType, Vec<(Var, Type)>)>,
         interner: &Interner,
         omg_types: &mut OmgTypes,
     ) -> Result<Location, anyhow::Error> {
@@ -1275,7 +1267,7 @@ impl ModelBuilder {
                 let init = expression::<Var, Expression<Var>>(
                     init,
                     &parser.interner,
-                    &HashMap::new(),
+                    &BTreeMap::new(),
                     param_type.as_ref(),
                     &mut parser.types,
                 )
@@ -1383,12 +1375,7 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_properties(
-        &mut self,
-        parser: &mut Parser,
-        properties: &[String],
-        all_properties: bool,
-    ) -> anyhow::Result<()> {
+    fn build_properties(&mut self, parser: &mut Parser, property: &String) -> anyhow::Result<()> {
         for predicate in parser.properties.predicates.iter() {
             let predicate = expression(
                 predicate,
@@ -1408,12 +1395,10 @@ impl ModelBuilder {
                 bail!("predicate is not a boolean expression");
             }
         }
-        if !all_properties {
-            parser
-                .properties
-                .guarantees
-                .retain(|(name, _)| properties.contains(name));
-        }
+        parser
+            .properties
+            .guarantees
+            .retain(|(name, _)| property == name);
         self.guarantees = parser.properties.guarantees.clone();
         self.assumes = parser.properties.assumes.clone();
         Ok(())

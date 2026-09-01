@@ -218,27 +218,23 @@ impl Cli {
 
         match self.command {
             Commands::Verify {
-                mut args,
+                args,
                 progress,
                 json,
             } => {
                 args.validate()?;
-                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
-                validate_properties(&args.properties, &scxml_model.guarantees)?;
-                // Reorder properties as they appear in the model
-                args.properties = scxml_model.guarantees.clone();
+                let (scan_def, scxml_model) = load(&self.model, &args.property)?;
+                validate_properties(&args.property, &scxml_model.guarantees)?;
                 run_verification::<_>(model, &args, progress, json, &scan_def).print(json);
             }
             Commands::Validate => {
-                let (_scan, _scxml_model) = load(&self.model, &[], true)?;
+                let (_scan, _scxml_model) = load(&self.model, &String::new())?;
                 // At this point the model has been validated
                 println!("model '{model}' successfully validated");
             }
-            Commands::Trace(mut args) => {
-                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
-                validate_properties(&args.properties, &scxml_model.guarantees)?;
-                // Reorder properties as they appear in the model
-                args.properties = scxml_model.guarantees.clone();
+            Commands::Trace(args) => {
+                let (scan_def, scxml_model) = load(&self.model, &args.property)?;
+                validate_properties(&args.property, &scxml_model.guarantees)?;
                 let path = new_traces_dir();
                 args.trace::<_, TracePrinter>(&scan_def, path, &scxml_model);
                 println!("trace computation for model '{model}' completed");
@@ -253,25 +249,23 @@ impl Cli {
 
         match self.command {
             Commands::Verify {
-                mut args,
+                args,
                 progress,
                 json,
             } => {
                 args.validate()?;
-                let properties = args.properties.clone();
+                let properties = args.property.clone();
                 let (scan, jani_model) = load(&self.model, &properties)?;
-                validate_properties(&args.properties, &jani_model.guarantees)?;
-                // Reorder properties as they appear in the model
-                args.properties = jani_model.guarantees.clone();
+                validate_properties(&args.property, &jani_model.guarantees)?;
                 run_verification::<_>(model, &args, progress, json, &scan).print(json);
             }
             Commands::Validate => {
-                let (_scan, _jani_model) = load(&self.model, &[])?;
+                let (_scan, _jani_model) = load(&self.model, &String::new())?;
                 println!("model '{model}' successfully validated");
             }
             Commands::Trace(args) => {
                 args.validate()?;
-                let (scan, jani_model) = load(&self.model, &[])?;
+                let (scan, jani_model) = load(&self.model, &String::new())?;
                 let path = new_traces_dir();
                 args.trace::<_, TracePrinter>(&scan, path, &jani_model);
                 println!("trace computation for model '{model}' completed");
@@ -309,13 +303,13 @@ impl Cli {
     }
 }
 
-fn validate_properties(props: &[String], all_props: &[String]) -> anyhow::Result<()> {
-    if let Some(prop) = props.iter().find(|prop| !all_props.contains(prop)) {
-        Err(anyhow!(
-            "no property named '{prop}' found in model.\n\nHint: maybe it is misspelled?"
-        ))
-    } else {
+fn validate_properties(property: &String, all_props: &[String]) -> anyhow::Result<()> {
+    if all_props.contains(property) {
         Ok(())
+    } else {
+        Err(anyhow!(
+            "no property named '{property}' found in model.\n\nHint: maybe it is misspelled?"
+        ))
     }
 }
 
@@ -332,18 +326,13 @@ where
     if !json {
         println!(
             "Verifying {model} (-p {} -c {}) {:?}",
-            args.precision, args.confidence, args.properties
+            args.precision, args.confidence, args.property
         );
     }
     if let Some(bar) = progress {
         std::thread::scope(|s| {
             s.spawn(|| {
-                bar.print_progress_bar::<O>(
-                    args.confidence,
-                    args.precision,
-                    &args.properties,
-                    scan,
-                );
+                bar.print_progress_bar::<O>(args.confidence, args.precision, &args.property, scan);
             });
             args.verify::<O>(model.to_owned(), scan)
         })
