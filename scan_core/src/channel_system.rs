@@ -129,7 +129,7 @@ type PgIndex = u16;
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
-pub struct PgId(PgIndex);
+pub struct PgId(pub(crate) PgIndex);
 
 impl From<PgId> for PgIndex {
     #[inline]
