@@ -1,4 +1,7 @@
-use std::ops::{Bound, RangeBounds};
+use std::{
+    hash::{Hash, Hasher},
+    ops::{Bound, RangeBounds},
+};
 
 use bumpalo::{Bump, collections::CollectIn};
 use rand::{Rng, rngs::SmallRng};
@@ -21,6 +24,24 @@ pub struct ProgramGraphRun<'def> {
     vars: Vec<Val>,
     clocks: Vec<Time>,
     def: &'def ProgramGraph,
+}
+
+impl<'def> PartialEq for ProgramGraphRun<'def> {
+    fn eq(&self, other: &Self) -> bool {
+        self.current_states == other.current_states
+            && self.vars == other.vars
+            && self.clocks == other.clocks
+    }
+}
+
+impl<'def> Eq for ProgramGraphRun<'def> {}
+
+impl<'def> Hash for ProgramGraphRun<'def> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.current_states.hash(state);
+        self.vars.hash(state);
+        self.clocks.hash(state);
+    }
 }
 
 impl<'def> ProgramGraphRun<'def> {

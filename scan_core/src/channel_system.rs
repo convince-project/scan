@@ -122,7 +122,7 @@ use get_size2::GetSize;
 pub use run::ChannelSystemRun;
 use thiserror::Error;
 
-type PgIndex = u16;
+pub(crate) type PgIndex = u16;
 
 /// An indexing object for PGs in a CS.
 ///

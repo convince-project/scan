@@ -11,6 +11,7 @@ mod integer;
 mod natural;
 
 use get_size2::GetSize;
+use num_rational::Rational64;
 use rand::{Rng, rngs::SmallRng};
 use std::{
     hash::Hash,
@@ -59,13 +60,13 @@ impl Type {
             Type::Boolean => Val::Boolean(false),
             Type::Natural => Val::Natural(0),
             Type::Integer => Val::Integer(0),
-            Type::Float => Val::Float(0.0),
+            Type::Float => Val::Float(Rational64::from_integer(0)),
         }
     }
 }
 
 /// Possible values for each [`Type`].
-#[derive(Debug, Clone, Copy, PartialEq, GetSize)]
+#[derive(Debug, Clone, Copy, PartialEq, GetSize, Hash)]
 pub enum Val {
     /// Boolean values.
     Boolean(bool),
@@ -74,7 +75,7 @@ pub enum Val {
     /// Integer values.
     Integer(Integer),
     /// Floating-point values.
-    Float(Float),
+    Float(#[get_size(size = 16)] Float),
 }
 
 impl Val {

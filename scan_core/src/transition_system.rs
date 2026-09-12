@@ -1,17 +1,25 @@
+use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use bumpalo::Bump;
 use fixedbitset::FixedBitSet;
 use log::{info, trace};
+use petgraph::acyclic::Acyclic;
+use petgraph::data::Build;
+use petgraph::graph::DiGraph;
 use rand::rngs::SmallRng;
 use thiserror::Error;
 
 use crate::channel_system::{
     Action, Channel, ChannelSystem, ChannelSystemRun, CsError, EventType, Location, Message, PgId,
+    PgIndex,
 };
 use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
+
+type Dag = Acyclic<DiGraph<(), (), PgIndex>>;
 
 /// Errors produced by a [`TransitionSystem`].
 #[derive(Debug, Clone, Copy, Error)]
@@ -135,181 +143,75 @@ impl TransitionSystem {
         mut oracle: O,
         running: Arc<AtomicBool>,
     ) -> Option<bool> {
-        let mut executions_stack: Vec<(O, TransitionSystemRun)> = Vec::new();
-        let mut bump = Bump::new();
-        let mut run = self.new_run();
-        let labels = Vec::from_iter(run.labels());
-        // Initialize oracle with TS initial state
-        oracle.update_state(&labels);
-        run.fastforward(&bump);
+        // Diagnostics/stats
+        let start_time = Instant::now();
         let mut branches: u32 = 0;
 
-        let mut ample: FixedBitSet = FixedBitSet::with_capacity(self.pg_list.len());
-        let mut channels_senders: FixedBitSet =
-            FixedBitSet::with_capacity(self.cs.channels().len());
-        let mut channels_receivers: FixedBitSet =
-            FixedBitSet::with_capacity(self.cs.channels().len());
-        let mut probe_empty_queues: FixedBitSet =
-            FixedBitSet::with_capacity(self.cs.channels().len());
-
-        // FILO stack: depth-first search
-        'l: loop {
-            if !running.load(Ordering::Relaxed) {
-                trace!("run stopped");
-                return None;
-            }
-            bump.reset();
-            if run
-                .cs
-                .nosync_possible_transitions()
-                .flat_map(|(_, transitions)| transitions)
-                .next()
-                .is_some()
-            {
-                run.ample(
-                    &mut ample,
-                    &mut channels_senders,
-                    &mut channels_receivers,
-                    &mut probe_empty_queues,
-                );
-                // assert!(ample.is_none_or(|ample| !ample.is_clear()));
-                let mut ample_transitions = ample
-                    .ones()
-                    .flat_map(|b| {
-                        let pg_id = PgId(b as u16);
-                        run.cs
-                            .nosync_possible_transitions_pg(pg_id)
-                            .unwrap()
-                            .flat_map(|(action, transitions)| {
-                                transitions.map(move |post| (action, post))
-                            })
-                    })
-                    .peekable();
-                // There must be active transitions because we checked earlier
-                // assert!(ample_transitions.peek().is_some());
-                'w: while let Some((action, post)) = ample_transitions.next() {
-                    if ample_transitions.peek().is_none() {
-                        drop(ample_transitions);
-                        bump.reset();
-                        run.transition(&mut oracle, action, post, &bump).unwrap();
-                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                            // Guarantee violated
-                            trace!("run violates a guarantee");
-                            return Some(false);
-                        } else if oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
-                            run.fastforward(&bump);
-                            // continue loop with same run and oracle
-                            continue 'l;
-                        } else {
-                            branches += 1;
-                            if branches.is_power_of_two() {
-                                trace!("executed branches: {branches}");
-                            }
-                            // No transitions left in this branch so exit transitions iteration
-                            break 'w;
-                        }
-                    } else {
-                        let mut branch_run = run.clone();
-                        let mut branch_oracle = oracle.clone();
-                        bump.reset();
-                        branch_run
-                            .transition(&mut branch_oracle, action, post, &bump)
-                            .unwrap();
-                        if branch_oracle
-                            .output_guarantees()
-                            .any(|b| b.is_some_and(|b| !b))
-                        {
-                            // Guarantee violated
-                            trace!("run violates a guarantee");
-                            return Some(false);
-                        } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
-                            branch_run.fastforward(&bump);
-                            executions_stack.push((branch_oracle, branch_run));
-                        } else {
-                            branches += 1;
-                            if branches.is_power_of_two() {
-                                trace!("executed branches: {branches}");
-                            }
-                        }
-                    }
-                }
-            } else if run.cs.is_waiting(&bump) {
-                run.time_tick();
-                oracle.update_time(run.time());
-                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                    // Guarantee violated
-                    trace!("execution branch violates a guarantee (partial execution)");
-                    return Some(false);
-                } else if oracle.output_guarantees().any(|b| b.is_none()) {
-                    bump.reset();
-                    run.fastforward(&bump);
-                    // continue loop with same run and oracle
-                    continue 'l;
-                } else {
-                    branches += 1;
-                    if branches.is_power_of_two() {
-                        trace!("executed branches: {branches}");
-                    }
-                }
-            } else {
-                branches += 1;
-                if branches.is_power_of_two() {
-                    trace!("executed branches: {branches}");
-                }
-            }
-
-            if let Some((branch_oracle, branch_run)) = executions_stack.pop() {
-                // continue loop with next run and oracle
-                run = branch_run;
-                oracle = branch_oracle;
-            } else {
-                // run terminated
-                trace!("run verifies all guarantees");
-                return Some(true);
-            }
-        }
-    }
-
-    pub(crate) fn fast_experiment<O: Oracle + Clone>(
-        &self,
-        mut oracle: O,
-        running: Arc<AtomicBool>,
-    ) -> Option<bool> {
-        let mut executions_stack: Vec<(O, TransitionSystemRun)> = Vec::new();
+        type BranchData<'a, O> = (O, TransitionSystemRun<'a>, Vec<(FixedBitSet, bool)>, Dag);
+        let mut executions_stack: Vec<BranchData<O>> = Vec::new();
+        // TODO: measure impact of recycling memory to check wether it is worth it
+        let mut recycling_sets: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
+        let mut recycling_dags: Vec<Dag> = Vec::new();
         let pgs = self.pg_list.len();
-        let mut amples = vec![FixedBitSet::with_capacity(pgs); pgs];
+        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs];
+        let mut restricted_ample = FixedBitSet::with_capacity(pgs);
+        let mut restricted_ample_temp = FixedBitSet::with_capacity(pgs);
         let mut bump = Bump::new();
         let mut run = self.new_run();
-        let labels = Vec::from_iter(run.labels());
+        let mut dag = Dag::new();
+        let dag_ids = (0..pgs).map(|_| dag.add_node(())).collect::<Vec<_>>();
+
         // Initialize oracle with TS initial state
-        oracle.update_state(&labels);
+        oracle.update_state(&Vec::from_iter(run.labels()));
         run.fastforward(&bump);
-        let mut branches: u32 = 0;
 
         // FILO stack: depth-first search
         'l: while running.load(Ordering::Relaxed) {
-            if run
-                .cs
-                .nosync_possible_transitions()
-                .flat_map(|(_, transitions)| transitions)
-                .next()
-                .is_some()
+            // NOTE: at the start of the loop, ample sets need to be updated.
+            // Do so only if no viable set is left,
+            // to reduce expensive calls to the ample method.
+            if amples
+                .iter()
+                .all(|(set, invalid)| *invalid || set.is_clear())
             {
-                run.fast_ample(&mut amples);
-                run.transitive(&mut amples);
-                let ample = amples
-                    .iter()
-                    .find(|set| set.count_ones(..) == 1)
-                    .or_else(|| {
-                        amples
-                            .iter()
-                            .filter(|set| !set.is_clear())
-                            .min_by_key(|set| set.count_ones(..))
-                    })
-                    .unwrap();
-                let mut ample_transitions = ample
+                run.ample(&mut amples);
+            }
+
+            // Find most suitable ample set
+            let mut min_len = usize::MAX;
+            let mut ample = None;
+            'f: for (set, invalid) in amples.iter() {
+                // only consider viable sets (i.e., neither invalidated nor empty)
+                if !(*invalid || set.is_clear()) {
+                    restricted_ample_temp.clear();
+                    let mut len = 0;
+                    for i in set.ones().filter(|&i| {
+                        let i_node = dag_ids[i];
+                        set.ones()
+                            .all(|j| j == i || dag.is_valid_edge(i_node, dag_ids[j]))
+                    }) {
+                        len += 1;
+                        if len < min_len {
+                            restricted_ample_temp.insert(i);
+                        } else {
+                            continue 'f;
+                        }
+                    }
+                    // new set is smaller than previous ones
+                    mem::swap(&mut restricted_ample, &mut restricted_ample_temp);
+                    ample = Some(set);
+                    assert!(len > 0);
+                    if len == 1 {
+                        break 'f;
+                    } else {
+                        min_len = len;
+                    }
+                }
+            }
+            if let Some(ample) = ample {
+                assert!(!restricted_ample.is_clear());
+                assert!(restricted_ample.is_subset(ample));
+                let mut transitions = restricted_ample
                     .ones()
                     .flat_map(|b| {
                         run.cs
@@ -321,30 +223,9 @@ impl TransitionSystem {
                     })
                     .peekable();
                 // There must be active transitions because we checked earlier
-                assert!(ample_transitions.peek().is_some());
-                'w: while let Some((action, post)) = ample_transitions.next() {
-                    if ample_transitions.peek().is_none() {
-                        drop(ample_transitions);
-                        bump.reset();
-                        run.transition(&mut oracle, action, post, &bump).unwrap();
-                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                            // Guarantee violated
-                            trace!("run violates a guarantee");
-                            return Some(false);
-                        } else if oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
-                            run.fastforward(&bump);
-                            // continue loop with same run and oracle
-                            continue 'l;
-                        } else {
-                            branches += 1;
-                            if branches.is_power_of_two() {
-                                trace!("executed branches: {branches}");
-                            }
-                            // No transitions left in this branch so exit transitions iteration
-                            break 'w;
-                        }
-                    } else {
+                assert!(transitions.peek().is_some());
+                'w: while let Some((action, post)) = transitions.next() {
+                    if transitions.peek().is_some() {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
                         bump.reset();
@@ -356,17 +237,102 @@ impl TransitionSystem {
                             .any(|b| b.is_some_and(|b| !b))
                         {
                             // Guarantee violated
-                            trace!("run violates a guarantee");
+                            branches += 1;
+                            trace!(
+                                "run violates a guarantee: processed {branches} branches in {:?}",
+                                start_time.elapsed()
+                            );
                             return Some(false);
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
-                            executions_stack.push((branch_oracle, branch_run));
+                            // Prepare new DAG
+                            let mut branch_dag = if let Some(mut rec_dag) = recycling_dags.pop() {
+                                rec_dag.clone_from(&dag);
+                                rec_dag
+                            } else {
+                                dag.clone()
+                            };
+                            let a = u16::from(action.0) as usize;
+                            let node_a = dag_ids[a];
+                            restricted_ample.ones().for_each(|b| {
+                                if b != a {
+                                    let node_b = dag_ids[b];
+                                    let _ = branch_dag
+                                        .try_update_edge(node_a, node_b, ())
+                                        .expect("edge must be valid");
+                                }
+                            });
+                            let mut branch_amples = if let Some(mut set) = recycling_sets.pop() {
+                                // clone amples into recycled set;
+                                set.iter_mut().zip(amples.iter()).for_each(
+                                    |((to_set, to_invalid), (from_set, from_invalid))| {
+                                        to_set.clone_from(from_set);
+                                        *to_invalid = *from_invalid;
+                                    },
+                                );
+                                set
+                            } else {
+                                amples.clone()
+                            };
+                            branch_amples
+                                .iter_mut()
+                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
+                            executions_stack.push((
+                                branch_oracle,
+                                branch_run,
+                                branch_amples,
+                                branch_dag,
+                            ));
                         } else {
+                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
                             branches += 1;
-                            if branches.is_power_of_two() {
-                                trace!("executed branches: {branches}");
-                            }
+                        }
+                    } else {
+                        drop(transitions);
+                        bump.reset();
+                        run.transition(&mut oracle, action, post, &bump).unwrap();
+                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                            // Guarantee violated
+                            branches += 1;
+                            trace!(
+                                "run violates a guarantee: processed {branches} branches in {:?}",
+                                start_time.elapsed()
+                            );
+                            return Some(false);
+                        } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                            bump.reset();
+                            run.fastforward(&bump);
+                            // Update DAG
+                            let a = u16::from(action.0) as usize;
+                            let node_a = dag_ids[a];
+                            restricted_ample.ones().for_each(|b| {
+                                if b != a {
+                                    let node_b = dag_ids[b];
+                                    // update_edge avoids creating duplicated edges
+                                    let _ = dag
+                                        .try_update_edge(node_a, node_b, ())
+                                        .expect("edge must be valid");
+                                }
+                            });
+                            // NOTE: Ample sets, in this case, are closed under intersection,
+                            // because A = U_{a in A} Ample(a) for every ample set A
+                            // so A /\ B = U_{a in A /\ B} Ample(a) is an ample set.
+                            // NOTE: restricted_ample is **not** an ample set,
+                            // and ample is not necessarily the smallest ample set containing restricted_ample!
+                            amples
+                                .iter_mut()
+                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
+                            // continue loop with same run and oracle
+                            continue 'l;
+                        } else {
+                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
+                            branches += 1;
+                            recycling_sets.push(amples);
+                            recycling_dags.push(dag);
+                            // No transitions left in this branch so exit transitions iteration
+                            // NOTE: break while loop needed to satisfy borrow checker
+                            break 'w;
                         }
                     }
                 }
@@ -375,39 +341,315 @@ impl TransitionSystem {
                 oracle.update_time(run.time());
                 if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                     // Guarantee violated
-                    trace!("execution branch violates a guarantee (partial execution)");
+                    branches += 1;
+                    trace!(
+                        "run violates a guarantee: processed {branches} branches in {:?}",
+                        start_time.elapsed()
+                    );
                     return Some(false);
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
+                    amples
+                        .iter_mut()
+                        .for_each(|(_set, invalidate)| *invalidate = true);
                     // continue loop with same run and oracle
                     continue 'l;
                 } else {
+                    // Branch satisfies all guarantees and can be discarded even though execution is incomplete
                     branches += 1;
-                    if branches.is_power_of_two() {
-                        trace!("executed branches: {branches}");
-                    }
+                    recycling_sets.push(amples);
+                    recycling_dags.push(dag);
                 }
-            } else {
+            } else if oracle.final_output_guarantees().all(|b| b) {
+                // Branch execution terminates and satisfies all guarantees and thus can be discarded
                 branches += 1;
-                if branches.is_power_of_two() {
-                    trace!("executed branches: {branches}");
-                }
+                recycling_sets.push(amples);
+                recycling_dags.push(dag);
+            } else {
+                // Branch execution terminates without satisfying all guarantees
+                branches += 1;
+                trace!(
+                    "run violates a guarantee: processed {branches} branches in {:?}",
+                    start_time.elapsed()
+                );
+                return Some(false);
             }
 
-            if let Some((branch_oracle, branch_run)) = executions_stack.pop() {
+            if let Some((branch_oracle, branch_run, branch_amples, branch_dag)) =
+                executions_stack.pop()
+            {
                 // continue loop with next run and oracle
                 run = branch_run;
                 oracle = branch_oracle;
+                dag = branch_dag;
+                amples = branch_amples;
             } else {
-                // run terminated
-                trace!("run verifies all guarantees");
+                // Model execution terminates and satisfies all guarantees
+                trace!(
+                    "run verifies all guarantees: processed {branches} branches in {:?}",
+                    start_time.elapsed()
+                );
                 return Some(true);
             }
         }
-        trace!("run stopped");
+        trace!(
+            "run stopped: processed {branches} branches in {:?}",
+            start_time.elapsed()
+        );
         None
     }
+
+    // pub(crate) fn new_experiment<O: Oracle + Clone>(
+    //     &self,
+    //     mut oracle: O,
+    //     running: Arc<AtomicBool>,
+    // ) -> Option<bool> {
+    //     let mut executions_stack: Vec<(O, TransitionSystemRun, usize)> = Vec::new();
+    //     let mut state_trace: Vec<TransitionSystemRun> = Vec::new();
+    //     let mut states = HashMap::new();
+    //     let mut ample_sets_stack: Vec<(Vec<(FixedBitSet, bool)>, u16)> = Vec::new();
+    //     let mut recycling_stack: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
+    //     let pgs = self.pg_list.len();
+    //     let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs];
+    //     let mut ample_bkp = FixedBitSet::with_capacity(pgs);
+    //     let mut bump = Bump::new();
+    //     let mut run = self.new_run();
+    //     // Initialize oracle with TS initial state
+    //     oracle.update_state(&Vec::from_iter(run.labels()));
+    //     run.fastforward(&bump);
+    //     states.insert(run.clone(), 0);
+    //     state_trace.push(run.clone());
+
+    //     // FILO stack: depth-first search
+    //     'l: while running.load(Ordering::Relaxed) {
+    //         // States have to be synchronized with state trace
+    //         assert_eq!(states.len(), state_trace.len());
+    //         assert!(ample_sets_stack.len() <= executions_stack.len());
+    //         assert!(executions_stack.len() <= state_trace.len());
+    //         // Compute ample sets
+    //         run.ample(&mut amples);
+    //         if let Some((ample, _)) = amples
+    //             .iter()
+    //             .find(|(set, _)| set.count_ones(..) == 1)
+    //             .or_else(|| {
+    //                 amples
+    //                     .iter()
+    //                     .filter(|(set, _)| !set.is_clear())
+    //                     .min_by_key(|(set, _)| set.count_ones(..))
+    //             })
+    //         {
+    //             // Compute transitions restricted to ample set
+    //             let mut ample_transitions = ample
+    //                 .ones()
+    //                 .flat_map(|b| {
+    //                     run.cs
+    //                         .nosync_possible_transitions_pg(PgId(b as u16))
+    //                         .unwrap()
+    //                         .flat_map(|(action, transitions)| {
+    //                             transitions.map(move |post| (action, post))
+    //                         })
+    //                 })
+    //                 .peekable();
+    //             // There must be active transitions because we checked earlier
+    //             assert!(ample_transitions.peek().is_some());
+    //             let mut ample_branches: u16 = 0;
+    //             while let Some((action, post)) = ample_transitions.next() {
+    //                 if ample_transitions.peek().is_some() {
+    //                     let mut branch_run = run.clone();
+    //                     let mut branch_oracle = oracle.clone();
+    //                     bump.reset();
+    //                     branch_run
+    //                         .transition(&mut branch_oracle, action, post, &bump)
+    //                         .unwrap();
+    //                     if !branch_oracle
+    //                         .output_guarantees()
+    //                         .all(|b| b.is_none_or(|b| b))
+    //                     {
+    //                         // Guarantee violated
+    //                         trace!("run violates a guarantee before termination");
+    //                         return Some(false);
+    //                     } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
+    //                         // Can do branch fast-forwarding here because properties are invariant under forwarding
+    //                         bump.reset();
+    //                         branch_run.fastforward(&bump);
+    //                         if let Some(len) = states.get(&branch_run) {
+    //                             // Found loop: what to do?
+    //                             // if executions_stack
+    //                             //     .last()
+    //                             //     .is_some_and(|(_, _, branch_len)| branch_len >= len)
+    //                             // {
+    //                             //     // Loop can be exited,
+    //                             //     // terminate branch exploration
+    //                             // } else {
+    //                             // Inescapable loop
+    //                             trace!("(in)escapable loop found, run fails");
+    //                             return Some(false);
+    //                             // }
+    //                         } else {
+    //                             executions_stack.push((
+    //                                 branch_oracle,
+    //                                 branch_run,
+    //                                 state_trace.len(),
+    //                             ));
+    //                             ample_branches += 1;
+    //                         }
+    //                     } else {
+    //                         // All properties verified
+    //                         // Terminate branch exploration
+    //                         continue;
+    //                     }
+    //                 } else {
+    //                     drop(ample_transitions);
+    //                     bump.reset();
+    //                     run.transition(&mut oracle, action, post, &bump).unwrap();
+    //                     // TODO FIXME: is it possible to avoid clone? Is it expensive?
+    //                     ample.clone_into(&mut ample_bkp);
+    //                     amples.iter_mut().for_each(|(set, invalidate)| {
+    //                         *invalidate = set.is_superset(&ample_bkp)
+    //                     });
+    //                     // Add ample set to stack
+    //                     if ample_branches > 0 {
+    //                         // If possible, recycle memory
+    //                         if let Some(mut set) = recycling_stack.pop() {
+    //                             // Clone ample set into recycled memory
+    //                             set.iter_mut().zip(amples.iter()).for_each(
+    //                                 |((to_set, to_invalid), (from_set, from_invalid))| {
+    //                                     to_set.clone_from(from_set);
+    //                                     *to_invalid = *from_invalid;
+    //                                 },
+    //                             );
+    //                             ample_sets_stack.push((set, ample_branches));
+    //                         } else {
+    //                             ample_sets_stack.push((amples.clone(), ample_branches));
+    //                         }
+    //                         // trace!("branches: {ample_branches}");
+    //                     }
+    //                     if !oracle.output_guarantees().all(|b| b.is_none_or(|b| b)) {
+    //                         // Guarantee violated
+    //                         trace!("run violates a guarantee before termination");
+    //                         return Some(false);
+    //                     } else if oracle.output_guarantees().any(|b| b.is_none()) {
+    //                         bump.reset();
+    //                         run.fastforward(&bump);
+    //                         if let Some(len) = states.get(&run) {
+    //                             // Found loop: what to do?
+    //                             // if executions_stack
+    //                             //     .last()
+    //                             //     .is_some_and(|(_, _, branch_len)| branch_len >= len)
+    //                             // {
+    //                             //     // Loop can be exited,
+    //                             //     // terminate branch exploration
+    //                             //     break 'w;
+    //                             // } else {
+    //                             // Inescapable loop
+    //                             trace!("inescapable loop found, run fails");
+    //                             // return Some(false);
+    //                             panic!("inescapable loop found, run fails");
+    //                             // }
+    //                         } else {
+    //                             // NOTE: First insert state with state trace len,
+    //                             // then push to state trace, so indexes correspond.
+    //                             assert!(states.insert(run.clone(), state_trace.len()).is_none());
+    //                             state_trace.push(run.clone());
+    //                             // continue loop with same run and oracle
+    //                             continue 'l;
+    //                         }
+    //                     } else {
+    //                         // All properties verified
+    //                         // Terminate branch exploration
+    //                         // No transitions left in this branch so exit transitions iteration
+    //                         // NOTE: breaking needed to satisfy borrow checker
+    //                         break;
+    //                     }
+    //                 }
+    //             }
+    //         } else if run.cs.is_waiting(&bump) {
+    //             run.time_tick();
+    //             oracle.update_time(run.time());
+    //             if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+    //                 // Guarantee violated
+    //                 trace!("execution branch violates a guarantee (partial execution)");
+    //                 return Some(false);
+    //             } else if oracle.output_guarantees().any(|b| b.is_none()) {
+    //                 bump.reset();
+    //                 run.fastforward(&bump);
+    //                 assert!(
+    //                     states.insert(run.clone(), state_trace.len()).is_none(),
+    //                     "no state with the same time can already be in"
+    //                 );
+    //                 state_trace.push(run.clone());
+    //                 amples
+    //                     .iter_mut()
+    //                     .for_each(|(_set, invalidate)| *invalidate = true);
+    //                 // continue loop with same run and oracle
+    //                 continue 'l;
+    //             } else {
+    //                 // Execution branch satisfies all guarantees
+    //                 recycling_stack.push(amples);
+    //             }
+    //         } else if oracle.final_output_guarantees().any(|b| !b) {
+    //             // Branch execution terminated
+    //             assert_eq!(
+    //                 run.cs
+    //                     .nosync_possible_transitions()
+    //                     .flat_map(
+    //                         |(action, transitions)| transitions.map(move |post| (action, post))
+    //                     )
+    //                     .count(),
+    //                 0
+    //             );
+    //             assert!(!run.cs.is_waiting(&bump));
+    //             // Guarantee violated
+    //             trace!("execution branch violates a guarantee (full execution)");
+    //             return Some(false);
+    //         } else {
+    //             // Branch execution terminated
+    //             // Execution branch satisfies all guarantees
+    //             recycling_stack.push(amples);
+    //         }
+
+    //         if let Some((branch_oracle, branch_run, trace_len)) = executions_stack.pop() {
+    //             trace!("branches: {}", executions_stack.len());
+    //             assert!(trace_len <= state_trace.len());
+    //             for state in state_trace.drain(trace_len..) {
+    //                 // state must be present
+    //                 assert!(states.remove(&state).is_some());
+    //             }
+    //             // continue loop with next run and oracle
+    //             run = branch_run;
+    //             oracle = branch_oracle;
+    //             assert!(states.insert(run.clone(), state_trace.len()).is_none());
+    //             state_trace.push(run.clone());
+    //             // Recover ample set corresponding to new state
+    //             if ample_sets_stack.last().unwrap().1 > 1 {
+    //                 let (stack_amples, count) = ample_sets_stack.last_mut().unwrap();
+    //                 *count -= 1;
+    //                 // If possible, recycle memory
+    //                 if let Some(mut set) = recycling_stack.pop() {
+    //                     // Clone ample set into recycled memory
+    //                     set.iter_mut().zip(stack_amples.iter()).for_each(
+    //                         |((to_set, to_invalid), (from_set, from_invalid))| {
+    //                             to_set.clone_from(from_set);
+    //                             *to_invalid = *from_invalid;
+    //                         },
+    //                     );
+    //                     amples = set;
+    //                 } else {
+    //                     amples = stack_amples.clone();
+    //                 }
+    //             } else {
+    //                 amples = ample_sets_stack.pop().unwrap().0;
+    //             }
+    //         } else {
+    //             // run terminated
+    //             trace!("run verifies all guarantees");
+    //             return Some(true);
+    //         }
+    //     }
+    //     trace!("run stopped");
+    //     None
+    // }
 
     // #[inline]
     // pub fn is_stutter(&self, action: Action) -> bool {
@@ -437,6 +679,22 @@ pub struct TransitionSystemRun<'def> {
     cs: ChannelSystemRun<'def>,
     vals: Vec<Vec<Val>>,
     last_event: Option<Channel>,
+}
+
+impl<'def> PartialEq for TransitionSystemRun<'def> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cs == other.cs && self.vals == other.vals && self.last_event == other.last_event
+    }
+}
+
+impl<'def> Eq for TransitionSystemRun<'def> {}
+
+impl<'def> Hash for TransitionSystemRun<'def> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.cs.hash(state);
+        self.vals.hash(state);
+        self.last_event.hash(state);
+    }
 }
 
 impl<'def> TransitionSystemRun<'def> {
@@ -755,64 +1013,20 @@ impl<'def> TransitionSystemRun<'def> {
     //     }
     // }
 
-    fn ample(
-        &self,
-        pgs: &mut FixedBitSet,
-        channels_senders: &mut FixedBitSet,
-        channels_receivers: &mut FixedBitSet,
-        probe_empty_queues: &mut FixedBitSet,
-    ) {
-        pgs.insert_range(..);
-        let mut ample_len = pgs.count_ones(..);
-        assert_eq!(ample_len, self.ts.pg_list.len());
-        let mut ample = FixedBitSet::with_capacity(self.ts.pg_list.len());
-        // Consider only PGs that have active transitions
-        for pg_id in self.ts.pg_list.iter().copied().filter(|&pg_id| {
-            self.cs
-                .nosync_possible_transitions_pg(pg_id)
-                .unwrap()
-                .flat_map(|(_, transitions)| transitions)
-                .next()
-                .is_some()
-        }) {
-            ample.clear();
-            channels_senders.clear();
-            channels_receivers.clear();
-            probe_empty_queues.clear();
-            ample.insert(u16::from(pg_id) as usize);
-            if self
-                .add_pg_to_ample(
-                    pg_id,
-                    &mut ample,
-                    channels_senders,
-                    channels_receivers,
-                    probe_empty_queues,
-                )
-                .is_ok()
-                && ample.count_ones(..) < ample_len
-            {
-                ample_len = ample.count_ones(..);
-                mem::swap(pgs, &mut ample);
-                if ample_len == 1 {
-                    return;
-                }
-            }
-        }
-        // pgs might include PG's that have no active transitions but that does not invalidate the result
-    }
-
-    fn fast_ample(&self, amples: &mut [FixedBitSet]) {
+    fn ample(&self, amples: &mut [(FixedBitSet, bool)]) {
         self.ts
             .pg_list
             .iter()
             .zip(amples.iter_mut())
-            .for_each(|(pg_id, set)| self.fast_ample_pg(*pg_id, set));
-    }
+            .filter(|(_pg_id, (_set, invalidate))| *invalidate)
+            .for_each(|(pg_id, (set, _))| self.ample_pg(*pg_id, set));
 
-    fn transitive(&self, amples: &mut [FixedBitSet]) {
         for i in 0..amples.len() {
+            // skip j == i
             for j in 0..amples.len() {
-                if let Ok([i_set, j_set]) = amples.get_disjoint_mut([i, j])
+                // only consider invalid j_set's
+                if i != j
+                    && let Ok([(i_set, _), (j_set, true)]) = amples.get_disjoint_mut([i, j])
                     && j_set.contains(i)
                 {
                     let j_bit = j_set[j];
@@ -822,9 +1036,13 @@ impl<'def> TransitionSystemRun<'def> {
                 }
             }
         }
+
+        amples
+            .iter_mut()
+            .for_each(|(_, invalidate)| *invalidate = false);
     }
 
-    fn fast_ample_pg(&self, pg_id: PgId, ample_pg: &mut FixedBitSet) {
+    fn ample_pg(&self, pg_id: PgId, ample_pg: &mut FixedBitSet) {
         ample_pg.clear();
         let mut ample_self = false;
         for action in self
@@ -874,13 +1092,15 @@ impl<'def> TransitionSystemRun<'def> {
                     // Probes (empty/full-queue) never need to be added
                     match message {
                         Message::Send => {
+                            ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
                             unreachable!("send actions are always possible");
-                            // ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
                         }
                         Message::ProbeEmptyQueue => {
+                            // Channel is not empty
                             ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
                         }
                         Message::Receive => {
+                            // Channel is empty
                             ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
                         }
                         Message::ProbeFullQueue => todo!(),
@@ -893,206 +1113,7 @@ impl<'def> TransitionSystemRun<'def> {
         ample_pg.set(u16::from(pg_id) as usize, ample_self);
     }
 
-    fn add_pg_to_ample(
-        &self,
-        pg_id: PgId,
-        pgs: &mut FixedBitSet,
-        channels_senders: &mut FixedBitSet,
-        channels_receivers: &mut FixedBitSet,
-        probe_empty_queues: &mut FixedBitSet,
-    ) -> Result<(), ()> {
-        for action in self
-            .cs
-            .program_graph(pg_id)
-            .unwrap()
-            .nosync_active_actions()
-            .unwrap()
-        {
-            let action = Action(pg_id, action);
-            if let Some((channel, message)) = self.ts.cs.communication(action) {
-                if self.cs.check_message(channel, message) {
-                    match message {
-                        // NOTE: Send and Receive on the same channel are always independent
-                        Message::Send if self.ts.ports.contains(&channel) => {
-                            // Channel is a port so action is not stutter
-                            return Err(());
-                        }
-                        Message::Send => {
-                            if !channels_senders.put(u16::from(channel) as usize) {
-                                self.add_senders_to_ample(
-                                    channel,
-                                    pgs,
-                                    channels_senders,
-                                    channels_receivers,
-                                    probe_empty_queues,
-                                )?;
-                            }
-                            // NOTE: If an execution fragment has a ProbeEmptyQueue action on a channel that is not initially empty,
-                            // then it must be preceded by a Receive action;
-                            // so, if the channel is not empty and Receive actions belong to the ample set, ProbeEmptyQueue does not need to belong to the ample set.
-                            // Otherwise, we add ProbeEmptyQueue actions to the ample set.
-                            if (self.cs.is_empty(channel)
-                                || !channels_receivers.contains(u16::from(channel) as usize))
-                                && !probe_empty_queues.put(u16::from(channel) as usize)
-                            {
-                                // if !probe_empty_queues.put(u16::from(channel) as usize) {
-                                self.add_empty_queues_to_ample(
-                                    channel,
-                                    pgs,
-                                    channels_senders,
-                                    channels_receivers,
-                                    probe_empty_queues,
-                                )?;
-                            }
-                        }
-                        // NOTE: Probings are independent from one another so there is no need to add other probings.
-                        // NOTE: ProbeEmptyQueue and Receive on the same channel can never be active at the same time, so they are independent
-                        Message::ProbeEmptyQueue => {
-                            // NOTE: channel must be empty, so no need to add Receivers
-                            if !channels_senders.put(u16::from(channel) as usize) {
-                                self.add_senders_to_ample(
-                                    channel,
-                                    pgs,
-                                    channels_senders,
-                                    channels_receivers,
-                                    probe_empty_queues,
-                                )?;
-                            }
-                        }
-                        // NOTE: ProbeEmptyQueue and Receive on the same channel can never be active at the same time, so they are independent
-                        // NOTE: Send and Receive on the same channel are always independent
-                        Message::Receive => {
-                            // NOTE: channel must be non-empty, so no need to add ProbeEmptyQueues
-                            if !channels_receivers.put(u16::from(channel) as usize) {
-                                self.add_receivers_to_ample(
-                                    channel,
-                                    pgs,
-                                    channels_senders,
-                                    channels_receivers,
-                                    probe_empty_queues,
-                                )?;
-                            }
-                        }
-                        Message::ProbeFullQueue => todo!(),
-                    }
-                } else {
-                    // non-active action is not added to ample set,
-                    // but ample set must contain all actions which could potentially activate it.
-                    // Probes (empty/full-queue) never need to be added
-                    match message {
-                        Message::Send => unreachable!("Send is always possible"),
-                        // Message::Send => {
-                        //     if !channels_receivers.put(u16::from(channel) as usize) {
-                        //         self.add_receivers_to_ample(
-                        //             channel,
-                        //             pgs,
-                        //             channels_senders,
-                        //             channels_receivers,
-                        //             probe_empty_queues,
-                        //         )?;
-                        //     }
-                        // }
-                        Message::ProbeEmptyQueue => {
-                            // NOTE: channel must be non-empty
-                            if !channels_receivers.put(u16::from(channel) as usize) {
-                                self.add_receivers_to_ample(
-                                    channel,
-                                    pgs,
-                                    channels_senders,
-                                    channels_receivers,
-                                    probe_empty_queues,
-                                )?;
-                            }
-                        }
-                        Message::Receive => {
-                            // NOTE: channel must be empty
-                            if !channels_senders.put(u16::from(channel) as usize) {
-                                self.add_senders_to_ample(
-                                    channel,
-                                    pgs,
-                                    channels_senders,
-                                    channels_receivers,
-                                    probe_empty_queues,
-                                )?;
-                            }
-                        }
-                        Message::ProbeFullQueue => todo!(),
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     #[inline]
-    fn add_senders_to_ample(
-        &self,
-        channel: Channel,
-        pgs: &mut FixedBitSet,
-        channels_senders: &mut FixedBitSet,
-        channels_receivers: &mut FixedBitSet,
-        probe_empty_queues: &mut FixedBitSet,
-    ) -> Result<(), ()> {
-        for pg_id in self.ts.cs.senders_to(channel).unwrap() {
-            if !pgs.put(u16::from(pg_id) as usize) {
-                self.add_pg_to_ample(
-                    pg_id,
-                    pgs,
-                    channels_senders,
-                    channels_receivers,
-                    probe_empty_queues,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn add_receivers_to_ample(
-        &self,
-        channel: Channel,
-        pgs: &mut FixedBitSet,
-        channels_senders: &mut FixedBitSet,
-        channels_receivers: &mut FixedBitSet,
-        probe_empty_queues: &mut FixedBitSet,
-    ) -> Result<(), ()> {
-        for pg_id in self.ts.cs.receivers_from(channel).unwrap() {
-            if !pgs.put(u16::from(pg_id) as usize) {
-                self.add_pg_to_ample(
-                    pg_id,
-                    pgs,
-                    channels_senders,
-                    channels_receivers,
-                    probe_empty_queues,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn add_empty_queues_to_ample(
-        &self,
-        channel: Channel,
-        pgs: &mut FixedBitSet,
-        channels_senders: &mut FixedBitSet,
-        channels_receivers: &mut FixedBitSet,
-        probe_empty_queues: &mut FixedBitSet,
-    ) -> Result<(), ()> {
-        for pg_id in self.ts.cs.probe_empty_queue(channel).unwrap() {
-            if !pgs.put(u16::from(pg_id) as usize) {
-                self.add_pg_to_ample(
-                    pg_id,
-                    pgs,
-                    channels_senders,
-                    channels_receivers,
-                    probe_empty_queues,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
     fn fastforward<'a>(&'a mut self, bump: &'a Bump) {
         for &pg_id in &self.ts.pg_list {
             self.fastforward_pg(pg_id, bump);

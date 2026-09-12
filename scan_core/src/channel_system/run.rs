@@ -8,7 +8,10 @@ use crate::{
 };
 use bumpalo::{Bump, collections::CollectIn};
 use rand::rngs::SmallRng;
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    hash::{Hash, Hasher},
+};
 
 /// Representation of a CS that can be executed transition-by-transition.
 ///
@@ -23,6 +26,25 @@ pub struct ChannelSystemRun<'def> {
     message_queue: Vec<VecDeque<Val>>,
     program_graphs: Vec<ProgramGraphRun<'def>>,
     def: &'def ChannelSystem,
+}
+
+impl<'def> PartialEq for ChannelSystemRun<'def> {
+    fn eq(&self, other: &Self) -> bool {
+        self.rng == other.rng
+            && self.time == other.time
+            && self.message_queue == other.message_queue
+            && self.program_graphs == other.program_graphs
+    }
+}
+
+impl<'def> Eq for ChannelSystemRun<'def> {}
+
+impl<'def> Hash for ChannelSystemRun<'def> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.time.hash(state);
+        self.message_queue.hash(state);
+        self.program_graphs.hash(state);
+    }
 }
 
 impl<'def> ChannelSystemRun<'def> {

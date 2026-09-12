@@ -132,13 +132,13 @@ impl<O: Oracle + Clone> Scan<O> {
             let local_successes;
             let local_failures;
             if result {
-                local_successes = self.successes.fetch_add(1, Ordering::Relaxed);
+                local_successes = self.successes.fetch_add(1, Ordering::Relaxed) + 1;
                 local_failures = self.failures.load(Ordering::Relaxed);
                 // If all guarantees are satisfied, the execution is successful
                 trace!("runs: {local_successes} successes");
             } else {
                 local_successes = self.successes.load(Ordering::Relaxed);
-                local_failures = self.failures.fetch_add(1, Ordering::Relaxed);
+                local_failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
                 // If guarantee is violated, we have found a counter-example!
                 trace!("runs: {local_failures} failures");
             }
