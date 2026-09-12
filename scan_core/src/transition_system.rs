@@ -165,6 +165,8 @@ impl TransitionSystem {
         oracle.update_state(&Vec::from_iter(run.labels()));
         run.fastforward(&bump);
 
+        let mut len_lower_bound = 1;
+
         // FILO stack: depth-first search
         'l: while running.load(Ordering::Relaxed) {
             // NOTE: at the start of the loop, ample sets need to be updated.
@@ -175,10 +177,11 @@ impl TransitionSystem {
                 .all(|(set, invalid)| *invalid || set.is_clear())
             {
                 run.ample(&mut amples);
+                len_lower_bound = 1;
             }
 
             // Find most suitable ample set
-            let mut min_len = usize::MAX;
+            let mut len_min = usize::MAX;
             let mut ample = None;
             'f: for (set, invalid) in amples.iter() {
                 // only consider viable sets (i.e., neither invalidated nor empty)
@@ -191,23 +194,25 @@ impl TransitionSystem {
                             .all(|j| j == i || dag.is_valid_edge(i_node, dag_ids[j]))
                     }) {
                         len += 1;
-                        if len < min_len {
-                            restricted_ample_temp.insert(i);
-                        } else {
+                        restricted_ample_temp.insert(i);
+                        if len == len_min {
+                            // If set is no smaller than the currently smallest one,
+                            // discard it and try next set.
                             continue 'f;
                         }
                     }
                     // new set is smaller than previous ones
                     mem::swap(&mut restricted_ample, &mut restricted_ample_temp);
                     ample = Some(set);
-                    assert!(len > 0);
-                    if len == 1 {
+                    len_min = len;
+                    assert!(len >= len_lower_bound);
+                    if len == len_lower_bound {
                         break 'f;
-                    } else {
-                        min_len = len;
                     }
                 }
             }
+            assert!(len_min >= len_lower_bound);
+            len_lower_bound = len_min;
             if let Some(ample) = ample {
                 assert!(!restricted_ample.is_clear());
                 assert!(restricted_ample.is_subset(ample));
