@@ -20,9 +20,9 @@ use log::{error, info, trace};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::BufRead;
-use std::io::Read;
 use std::io::Seek;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -79,7 +79,7 @@ fn attrs(
     let mut attrs = HashMap::new();
     for attr in tag.attributes() {
         let attr = attr?;
-        let key = str::from_utf8(attr.key.into_inner())?;
+        let key = attr.key.into_inner();
         if keys.contains(&key) || opt_keys.contains(&key) {
             let val = attr.normalized_value(xml_version)?.to_string();
             attrs.insert(key.to_string(), val);
@@ -129,7 +129,7 @@ fn ecmascript(code: &str, scope: &Scope, interner: &mut Interner) -> anyhow::Res
 /// Represents a model specified in the CONVINCE-XML format.
 #[derive(Debug)]
 pub struct Parser {
-    pub(crate) processes: HashMap<String, Scxml>,
+    pub(crate) processes: BTreeMap<String, Scxml>,
     pub(crate) types: OmgTypes,
     pub(crate) properties: Properties,
     pub(crate) interner: Interner,
@@ -143,7 +143,7 @@ impl Parser {
     pub fn parse(path: &Path) -> anyhow::Result<Self> {
         info!(target: "parser", "creating parser");
         let mut parser = Parser {
-            processes: HashMap::new(),
+            processes: BTreeMap::new(),
             types: OmgTypes::new(),
             properties: Properties::new(),
             interner: Interner::new(),
@@ -184,8 +184,9 @@ impl Parser {
         let mut model_found = false;
         for entry in std::fs::read_dir(path)
             .with_context(|| format!("failed to read directory '{}'", path.display()))?
+            .map(|entry| entry.map(|e| e.path()))
         {
-            let path = entry.context("failed to read directory entry")?.path();
+            let path = entry.context("failed to read directory entry")?;
             if path.is_dir() {
                 model_found |= self.parse_directory_check(&path)?;
             } else {
@@ -256,7 +257,7 @@ impl Parser {
                 .context("failed reading event")?
             {
                 Event::Start(tag) => {
-                    let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                    let tag_name = tag.name().into_inner();
                     trace!(target: "parser", "start tag '{tag_name}'");
                     let new_tag = match tag_name {
                         TAG_SPECIFICATION if stack.is_empty() => ConvinceTag::Specification,
@@ -280,7 +281,7 @@ impl Parser {
                     stack.push(new_tag);
                 }
                 Event::End(tag) => {
-                    let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                    let tag_name = tag.name().into_inner();
                     if stack
                         .pop()
                         .is_some_and(|state| Into::<&str>::into(state) == tag_name)
@@ -292,7 +293,7 @@ impl Parser {
                     }
                 }
                 Event::Empty(tag) => {
-                    let tag_name = &*reader.decoder().decode(tag.name().into_inner())?;
+                    let tag_name = tag.name().into_inner();
                     trace!(target: "parser", "empty tag '{tag_name}'");
                     match tag_name {
                         TAG_TYPES
@@ -378,8 +379,7 @@ impl Parser {
                     }
                 }
                 Event::Text(text) => {
-                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
-                    let text = String::from_utf8(text)?;
+                    let text = text.to_string();
                     if !text.trim().is_empty() {
                         error!(target: "parser", "text elements not allowed, ignoring");
                     }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use anyhow::{Context, anyhow, bail};
 use boa_ast::expression::{
@@ -7,13 +7,13 @@ use boa_ast::expression::{
 };
 use boa_interner::{Interner, ToInternedString};
 use log::warn;
-use scan_core::{Expression, FloatExpr, Integer, IntegerExpr, Natural, Type};
+use scan_core::{Expression, Float, FloatExpr, Integer, IntegerExpr, Natural, Type};
 
 use crate::parser::{OmgBaseType, OmgType, OmgTypeDef, OmgTypes};
 
 pub(super) fn infer_type(
     expr: &boa_ast::Expression,
-    vars: &HashMap<String, OmgType>,
+    vars: &BTreeMap<String, OmgType>,
     interner: &Interner,
     type_hint: Option<&OmgType>,
     omg_types: &OmgTypes,
@@ -172,9 +172,15 @@ pub(super) fn infer_type(
                 {
                     match simple_property_access.field() {
                         PropertyAccessField::Const(identifier) => {
-                            if identifier.sym() == interner.get("floor").unwrap() {
+                            if interner
+                                .get("floor")
+                                .is_some_and(|floor| identifier.sym() == floor)
+                            {
                                 Ok(OmgBaseType::Int64.into())
-                            } else if identifier.sym() == interner.get("random").unwrap() {
+                            } else if interner
+                                .get("random")
+                                .is_some_and(|rand| identifier.sym() == rand)
+                            {
                                 Ok(OmgBaseType::F64.into())
                             } else {
                                 Err(anyhow!(
@@ -239,7 +245,7 @@ pub(super) fn infer_type(
 pub(super) fn expression<V, E>(
     expr: &boa_ast::Expression,
     interner: &Interner,
-    vars: &HashMap<String, (OmgType, Vec<E>)>,
+    vars: &BTreeMap<String, (OmgType, Vec<E>)>,
     expr_type: Option<&OmgType>,
     omg_types: &mut OmgTypes,
 ) -> anyhow::Result<Vec<Expression<V>>>
@@ -271,11 +277,13 @@ where
                     let idx: Natural = omg_types.add_string(string) as Natural;
                     vec![Expression::from(idx)]
                 }
-                LiteralKind::Num(f) => vec![Expression::from(*f)],
+                LiteralKind::Num(f) => vec![Expression::from(
+                    Float::approximate_float(*f).expect("approximate float into integer"),
+                )],
                 LiteralKind::Int(i)
                     if expr_type.is_some_and(|t| matches!(t, OmgType::Base(OmgBaseType::F64))) =>
                 {
-                    vec![Expression::from(*i as f64)]
+                    vec![Expression::from(Float::from_integer(*i as i64))]
                 }
                 LiteralKind::Int(i)
                     if expr_type
@@ -414,26 +422,20 @@ where
             };
             match bin.op() {
                 BinaryOp::Arithmetic(ar_bin) => {
-                    let lhs_hint;
-                    let rhs_hint;
-                    match ar_bin {
+                    let (lhs_hint, rhs_hint) = match ar_bin {
                         ArithmeticOp::Add
                         | ArithmeticOp::Sub
                         | ArithmeticOp::Mul
-                        | ArithmeticOp::Exp => {
-                            lhs_hint = expr_type;
-                            rhs_hint = expr_type;
-                        }
+                        | ArithmeticOp::Exp => (expr_type, expr_type),
                         ArithmeticOp::Div => {
                             // WARN: Type inference is tricky: integer division could produce a float
-                            lhs_hint = None;
-                            rhs_hint = None;
+                            (None, None)
                         }
-                        ArithmeticOp::Mod => {
-                            lhs_hint = Some(&OmgType::Base(OmgBaseType::Uint64));
-                            rhs_hint = Some(&OmgType::Base(OmgBaseType::Uint64));
-                        }
-                    }
+                        ArithmeticOp::Mod => (
+                            Some(&OmgType::Base(OmgBaseType::Uint64)),
+                            Some(&OmgType::Base(OmgBaseType::Uint64)),
+                        ),
+                    };
                     let lhs = expression(bin.lhs(), interner, vars, lhs_hint, omg_types)?;
                     if lhs.len() != 1 {
                         bail!("expression lhs does not support arithmetic binary operator");
@@ -529,9 +531,12 @@ where
                             let field = field_id.to_interned_string(interner);
                             if target == "Math" {
                                 match field.as_str() {
-                                    "random" => vec![Expression::Float(FloatExpr::Rand(Box::new(
-                                        (FloatExpr::from(0.), FloatExpr::from(1.)),
-                                    )))],
+                                    "random" => {
+                                        vec![Expression::Float(FloatExpr::Rand(Box::new((
+                                            FloatExpr::from(Float::from_integer(0)),
+                                            FloatExpr::from(Float::from_integer(1)),
+                                        ))))]
+                                    }
                                     "floor" => {
                                         if let [arg] = args {
                                             let arg = expression(

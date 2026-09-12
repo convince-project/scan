@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    io::{BufRead, Read},
+    io::BufRead,
 };
 
 use anyhow::{Context, anyhow, bail};
@@ -180,8 +180,7 @@ impl OmgTypes {
         loop {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     trace!("'{tag_name}' open tag");
                     match tag_name {
                         TAG_DATA_TYPE_LIST if stack.is_empty() => {
@@ -215,8 +214,7 @@ impl OmgTypes {
                     }
                 }
                 Event::End(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     if stack.pop().is_some_and(|tag| <&str>::from(tag) == tag_name) {
                         trace!("'{tag_name}' end tag");
                     } else {
@@ -227,8 +225,7 @@ impl OmgTypes {
                     }
                 }
                 Event::Empty(tag) => {
-                    let tag_name = tag.name();
-                    let tag_name = str::from_utf8(tag_name.as_ref())?;
+                    let tag_name = tag.name().into_inner();
                     trace!("'{tag_name}' empty tag");
                     match tag_name {
                         TAG_LABEL
@@ -280,8 +277,6 @@ impl OmgTypes {
                     }
                 }
                 Event::Text(text) => {
-                    let text = text.bytes().collect::<Result<Vec<u8>, std::io::Error>>()?;
-                    let text = String::from_utf8(text)?;
                     if !text.trim().is_empty() {
                         error!(target: "parser", "text elements not allowed, ignoring");
                     }
@@ -322,9 +317,9 @@ impl OmgTypes {
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
-            match str::from_utf8(attr.key.as_ref())? {
+            match attr.key.as_ref() {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.value.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");
@@ -342,12 +337,12 @@ impl OmgTypes {
             .attributes()
             .collect::<Result<Vec<Attribute>, AttrError>>()?
         {
-            match str::from_utf8(attr.key.as_ref())? {
+            match attr.key.as_ref() {
                 ATTR_ID => {
-                    id = Some(String::from_utf8(attr.value.into_owned())?);
+                    id = Some(attr.value.into_owned());
                 }
                 ATTR_TYPE => {
-                    field_type = Some(String::from_utf8(attr.value.into_owned())?);
+                    field_type = Some(attr.value.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");

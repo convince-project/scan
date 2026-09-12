@@ -20,7 +20,7 @@ pub use tracer::TracePrinter;
 
 pub fn load<'def>(
     path: &'def Path,
-    properties: &'def [String],
+    properties: &'def String,
 ) -> anyhow::Result<(Scan<MtlOracle>, JaniModelData)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parsing JANI model file '{}'", path.display());
