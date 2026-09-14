@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bumpalo",
  "criterion",
@@ -1628,21 +1628,21 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_mtl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "smc_scan_core",
 ]
 
 [[package]]
 name = "smc_scan_pmtl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "smc_scan_core",
 ]
 
 [[package]]
 name = "smc_scan_promela"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "cfgrammar",
@@ -1657,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_scxml"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "boa_ast",
