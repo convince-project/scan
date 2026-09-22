@@ -87,7 +87,8 @@ impl ModelBuilder {
     /// or references to non-existing items.
     pub fn build(
         mut parser: Parser,
-        property: &String,
+        properties: &[String],
+        all_properties: bool,
     ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder
@@ -127,7 +128,7 @@ impl ModelBuilder {
             .build_ports(&mut parser)
             .context("failed building ports")?;
         model_builder
-            .build_properties(&mut parser, property)
+            .build_properties(&mut parser, properties, all_properties)
             .context("failed building properties")?;
 
         let model = model_builder.build_model(parser);
@@ -1375,7 +1376,12 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_properties(&mut self, parser: &mut Parser, property: &String) -> anyhow::Result<()> {
+    fn build_properties(
+        &mut self,
+        parser: &mut Parser,
+        properties: &[String],
+        all_properties: bool,
+    ) -> anyhow::Result<()> {
         for predicate in parser.properties.predicates.iter() {
             let predicate = expression(
                 predicate,
@@ -1395,10 +1401,12 @@ impl ModelBuilder {
                 bail!("predicate is not a boolean expression");
             }
         }
-        parser
-            .properties
-            .guarantees
-            .retain(|(name, _)| property == name);
+        if !all_properties {
+            parser
+                .properties
+                .guarantees
+                .retain(|(name, _)| properties.contains(name));
+        }
         self.guarantees = parser.properties.guarantees.clone();
         self.assumes = parser.properties.assumes.clone();
         Ok(())

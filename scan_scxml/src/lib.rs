@@ -17,7 +17,11 @@ use scan_core::Scan;
 use scan_pmtl::PmtlOracle;
 pub use tracer::TracePrinter;
 
-pub fn load(path: &Path, property: &String) -> anyhow::Result<(Scan<PmtlOracle>, ScxmlModel)> {
+pub fn load(
+    path: &Path,
+    properties: &[String],
+    all_properties: bool,
+) -> anyhow::Result<(Scan<PmtlOracle>, ScxmlModel)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parse SCXML model");
     let parser = parser::Parser::parse(path)?;
@@ -25,7 +29,7 @@ pub fn load(path: &Path, property: &String) -> anyhow::Result<(Scan<PmtlOracle>,
 
     let time = std::time::Instant::now();
     info!(target: "build", "building SCXML model");
-    let (cs, oracle, model) = builder::ModelBuilder::build(parser, property)?;
+    let (cs, oracle, model) = builder::ModelBuilder::build(parser, properties, all_properties)?;
     info!("building model completed in {:?}", time.elapsed());
     let scan = Scan::new(cs, oracle);
     Ok((scan, model))

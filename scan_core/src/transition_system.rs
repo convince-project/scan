@@ -5,17 +5,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use bumpalo::Bump;
+use bumpalo::collections::CollectIn;
 use fixedbitset::FixedBitSet;
 use log::{info, trace};
 use petgraph::acyclic::Acyclic;
 use petgraph::data::Build;
 use petgraph::graph::DiGraph;
 use rand::rngs::SmallRng;
+use rand::seq::IteratorRandom;
+use rand::{RngExt, SeedableRng, make_rng};
 use thiserror::Error;
 
 use crate::channel_system::{
-    Action, Channel, ChannelSystem, ChannelSystemRun, CsError, EventType, Location, Message, PgId,
-    PgIndex,
+    Action, Channel, ChannelSystem, ChannelSystemRun, CsError, Event, EventType, Location, Message,
+    PgId, PgIndex,
 };
 use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
 
@@ -138,7 +141,281 @@ impl TransitionSystem {
         }
     }
 
-    pub(crate) fn experiment<O: Oracle + Clone>(
+    /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
+    pub(crate) fn experiment_sample<O: Oracle>(
+        &self,
+        mut oracle: O,
+        running: Arc<AtomicBool>,
+    ) -> RunOutcome {
+        let mut bump = Bump::new();
+        let mut rng: SmallRng = make_rng();
+        let mut pg_list = self.pg_list.clone();
+        let mut run = self.new_run();
+
+        // reuse vector to avoid allocations
+        let mut labels = Vec::from_iter(run.labels());
+        // Initialize oracle with TS initial state
+        oracle.update_state(&labels);
+        run.fastforward(&bump);
+
+        while oracle.output_guarantees().any(|b| b.is_none()) {
+            bump.reset();
+            if !running.load(Ordering::Relaxed) {
+                trace!("run stopped");
+                return None;
+            } else if run
+                .montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
+                .is_some()
+            {
+                labels.clear();
+                labels.extend(run.labels());
+                oracle.update_state(&labels);
+            } else if run.cs.is_waiting(&bump) {
+                // assert!(
+                //     run.cs
+                //         .nosync_possible_transitions()
+                //         .flat_map(
+                //             |(action, transitions)| transitions.map(move |post| (action, post))
+                //         )
+                //         .next()
+                //         .is_none()
+                // );
+                run.time_tick();
+                oracle.update_time(run.time());
+            } else {
+                // assert!(!run.cs.is_waiting(&bump));
+                break;
+            }
+        }
+        trace!("run complete");
+        Some(Vec::from_iter(oracle.final_output_guarantees()))
+    }
+
+    // /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
+    // pub(crate) fn experiment<O: Oracle>(
+    //     &mut self,
+    //     mut oracle: O,
+    //     running: Arc<AtomicBool>,
+    // ) -> RunOutcome {
+    //     // reuse vector to avoid allocations
+    //     let mut labels = Vec::from_iter(self.labels());
+    //     // Initialize oracle with TS initial state
+    //     oracle.update_state(&labels);
+    //     while oracle.output_guarantees().any(|b| b.is_none()) {
+    //         self.transition();
+    //         if !running.load(Ordering::Relaxed) {
+    //             trace!("run stopped");
+    //             return None;
+    //         } else if self.last_event().is_some() {
+    //             labels.clear();
+    //             labels.extend(self.labels());
+    //             oracle.update_state(&labels);
+    //         } else if self.cs.is_waiting() {
+    //             self.time_tick();
+    //             oracle.update_time(self.time());
+    //         } else {
+    //             break;
+    //         }
+    //     }
+    //     trace!("run complete");
+    //     let verified = Vec::from_iter(oracle.final_output_guarantees());
+    //     Some(verified)
+    // }
+
+    pub(crate) fn experiment_exhaustive<O: Oracle + Clone>(
+        &self,
+        mut oracle: O,
+        running: Arc<AtomicBool>,
+    ) -> Option<bool> {
+        // Diagnostics/stats
+        let start_time = Instant::now();
+        let mut branches: u32 = 0;
+
+        type BranchData<'a, O> = (O, TransitionSystemRun<'a>, Vec<(FixedBitSet, bool)>);
+        let mut executions_stack: Vec<BranchData<O>> = Vec::new();
+        // TODO: measure impact of recycling memory to check wether it is worth it
+        let mut recycling_sets: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
+        let pgs = self.pg_list.len();
+        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs];
+        let mut bump = Bump::new();
+        let mut run = self.new_run();
+
+        // Initialize oracle with TS initial state
+        oracle.update_state(&Vec::from_iter(run.labels()));
+        run.fastforward(&bump);
+
+        // FILO stack: depth-first search
+        'l: while running.load(Ordering::Relaxed) {
+            // NOTE: at the start of the loop, ample sets need to be updated.
+            // Do so only if no viable set is left,
+            // to reduce expensive calls to the ample method.
+            if amples
+                .iter()
+                .all(|(set, invalid)| *invalid || set.is_clear())
+            {
+                run.ample(&mut amples);
+            }
+
+            // Find most suitable ample set
+            if let Some((ample, _)) = amples
+                .iter()
+                // only consider viable sets (i.e., neither invalidated nor empty)
+                .filter(|(set, invalid)| !(*invalid || set.is_clear()))
+                .min_by_key(|(set, _)| set.len())
+            {
+                let mut transitions = ample
+                    .ones()
+                    .flat_map(|b| {
+                        run.cs
+                            .nosync_possible_transitions_pg(PgId(b as u16))
+                            .unwrap()
+                            .flat_map(|(action, transitions)| {
+                                transitions.map(move |post| (action, post))
+                            })
+                    })
+                    .peekable();
+                // There must be active transitions because we checked earlier
+                assert!(transitions.peek().is_some());
+                'w: while let Some((action, post)) = transitions.next() {
+                    if transitions.peek().is_some() {
+                        let mut branch_run = run.clone();
+                        let mut branch_oracle = oracle.clone();
+                        bump.reset();
+                        branch_run
+                            .transition(&mut branch_oracle, action, &[post], &bump)
+                            .unwrap();
+                        if branch_oracle
+                            .output_guarantees()
+                            .any(|b| b.is_some_and(|b| !b))
+                        {
+                            // Guarantee violated
+                            branches += 1;
+                            trace!(
+                                "run violates a guarantee: processed {branches} branches in {:?}",
+                                start_time.elapsed()
+                            );
+                            return Some(false);
+                        } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
+                            bump.reset();
+                            branch_run.fastforward(&bump);
+                            let a = u16::from(action.0) as usize;
+                            let mut branch_amples = if let Some(mut set) = recycling_sets.pop() {
+                                // clone amples into recycled set;
+                                set.iter_mut().zip(amples.iter()).for_each(
+                                    |((to_set, to_invalid), (from_set, from_invalid))| {
+                                        to_set.clone_from(from_set);
+                                        *to_invalid = *from_invalid;
+                                    },
+                                );
+                                set
+                            } else {
+                                amples.clone()
+                            };
+                            branch_amples
+                                .iter_mut()
+                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
+                            executions_stack.push((branch_oracle, branch_run, branch_amples));
+                        } else {
+                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
+                            branches += 1;
+                        }
+                    } else {
+                        drop(transitions);
+                        bump.reset();
+                        run.transition(&mut oracle, action, &[post], &bump).unwrap();
+                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                            // Guarantee violated
+                            branches += 1;
+                            trace!(
+                                "run violates a guarantee: processed {branches} branches in {:?}",
+                                start_time.elapsed()
+                            );
+                            return Some(false);
+                        } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                            bump.reset();
+                            run.fastforward(&bump);
+                            // Update DAG
+                            let a = u16::from(action.0) as usize;
+                            // NOTE: Ample sets, in this case, are closed under intersection,
+                            // because A = U_{a in A} Ample(a) for every ample set A
+                            // so A /\ B = U_{a in A /\ B} Ample(a) is an ample set.
+                            // NOTE: restricted_ample is **not** an ample set,
+                            // and ample is not necessarily the smallest ample set containing restricted_ample!
+                            amples
+                                .iter_mut()
+                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
+                            // continue loop with same run and oracle
+                            continue 'l;
+                        } else {
+                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
+                            branches += 1;
+                            recycling_sets.push(amples);
+                            // No transitions left in this branch so exit transitions iteration
+                            // NOTE: break while loop needed to satisfy borrow checker
+                            break 'w;
+                        }
+                    }
+                }
+            } else if run.cs.is_waiting(&bump) {
+                run.time_tick();
+                oracle.update_time(run.time());
+                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                    // Guarantee violated
+                    branches += 1;
+                    trace!(
+                        "run violates a guarantee: processed {branches} branches in {:?}",
+                        start_time.elapsed()
+                    );
+                    return Some(false);
+                } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                    bump.reset();
+                    run.fastforward(&bump);
+                    amples
+                        .iter_mut()
+                        .for_each(|(_set, invalidate)| *invalidate = true);
+                    // continue loop with same run and oracle
+                    continue 'l;
+                } else {
+                    // Branch satisfies all guarantees and can be discarded even though execution is incomplete
+                    branches += 1;
+                    recycling_sets.push(amples);
+                }
+            } else if oracle.final_output_guarantees().all(|b| b) {
+                // Branch execution terminates and satisfies all guarantees and thus can be discarded
+                branches += 1;
+                recycling_sets.push(amples);
+            } else {
+                // Branch execution terminates without satisfying all guarantees
+                branches += 1;
+                trace!(
+                    "run violates a guarantee: processed {branches} branches in {:?}",
+                    start_time.elapsed()
+                );
+                return Some(false);
+            }
+
+            if let Some((branch_oracle, branch_run, branch_amples)) = executions_stack.pop() {
+                // continue loop with next run and oracle
+                run = branch_run;
+                oracle = branch_oracle;
+                amples = branch_amples;
+            } else {
+                // Model execution terminates and satisfies all guarantees
+                trace!(
+                    "run verifies all guarantees: processed {branches} branches in {:?}",
+                    start_time.elapsed()
+                );
+                return Some(true);
+            }
+        }
+        trace!(
+            "run stopped: processed {branches} branches in {:?}",
+            start_time.elapsed()
+        );
+        None
+    }
+
+    pub(crate) fn experiment_priority<O: Oracle + Clone>(
         &self,
         mut oracle: O,
         running: Arc<AtomicBool>,
@@ -235,7 +512,7 @@ impl TransitionSystem {
                         let mut branch_oracle = oracle.clone();
                         bump.reset();
                         branch_run
-                            .transition(&mut branch_oracle, action, post, &bump)
+                            .transition(&mut branch_oracle, action, &[post], &bump)
                             .unwrap();
                         if branch_oracle
                             .output_guarantees()
@@ -296,7 +573,7 @@ impl TransitionSystem {
                     } else {
                         drop(transitions);
                         bump.reset();
-                        run.transition(&mut oracle, action, post, &bump).unwrap();
+                        run.transition(&mut oracle, action, &[post], &bump).unwrap();
                         if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                             // Guarantee violated
                             branches += 1;
@@ -703,34 +980,98 @@ impl<'def> Hash for TransitionSystemRun<'def> {
 }
 
 impl<'def> TransitionSystemRun<'def> {
-    // /// Perform a random transition.
-    // ///
-    // /// Used to generate Montecarlo-like executions
-    // pub fn transition(&mut self) {
-    //     self.last_event = self.montecarlo_transition();
-    //     if let Some((_, ref event)) = self.last_event
-    //         && let EventType::Send(ref vals) = event.event_type
-    //         && let Ok(index) = self.ts.ports.binary_search(&event.channel)
-    //     {
-    //         // Since we have to update old values,
-    //         // the vectors are already allocated and their is always the same.
-    //         // Copying from slice should be faster than cloning.
-    //         self.vals[index].copy_from_slice(vals);
-    //     }
-    // }
+    fn montecarlo_transition<O: Oracle, R: RngExt>(
+        &mut self,
+        oracle: &mut O,
+        pg_list: &mut [PgId],
+        rng: &mut R,
+        bump: &Bump,
+    ) -> Option<(Action, Event)> {
+        // Setting pgs_left as length resets the queue
+        let mut pgs_left = pg_list.len();
+        while pgs_left > 0 {
+            // Select random pg within 0..pgs_left
+            let pg_select = rng.random_range(0..pgs_left);
+            let pg_id = pg_list[pg_select];
+            // Execute randomly chosen transitions on the picked PG until an event is generated,
+            // or no more transition is possible
+            // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
+            // Hopefully it will be possible to treat all cases in a general way eventually.
+            if let Some((action, event)) = self.montecarlo_transition_pg(pg_id, oracle, rng, bump) {
+                return Some((action, event));
+            } else {
+                // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
+                // Decrease the length of the queue (so that selected element is removed)
+                pgs_left -= 1;
+                pg_list.swap(pg_select, pgs_left);
+            }
+        }
+        None
+    }
 
-    // pub fn transition_pg(&mut self, pg_id: PgId) {
-    //     self.last_event = self.montecarlo_transition_pg(pg_id);
-    //     if let Some((_, ref event)) = self.last_event
-    //         && let EventType::Send(ref vals) = event.event_type
-    //         && let Ok(index) = self.ts.ports.binary_search(&event.channel)
-    //     {
-    //         // Since we have to update old values,
-    //         // the vectors are already allocated and their is always the same.
-    //         // Copying from slice should be faster than cloning.
-    //         self.vals[index].copy_from_slice(vals);
-    //     }
-    // }
+    fn montecarlo_transition_pg<O: Oracle, R: RngExt>(
+        &mut self,
+        pg_id: PgId,
+        oracle: &mut O,
+        rng: &mut R,
+        bump: &Bump,
+    ) -> Option<(Action, Event)> {
+        let mut rng_extra = SmallRng::from_rng(rng);
+        // Execute randomly chosen transitions on the picked PG until an event is generated,
+        // or no more transition is possible
+        // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
+        // Hopefully it will be possible to treat all cases in a general way eventually.
+        if self
+            .cs
+            .program_graph(pg_id)
+            .expect("pg exists")
+            .current_states()
+            .len()
+            == 1
+        {
+            while let Some((action, post_state)) = self
+                .cs
+                .nosync_possible_transitions_pg(pg_id)
+                .expect("pg exists")
+                // .flat_map(|(action, post_states)| post_states.map(move |post| (action, post)))
+                .filter_map(|(action, post_states)| {
+                    post_states.choose(&mut rng_extra).map(|loc| (action, loc))
+                })
+                .choose(rng)
+            {
+                let event = self
+                    .transition(oracle, action, &[post_state], bump)
+                    .expect("successful transition");
+                if event.is_some() {
+                    return event.map(|ev| (action, ev));
+                }
+            }
+        } else {
+            use bumpalo::collections::Vec as BumpVec;
+
+            while let Some((action, post_states)) = self
+                .cs
+                .possible_transitions_pg(pg_id, bump)
+                .expect("pg exists")
+                .filter_map(|(action, post_states)| {
+                    post_states
+                        .map(|locs| locs.choose(&mut rng_extra))
+                        .collect_in::<Option<BumpVec<Location>>>(bump)
+                        // .collect::<Option<Vec<Location>>>()
+                        .map(|locs| (action, locs))
+                })
+                .choose(rng)
+            {
+                let event = self
+                    .transition(oracle, action, post_states.as_slice(), bump)
+                    .expect("successful transition");
+                if event.is_some() {
+                    return event.map(|ev| (action, ev));
+                }
+            }
+        }
+        None
+    }
 
     /// Returns last event processed by model.
     #[inline]
@@ -776,44 +1117,13 @@ impl<'def> TransitionSystemRun<'def> {
         &self.vals
     }
 
-    // /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
-    // pub(crate) fn experiment<O: Oracle>(
-    //     &mut self,
-    //     mut oracle: O,
-    //     running: Arc<AtomicBool>,
-    // ) -> RunOutcome {
-    //     // reuse vector to avoid allocations
-    //     let mut labels = Vec::from_iter(self.labels());
-    //     // Initialize oracle with TS initial state
-    //     oracle.update_state(&labels);
-    //     while oracle.output_guarantees().any(|b| b.is_none()) {
-    //         self.transition();
-    //         if !running.load(Ordering::Relaxed) {
-    //             trace!("run stopped");
-    //             return None;
-    //         } else if self.last_event().is_some() {
-    //             labels.clear();
-    //             labels.extend(self.labels());
-    //             oracle.update_state(&labels);
-    //         } else if self.cs.is_waiting() {
-    //             self.time_tick();
-    //             oracle.update_time(self.time());
-    //         } else {
-    //             break;
-    //         }
-    //     }
-    //     trace!("run complete");
-    //     let verified = Vec::from_iter(oracle.final_output_guarantees());
-    //     Some(verified)
-    // }
-
     pub(crate) fn transition<'a, O: Oracle>(
         &'a mut self,
         oracle: &mut O,
         action: Action,
-        post: Location,
+        post: &[Location],
         bump: &'a Bump,
-    ) -> Result<(), CsError> {
+    ) -> Result<Option<Event>, CsError> {
         let pg_id = action.0;
         if self
             .cs
@@ -825,9 +1135,9 @@ impl<'def> TransitionSystemRun<'def> {
         {
             let last_event = self
                 .cs
-                .transition(action, &[post], bump)?
+                .transition(action, post, bump)?
                 .map(|event| (action, event));
-            if let Some((_, ref event)) = last_event
+            if let Some((_, event)) = last_event
                 && let EventType::Send(ref vals) = event.event_type
                 && let Ok(index) = self.ts.ports.binary_search(&event.channel)
             {
@@ -838,11 +1148,11 @@ impl<'def> TransitionSystemRun<'def> {
                 self.vals[index].copy_from_slice(vals);
                 let labels = Vec::from_iter(self.labels());
                 oracle.update_state(&labels);
-                // trace!("event {action:?} {event:?}");
+                Ok(Some(event))
             } else {
                 self.last_event = None;
+                Ok(None)
             }
-            Ok(())
         } else {
             unimplemented!()
         }
@@ -882,141 +1192,8 @@ impl<'def> TransitionSystemRun<'def> {
             // }
         }
         trace!("run complete");
-        let verified = Vec::from_iter(oracle.final_output_guarantees());
-        Some(verified)
+        Some(Vec::from_iter(oracle.final_output_guarantees()))
     }
-
-    // fn montecarlo_transition(&mut self) -> Option<(Action, Event)> {
-    //     // Setting pgs_left as length resets the queue
-    //     let mut pgs_left = self.ts.pg_list.len();
-    //     while pgs_left > 0 {
-    //         // Select random pg within 0..pgs_left
-    //         let pg_select = self.rng.random_range(0..pgs_left);
-    //         let pg_id = self.ts.pg_list[pg_select];
-    //         // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
-    //         // Decrease the length of the queue (so that selected element is removed)
-    //         pgs_left -= 1;
-    //         self.ts.pg_list.swap(pg_select, pgs_left);
-    //         // Execute randomly chosen transitions on the picked PG until an event is generated,
-    //         // or no more transition is possible
-    //         // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
-    //         // Hopefully it will be possible to treat all cases in a general way eventually.
-    //         if let Some((action, event)) = self.montecarlo_transition_pg(pg_id) {
-    //             return Some((action, event));
-    //         }
-    //     }
-    //     None
-    // }
-
-    // fn montecarlo_transition_pg(&mut self, pg_id: PgId) -> Option<(Action, Event)> {
-    //     let mut rng_extra = SmallRng::from_rng(&mut self.rng);
-    //     // Execute randomly chosen transitions on the picked PG until an event is generated,
-    //     // or no more transition is possible
-    //     // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
-    //     // Hopefully it will be possible to treat all cases in a general way eventually.
-    //     if self
-    //         .cs
-    //         .program_graph(pg_id)
-    //         .expect("pg exists")
-    //         .current_states()
-    //         .len()
-    //         == 1
-    //     {
-    //         while let Some((action, post_state)) = self
-    //             .cs
-    //             .nosync_possible_transitions_pg(pg_id)
-    //             .expect("pg exists")
-    //             .filter_map(|(action, post_states)| {
-    //                 post_states.choose(&mut rng_extra).map(|loc| (action, loc))
-    //             })
-    //             .choose(&mut self.rng)
-    //         {
-    //             let event = self
-    //                 .cs
-    //                 .transition(action, &[post_state])
-    //                 .expect("successful transition");
-    //             if event.is_some() {
-    //                 return event.map(|ev| (action, ev));
-    //             }
-    //         }
-    //     } else {
-    //         use bumpalo::collections::Vec as BumpVec;
-
-    //         self.bump.reset();
-    //         while let Some((action, post_states)) = self
-    //             .cs
-    //             .possible_transitions_pg(pg_id)
-    //             .expect("pg exists")
-    //             .filter_map(|(action, post_states)| {
-    //                 post_states
-    //                     .map(|locs| locs.choose(&mut rng_extra))
-    //                     .collect_in::<Option<BumpVec<Location>>>(&self.bump)
-    //                     // .collect::<Option<Vec<Location>>>()
-    //                     .map(|locs| (action, locs))
-    //             })
-    //             .choose(&mut self.rng)
-    //         {
-    //             let event = self
-    //                 .cs
-    //                 .transition(action, post_states.as_slice())
-    //                 .expect("successful transition");
-    //             if event.is_some() {
-    //                 return event.map(|ev| (action, ev));
-    //             }
-    //         }
-    //     }
-    //     None
-    // }
-
-    // fn por_transitions(mut self) -> Vec<TransitionSystemRun<'def>> {
-    //     let mut transitions = Vec::new();
-    //     for &pg_id in &self.ts.pg_list {
-    //         let mut ts_run = self.clone();
-    //         ts_run.transition_pg(pg_id);
-    //         transitions.push((false, ts_run));
-    //         self.bump.reset();
-    //     }
-    //     let mut ample = Vec::new();
-    //     'search: for idx in 0..self.ts.pg_list.len() {
-    //         let (b, tsr) = transitions.get_mut(idx).unwrap();
-    //         if let Some((action, ref event)) = tsr.last_event
-    //             && self.ts.is_stutter(action)
-    //         {
-    //             *b = true;
-    //             ample.push(event.channel);
-    //             while let Some(channel) = ample.pop() {
-    //                 for (b, tsr) in &mut transitions {
-    //                     if !*b && let Some((action, ref event)) = tsr.last_event {
-    //                         let pg_id = action.0;
-    //                         if self.ts.cs.communicates_to(pg_id, channel) {
-    //                             if self.ts.is_stutter(action) {
-    //                                 *b = true;
-    //                                 let channel = event.channel;
-    //                                 ample.push(channel);
-    //                             } else {
-    //                                 transitions.iter_mut().for_each(|(b, ..)| *b = false);
-    //                                 continue 'search;
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //                 ample.sort_unstable();
-    //                 ample.dedup();
-    //             }
-    //             break 'search;
-    //         }
-    //     }
-
-    //     if transitions.iter().any(|(b, ..)| *b) {
-    //         transitions
-    //             .into_iter()
-    //             .filter(|&(b, ..)| b)
-    //             .map(|(.., tsr)| tsr)
-    //             .collect()
-    //     } else {
-    //         transitions.into_iter().map(|(.., tsr)| tsr).collect()
-    //     }
-    // }
 
     fn ample(&self, amples: &mut [(FixedBitSet, bool)]) {
         self.ts

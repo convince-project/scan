@@ -34,7 +34,12 @@ Example:
 #[deny(missing_docs)]
 pub(crate) struct VerifyArgs {
     /// Space-separated list of properties to verify.
-    pub(crate) property: String,
+    pub(crate) properties: Vec<String>,
+    /// Verify all properties found in the model specification.
+    ///
+    /// It is equivalent to listing all of the properties.
+    #[arg(short, long)]
+    pub(crate) all: bool,
     /// Confidence.
     /// It has to be a value between 0 and 1 (bounds excluded).
     #[arg(short, long, default_value_t = 0.95)]
@@ -58,7 +63,7 @@ pub(crate) struct VerifyArgs {
 
 impl VerifyArgs {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
-        if self.property.is_empty() {
+        if self.properties.is_empty() && !self.all {
             Err(anyhow!(NO_PROPS_ERR))
         } else if 0f64 >= self.confidence || self.confidence >= 1f64 {
             Err(anyhow!(BAD_CONFIDENCE))
@@ -83,9 +88,15 @@ impl VerifyArgs {
         let failures = report.failures;
         let runs = successes + failures;
         let rate = successes as f64 / runs as f64;
+        let properties = self
+            .properties
+            .iter()
+            .cloned()
+            .zip(report.violations.into_iter().chain([0].into_iter().cycle()))
+            .collect::<Vec<(String, u32)>>();
         Report {
             model,
-            property: self.property.clone(),
+            properties,
             precision: self.precision,
             confidence: self.confidence,
             rate,

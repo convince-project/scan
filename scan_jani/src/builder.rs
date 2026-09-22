@@ -24,7 +24,7 @@ pub struct JaniModelData {
 
 pub(crate) fn build(
     jani_model: Model,
-    properties: &String,
+    properties: &[String],
 ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
     builder.build(jani_model, properties)
@@ -90,7 +90,7 @@ impl JaniBuilder {
     pub(crate) fn build(
         mut self,
         jani_model: Model,
-        property: &String,
+        properties: &[String],
     ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
         let mut cs = ChannelSystemBuilder::new();
         let pg_id = cs.new_program_graph();
@@ -656,7 +656,7 @@ impl JaniBuilder {
         let property_exprs = jani_model
             .properties
             .iter()
-            .find(|p| property == &p.name)
+            .filter(|p| properties.contains(&p.name))
             .map(|p| {
                 self.build_property(&p.expression).and_then(|p| match p {
                     Either::Left(expr) => {
@@ -669,7 +669,7 @@ impl JaniBuilder {
                     Either::Right(mtl) => Ok(mtl),
                 })
             })
-            .transpose()?;
+            .collect::<Result<Vec<_>, _>>()?;
         fn extract_predicates(
             prop: &Mtl<scan_core::BooleanExpr<Atom>>,
         ) -> Vec<scan_core::BooleanExpr<Atom>> {
