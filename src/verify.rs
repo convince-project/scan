@@ -2,6 +2,8 @@ use anyhow::anyhow;
 use clap::Parser;
 use scan_core::{Oracle, Scan};
 
+use crate::CliScheduler;
+
 use super::report::Report;
 
 const NO_PROPS_ERR: &str = "missing properties to verify.
@@ -33,6 +35,9 @@ Example:
 #[derive(Debug, Clone, Parser)]
 #[deny(missing_docs)]
 pub(crate) struct VerifyArgs {
+    /// Scheduling strategy used to sample executions.
+    #[arg(long, value_enum)]
+    pub(crate) scheduler: CliScheduler,
     /// Space-separated list of properties to verify.
     pub(crate) properties: Vec<String>,
     /// Verify all properties found in the model specification.
@@ -65,6 +70,10 @@ impl VerifyArgs {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
         if self.properties.is_empty() && !self.all {
             Err(anyhow!(NO_PROPS_ERR))
+        } else if !self.properties.is_empty() && self.all {
+            Err(anyhow!(ALL_PROPS_ERR))
+        } else if self.properties.is_empty() && !self.all {
+            Err(anyhow!(NO_PROPS_ERR))
         } else if 0f64 >= self.confidence || self.confidence >= 1f64 {
             Err(anyhow!(BAD_CONFIDENCE))
         } else if 0f64 >= self.precision || self.precision >= 1f64 {
@@ -79,9 +88,9 @@ impl VerifyArgs {
         O: Oracle + Clone + Sync + 'a,
     {
         let report = if self.single_thread {
-            scan.adaptive(self.confidence, self.precision)
+            scan.adaptive(self.confidence, self.precision, self.scheduler.into())
         } else {
-            scan.par_adaptive(self.confidence, self.precision)
+            scan.par_adaptive(self.confidence, self.precision, self.scheduler.into())
         }
         .expect("verify");
         let successes = report.successes;

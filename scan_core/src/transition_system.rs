@@ -171,19 +171,51 @@ impl TransitionSystem {
                 labels.extend(run.labels());
                 oracle.update_state(&labels);
             } else if run.cs.is_waiting(&bump) {
-                // assert!(
-                //     run.cs
-                //         .nosync_possible_transitions()
-                //         .flat_map(
-                //             |(action, transitions)| transitions.map(move |post| (action, post))
-                //         )
-                //         .next()
-                //         .is_none()
-                // );
                 run.time_tick();
                 oracle.update_time(run.time());
             } else {
-                // assert!(!run.cs.is_waiting(&bump));
+                break;
+            }
+        }
+        trace!("run complete");
+        Some(Vec::from_iter(oracle.final_output_guarantees()))
+    }
+
+    /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
+    /// and process the execution trace via the given [`Tracer`].
+    pub(crate) fn trace<T, O: Oracle>(
+        &self,
+        mut oracle: O,
+        mut tracer: T,
+        model_data: &T::ModelData,
+    ) -> RunOutcome
+    where
+        T: Tracer,
+    {
+        trace!("new run starting");
+        let mut bump = Bump::new();
+        let mut rng: SmallRng = make_rng();
+        let mut pg_list = self.pg_list.clone();
+        let mut run = self.new_run();
+        // reuse vector to avoid allocations
+        let mut labels = Vec::from_iter(run.labels());
+        // Initialize oracle with TS initial state
+        oracle.update_state(&labels);
+        // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
+        // Same issue for time-tick events
+        while oracle.output_guarantees().any(|b| b.is_none()) {
+            bump.reset();
+            if let Some((action, event)) =
+                run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
+            {
+                tracer.trace(model_data, action, &event, run.time(), run.state());
+                labels.clear();
+                labels.extend(run.labels());
+                oracle.update_state(&labels);
+            } else if run.cs.is_waiting(&bump) {
+                run.time_tick();
+                oracle.update_time(run.time());
+            } else {
                 break;
             }
         }
@@ -226,7 +258,7 @@ impl TransitionSystem {
         &self,
         mut oracle: O,
         running: Arc<AtomicBool>,
-    ) -> Option<bool> {
+    ) -> RunOutcome {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
@@ -294,7 +326,11 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(false);
+                            return Some(Vec::from_iter(
+                                branch_oracle
+                                    .output_guarantees()
+                                    .map(|b| b.is_none_or(|b| b)),
+                            ));
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
@@ -330,17 +366,17 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(false);
+                            return Some(Vec::from_iter(
+                                oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                            ));
                         } else if oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             run.fastforward(&bump);
                             // Update DAG
                             let a = u16::from(action.0) as usize;
                             // NOTE: Ample sets, in this case, are closed under intersection,
-                            // because A = U_{a in A} Ample(a) for every ample set A
-                            // so A /\ B = U_{a in A /\ B} Ample(a) is an ample set.
-                            // NOTE: restricted_ample is **not** an ample set,
-                            // and ample is not necessarily the smallest ample set containing restricted_ample!
+                            // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
+                            // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
                             amples
                                 .iter_mut()
                                 .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
@@ -366,7 +402,9 @@ impl TransitionSystem {
                         "run violates a guarantee: processed {branches} branches in {:?}",
                         start_time.elapsed()
                     );
-                    return Some(false);
+                    return Some(Vec::from_iter(
+                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                    ));
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
@@ -391,7 +429,7 @@ impl TransitionSystem {
                     "run violates a guarantee: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return Some(false);
+                return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
 
             if let Some((branch_oracle, branch_run, branch_amples)) = executions_stack.pop() {
@@ -405,7 +443,7 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return Some(true);
+                return RunOutcome::Some(vec![true; oracle.output_guarantees().count()]);
             }
         }
         trace!(
@@ -419,7 +457,7 @@ impl TransitionSystem {
         &self,
         mut oracle: O,
         running: Arc<AtomicBool>,
-    ) -> Option<bool> {
+    ) -> RunOutcome {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
@@ -524,7 +562,11 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(false);
+                            return Some(Vec::from_iter(
+                                branch_oracle
+                                    .output_guarantees()
+                                    .map(|b| b.is_none_or(|b| b)),
+                            ));
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
@@ -581,7 +623,9 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(false);
+                            return Some(Vec::from_iter(
+                                oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                            ));
                         } else if oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             run.fastforward(&bump);
@@ -598,8 +642,8 @@ impl TransitionSystem {
                                 }
                             });
                             // NOTE: Ample sets, in this case, are closed under intersection,
-                            // because A = U_{a in A} Ample(a) for every ample set A
-                            // so A /\ B = U_{a in A /\ B} Ample(a) is an ample set.
+                            // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
+                            // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
                             // NOTE: restricted_ample is **not** an ample set,
                             // and ample is not necessarily the smallest ample set containing restricted_ample!
                             amples
@@ -628,7 +672,9 @@ impl TransitionSystem {
                         "run violates a guarantee: processed {branches} branches in {:?}",
                         start_time.elapsed()
                     );
-                    return Some(false);
+                    return Some(Vec::from_iter(
+                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                    ));
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
@@ -655,7 +701,7 @@ impl TransitionSystem {
                     "run violates a guarantee: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return Some(false);
+                return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
 
             if let Some((branch_oracle, branch_run, branch_amples, branch_dag)) =
@@ -672,7 +718,7 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return Some(true);
+                return RunOutcome::Some(vec![true; oracle.output_guarantees().count()]);
             }
         }
         trace!(
@@ -1124,75 +1170,26 @@ impl<'def> TransitionSystemRun<'def> {
         post: &[Location],
         bump: &'a Bump,
     ) -> Result<Option<Event>, CsError> {
-        let pg_id = action.0;
-        if self
+        let last_event = self
             .cs
-            .program_graph(pg_id)
-            .expect("pg exists")
-            .current_states()
-            .len()
-            == 1
+            .transition(action, post, bump)?
+            .map(|event| (action, event));
+        if let Some((_, event)) = last_event
+            && let EventType::Send(ref vals) = event.event_type
+            && let Ok(index) = self.ts.ports.binary_search(&event.channel)
         {
-            let last_event = self
-                .cs
-                .transition(action, post, bump)?
-                .map(|event| (action, event));
-            if let Some((_, event)) = last_event
-                && let EventType::Send(ref vals) = event.event_type
-                && let Ok(index) = self.ts.ports.binary_search(&event.channel)
-            {
-                // Since we have to update old values,
-                // the vectors are already allocated and their is always the same.
-                // Copying from slice should be faster than cloning.
-                self.last_event = Some(event.channel);
-                self.vals[index].copy_from_slice(vals);
-                let labels = Vec::from_iter(self.labels());
-                oracle.update_state(&labels);
-                Ok(Some(event))
-            } else {
-                self.last_event = None;
-                Ok(None)
-            }
+            // Since we have to update old values,
+            // the vectors are already allocated and their len is always the same.
+            // Copying from slice should be faster than cloning.
+            self.last_event = Some(event.channel);
+            self.vals[index].copy_from_slice(vals);
+            let labels = bumpalo::collections::Vec::from_iter_in(self.labels(), bump);
+            oracle.update_state(&labels);
+            Ok(Some(event))
         } else {
-            unimplemented!()
+            self.last_event = None;
+            Ok(None)
         }
-    }
-
-    /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
-    /// and process the execution trace via the given [`Tracer`].
-    pub(crate) fn trace<T, O: Oracle>(
-        &mut self,
-        mut oracle: O,
-        mut tracer: T,
-        model_data: &T::ModelData,
-    ) -> RunOutcome
-    where
-        T: Tracer,
-    {
-        trace!("new run starting");
-        // reuse vector to avoid allocations
-        let mut labels = Vec::from_iter(self.labels());
-        // Initialize oracle with TS initial state
-        oracle.update_state(&labels);
-        // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
-        // Same issue for time-tick events
-        while oracle.output_guarantees().any(|b| b.is_none()) {
-            // self.transition();
-            todo!();
-            // if let Some((action, event)) = self.last_event() {
-            //     tracer.trace(model_data, *action, event, self.time(), self.state());
-            //     labels.clear();
-            //     labels.extend(self.labels());
-            //     oracle.update_state(&labels);
-            // } else if self.cs.is_waiting() {
-            //     self.time_tick();
-            //     oracle.update_time(self.time());
-            // } else {
-            //     break;
-            // }
-        }
-        trace!("run complete");
-        Some(Vec::from_iter(oracle.final_output_guarantees()))
     }
 
     fn ample(&self, amples: &mut [(FixedBitSet, bool)]) {

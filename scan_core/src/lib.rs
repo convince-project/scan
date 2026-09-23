@@ -51,6 +51,32 @@ pub enum ScanError {
     OutOfBoundsConfidence(f64),
 }
 
+/// Scheduling strategy used to sample executions
+#[derive(Debug, Default, Clone, Copy)]
+#[deny(missing_docs)]
+pub enum Scheduler {
+    /// Uniform distribution over non-deterministic choices.
+    #[default]
+    Uniform,
+    /// Schedulers sampled from uniform distribution over scheduler space.
+    ///
+    /// Lightweight sampling strategy from:
+    ///
+    /// __An efficient statistical model checker for nondeterminism and rare events__
+    /// (Carlos E. Budde et al.),
+    /// International Journal on Software Tools for Technology Transfer (2020),
+    /// [https://doi.org/10.1007/s10009-020-00563-2].
+    Sampling,
+    /// Exhaustive exploration of scheduler space.
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Exhaustive,
+    /// Exploration of subspace of schedulers that enforce an order of priority between processes,
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Priority,
+}
+
 /// Final report for a verification run.
 #[derive(Debug, Clone)]
 pub struct Report {
@@ -134,13 +160,22 @@ impl<O: Oracle> Scan<O> {
 }
 
 impl<O: Oracle + Clone> Scan<O> {
-    fn verification(&self, confidence: f64, precision: f64) {
+    fn verification(&self, confidence: f64, precision: f64, scheduler: Scheduler) {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
 
-        let result = self
-            .model
-            .experiment_sample(self.oracle.clone(), self.running.clone());
+        let result = match scheduler {
+            Scheduler::Uniform => self
+                .model
+                .experiment_sample(self.oracle.clone(), self.running.clone()),
+            Scheduler::Sampling => todo!(),
+            Scheduler::Exhaustive => self
+                .model
+                .experiment_exhaustive(self.oracle.clone(), self.running.clone()),
+            Scheduler::Priority => self
+                .model
+                .experiment_priority(self.oracle.clone(), self.running.clone()),
+        };
         if let Some(guarantees) = result
             && self.running.load(Ordering::Relaxed)
         {
@@ -177,7 +212,12 @@ impl<O: Oracle + Clone> Scan<O> {
     }
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
-    pub fn adaptive(&self, confidence: f64, precision: f64) -> Result<Report, ScanError> {
+    pub fn adaptive(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+    ) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
         }
@@ -192,7 +232,7 @@ impl<O: Oracle + Clone> Scan<O> {
         let start_time = Instant::now();
 
         let runs = (0..)
-            .map(|_| self.verification(confidence, precision))
+            .map(|_| self.verification(confidence, precision, scheduler))
             .take_while(|_| self.running.load(Ordering::Relaxed))
             .count() as u32;
 
@@ -229,7 +269,6 @@ impl<O: Oracle + Clone> Scan<O> {
     where
         T: Tracer,
     {
-        let mut ts = self.model.new_run();
         let filename = PathBuf::new()
             .with_file_name(format!("{idx:04}"))
             .with_extension(T::EXTENSION);
@@ -242,7 +281,10 @@ impl<O: Oracle + Clone> Scan<O> {
             .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
         let tracer = T::init(writer, model_data);
-        if let Some(verified) = ts.trace::<T, _>(self.oracle.clone(), tracer, model_data) {
+        if let Some(verified) = self
+            .model
+            .trace::<T, _>(self.oracle.clone(), tracer, model_data)
+        {
             let mut new_path = path.clone();
             // pop file name
             new_path.pop();
@@ -265,7 +307,12 @@ where
 {
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.
-    pub fn par_adaptive(&self, confidence: f64, precision: f64) -> Result<Report, ScanError> {
+    pub fn par_adaptive(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+    ) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
         }
@@ -281,7 +328,7 @@ where
 
         let runs = (0..usize::MAX)
             .into_par_iter()
-            .map(|_| self.verification(confidence, precision))
+            .map(|_| self.verification(confidence, precision, scheduler))
             .take_any_while(|_| self.running.load(Ordering::Relaxed))
             .count() as u32;
 
