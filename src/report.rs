@@ -47,7 +47,7 @@ impl Display for Report {
                 writeln!(f)?;
             }
         }
-        write!(f, "Overall success rate: {:.1$}", self.rate, mag)?;
+        writeln!(f, "Overall success rate: {:.1$}", self.rate, mag)?;
         Ok(())
     }
 }
