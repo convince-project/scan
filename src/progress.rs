@@ -77,8 +77,7 @@ impl Bar {
         // Spinner
         // Trailing spaces because bar does not overwrite after itself
         let spinner_style =
-            ProgressStyle::with_template("{elapsed_precise} {msg}: {pos}/{len} ({eta})   ")
-                .unwrap();
+            ProgressStyle::with_template("{elapsed_precise} {msg}: {pos}/{len}").unwrap();
         let spinner = ProgressBar::new(0)
             .with_style(spinner_style)
             .with_message("verification progress");

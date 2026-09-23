@@ -4,6 +4,8 @@ use anyhow::anyhow;
 use clap::Parser;
 use scan_core::{Oracle, Scan, Tracer};
 
+use crate::CliScheduler;
+
 const ALL_PROPS_ERR: &str =
     "the --all flag is incompatible with individually-specified properties.\n
 Examples:
@@ -15,6 +17,9 @@ Examples:
 #[derive(Debug, Clone, Parser)]
 #[deny(missing_docs)]
 pub(crate) struct TraceArgs {
+    /// Scheduling strategy used to sample executions.
+    #[arg(long, value_enum)]
+    pub(crate) scheduler: CliScheduler,
     /// Space-separated list of properties to verify while tracing.
     pub(crate) properties: Vec<String>,
     /// Verify all properties found in the model specification while tracing.
@@ -55,9 +60,9 @@ impl TraceArgs {
         Tr::ModelData: Sync,
     {
         if self.single_thread {
-            scan.traces::<Tr>(self.traces, path, model);
+            scan.traces::<Tr>(self.traces, path, model, self.scheduler.into());
         } else {
-            scan.par_traces::<Tr>(self.traces, path, model);
+            scan.par_traces::<Tr>(self.traces, path, model, self.scheduler.into());
         }
     }
 }

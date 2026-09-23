@@ -24,6 +24,8 @@ use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
 
 type Dag = Acyclic<DiGraph<(), (), PgIndex>>;
 
+type Trace = Vec<(Time, Action, Event, Vec<Vec<Val>>)>;
+
 /// Errors produced by a [`TransitionSystem`].
 #[derive(Debug, Clone, Copy, Error)]
 pub enum TsError {
@@ -257,13 +259,14 @@ impl TransitionSystem {
     pub(crate) fn experiment_exhaustive<O: Oracle + Clone>(
         &self,
         mut oracle: O,
+        record_trace: bool,
         running: Arc<AtomicBool>,
-    ) -> RunOutcome {
+    ) -> (RunOutcome, Option<Trace>) {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
 
-        type BranchData<'a, O> = (O, TransitionSystemRun<'a>, Vec<(FixedBitSet, bool)>);
+        type BranchData<'a, O> = (O, TransitionSystemRun<'a>, Vec<(FixedBitSet, bool)>, usize);
         let mut executions_stack: Vec<BranchData<O>> = Vec::new();
         // TODO: measure impact of recycling memory to check wether it is worth it
         let mut recycling_sets: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
@@ -271,9 +274,11 @@ impl TransitionSystem {
         let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs];
         let mut bump = Bump::new();
         let mut run = self.new_run();
+        let mut trace = Vec::new();
 
         // Initialize oracle with TS initial state
-        oracle.update_state(&Vec::from_iter(run.labels()));
+        let state = Vec::from_iter(run.labels());
+        oracle.update_state(&state);
         run.fastforward(&bump);
 
         // FILO stack: depth-first search
@@ -326,11 +331,14 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(Vec::from_iter(
-                                branch_oracle
-                                    .output_guarantees()
-                                    .map(|b| b.is_none_or(|b| b)),
-                            ));
+                            return (
+                                Some(Vec::from_iter(
+                                    branch_oracle
+                                        .output_guarantees()
+                                        .map(|b| b.is_none_or(|b| b)),
+                                )),
+                                record_trace.then_some(trace),
+                            );
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
@@ -350,7 +358,12 @@ impl TransitionSystem {
                             branch_amples
                                 .iter_mut()
                                 .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
-                            executions_stack.push((branch_oracle, branch_run, branch_amples));
+                            executions_stack.push((
+                                branch_oracle,
+                                branch_run,
+                                branch_amples,
+                                trace.len(),
+                            ));
                         } else {
                             // Branch satisfies all guarantees and can be discarded even though execution is incomplete
                             branches += 1;
@@ -358,7 +371,10 @@ impl TransitionSystem {
                     } else {
                         drop(transitions);
                         bump.reset();
-                        run.transition(&mut oracle, action, &[post], &bump).unwrap();
+                        let event = run.transition(&mut oracle, action, &[post], &bump).unwrap();
+                        if record_trace && let Some(event) = event {
+                            trace.push((run.time(), action, event, run.state().to_vec()));
+                        }
                         if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                             // Guarantee violated
                             branches += 1;
@@ -366,9 +382,12 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(Vec::from_iter(
-                                oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                            ));
+                            return (
+                                Some(Vec::from_iter(
+                                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                                )),
+                                record_trace.then_some(trace),
+                            );
                         } else if oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             run.fastforward(&bump);
@@ -402,9 +421,12 @@ impl TransitionSystem {
                         "run violates a guarantee: processed {branches} branches in {:?}",
                         start_time.elapsed()
                     );
-                    return Some(Vec::from_iter(
-                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                    ));
+                    return (
+                        Some(Vec::from_iter(
+                            oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                        )),
+                        record_trace.then_some(trace),
+                    );
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
@@ -429,10 +451,17 @@ impl TransitionSystem {
                     "run violates a guarantee: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return Some(Vec::from_iter(oracle.final_output_guarantees()));
+                return (
+                    Some(Vec::from_iter(oracle.final_output_guarantees())),
+                    record_trace.then_some(trace),
+                );
             }
 
-            if let Some((branch_oracle, branch_run, branch_amples)) = executions_stack.pop() {
+            if let Some((branch_oracle, branch_run, branch_amples, trace_len)) =
+                executions_stack.pop()
+            {
+                // restore branch state of trace
+                trace.truncate(trace_len);
                 // continue loop with next run and oracle
                 run = branch_run;
                 oracle = branch_oracle;
@@ -443,26 +472,36 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return RunOutcome::Some(vec![true; oracle.output_guarantees().count()]);
+                return (
+                    RunOutcome::Some(vec![true; oracle.output_guarantees().count()]),
+                    record_trace.then_some(trace),
+                );
             }
         }
         trace!(
             "run stopped: processed {branches} branches in {:?}",
             start_time.elapsed()
         );
-        None
+        (None, None)
     }
 
     pub(crate) fn experiment_priority<O: Oracle + Clone>(
         &self,
         mut oracle: O,
+        record_trace: bool,
         running: Arc<AtomicBool>,
-    ) -> RunOutcome {
+    ) -> (RunOutcome, Option<Trace>) {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
 
-        type BranchData<'a, O> = (O, TransitionSystemRun<'a>, Vec<(FixedBitSet, bool)>, Dag);
+        type BranchData<'a, O> = (
+            O,
+            TransitionSystemRun<'a>,
+            Vec<(FixedBitSet, bool)>,
+            Dag,
+            usize,
+        );
         let mut executions_stack: Vec<BranchData<O>> = Vec::new();
         // TODO: measure impact of recycling memory to check wether it is worth it
         let mut recycling_sets: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
@@ -475,6 +514,7 @@ impl TransitionSystem {
         let mut run = self.new_run();
         let mut dag = Dag::new();
         let dag_ids = (0..pgs).map(|_| dag.add_node(())).collect::<Vec<_>>();
+        let mut trace = Vec::new();
 
         // Initialize oracle with TS initial state
         oracle.update_state(&Vec::from_iter(run.labels()));
@@ -562,11 +602,14 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(Vec::from_iter(
-                                branch_oracle
-                                    .output_guarantees()
-                                    .map(|b| b.is_none_or(|b| b)),
-                            ));
+                            return (
+                                Some(Vec::from_iter(
+                                    branch_oracle
+                                        .output_guarantees()
+                                        .map(|b| b.is_none_or(|b| b)),
+                                )),
+                                record_trace.then_some(trace),
+                            );
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
@@ -607,6 +650,7 @@ impl TransitionSystem {
                                 branch_run,
                                 branch_amples,
                                 branch_dag,
+                                trace.len(),
                             ));
                         } else {
                             // Branch satisfies all guarantees and can be discarded even though execution is incomplete
@@ -615,7 +659,10 @@ impl TransitionSystem {
                     } else {
                         drop(transitions);
                         bump.reset();
-                        run.transition(&mut oracle, action, &[post], &bump).unwrap();
+                        let event = run.transition(&mut oracle, action, &[post], &bump).unwrap();
+                        if record_trace && let Some(event) = event {
+                            trace.push((run.time(), action, event, run.state().to_vec()));
+                        }
                         if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                             // Guarantee violated
                             branches += 1;
@@ -623,9 +670,12 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return Some(Vec::from_iter(
-                                oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                            ));
+                            return (
+                                Some(Vec::from_iter(
+                                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                                )),
+                                record_trace.then_some(trace),
+                            );
                         } else if oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             run.fastforward(&bump);
@@ -672,9 +722,12 @@ impl TransitionSystem {
                         "run violates a guarantee: processed {branches} branches in {:?}",
                         start_time.elapsed()
                     );
-                    return Some(Vec::from_iter(
-                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                    ));
+                    return (
+                        Some(Vec::from_iter(
+                            oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                        )),
+                        record_trace.then_some(trace),
+                    );
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
@@ -701,12 +754,17 @@ impl TransitionSystem {
                     "run violates a guarantee: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return Some(Vec::from_iter(oracle.final_output_guarantees()));
+                return (
+                    Some(Vec::from_iter(oracle.final_output_guarantees())),
+                    record_trace.then_some(trace),
+                );
             }
 
-            if let Some((branch_oracle, branch_run, branch_amples, branch_dag)) =
+            if let Some((branch_oracle, branch_run, branch_amples, branch_dag, trace_len)) =
                 executions_stack.pop()
             {
+                // restore branch state of trace
+                trace.truncate(trace_len);
                 // continue loop with next run and oracle
                 run = branch_run;
                 oracle = branch_oracle;
@@ -718,283 +776,18 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return RunOutcome::Some(vec![true; oracle.output_guarantees().count()]);
+                return (
+                    RunOutcome::Some(vec![true; oracle.output_guarantees().count()]),
+                    None,
+                );
             }
         }
         trace!(
             "run stopped: processed {branches} branches in {:?}",
             start_time.elapsed()
         );
-        None
+        (None, None)
     }
-
-    // pub(crate) fn new_experiment<O: Oracle + Clone>(
-    //     &self,
-    //     mut oracle: O,
-    //     running: Arc<AtomicBool>,
-    // ) -> Option<bool> {
-    //     let mut executions_stack: Vec<(O, TransitionSystemRun, usize)> = Vec::new();
-    //     let mut state_trace: Vec<TransitionSystemRun> = Vec::new();
-    //     let mut states = HashMap::new();
-    //     let mut ample_sets_stack: Vec<(Vec<(FixedBitSet, bool)>, u16)> = Vec::new();
-    //     let mut recycling_stack: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
-    //     let pgs = self.pg_list.len();
-    //     let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs];
-    //     let mut ample_bkp = FixedBitSet::with_capacity(pgs);
-    //     let mut bump = Bump::new();
-    //     let mut run = self.new_run();
-    //     // Initialize oracle with TS initial state
-    //     oracle.update_state(&Vec::from_iter(run.labels()));
-    //     run.fastforward(&bump);
-    //     states.insert(run.clone(), 0);
-    //     state_trace.push(run.clone());
-
-    //     // FILO stack: depth-first search
-    //     'l: while running.load(Ordering::Relaxed) {
-    //         // States have to be synchronized with state trace
-    //         assert_eq!(states.len(), state_trace.len());
-    //         assert!(ample_sets_stack.len() <= executions_stack.len());
-    //         assert!(executions_stack.len() <= state_trace.len());
-    //         // Compute ample sets
-    //         run.ample(&mut amples);
-    //         if let Some((ample, _)) = amples
-    //             .iter()
-    //             .find(|(set, _)| set.count_ones(..) == 1)
-    //             .or_else(|| {
-    //                 amples
-    //                     .iter()
-    //                     .filter(|(set, _)| !set.is_clear())
-    //                     .min_by_key(|(set, _)| set.count_ones(..))
-    //             })
-    //         {
-    //             // Compute transitions restricted to ample set
-    //             let mut ample_transitions = ample
-    //                 .ones()
-    //                 .flat_map(|b| {
-    //                     run.cs
-    //                         .nosync_possible_transitions_pg(PgId(b as u16))
-    //                         .unwrap()
-    //                         .flat_map(|(action, transitions)| {
-    //                             transitions.map(move |post| (action, post))
-    //                         })
-    //                 })
-    //                 .peekable();
-    //             // There must be active transitions because we checked earlier
-    //             assert!(ample_transitions.peek().is_some());
-    //             let mut ample_branches: u16 = 0;
-    //             while let Some((action, post)) = ample_transitions.next() {
-    //                 if ample_transitions.peek().is_some() {
-    //                     let mut branch_run = run.clone();
-    //                     let mut branch_oracle = oracle.clone();
-    //                     bump.reset();
-    //                     branch_run
-    //                         .transition(&mut branch_oracle, action, post, &bump)
-    //                         .unwrap();
-    //                     if !branch_oracle
-    //                         .output_guarantees()
-    //                         .all(|b| b.is_none_or(|b| b))
-    //                     {
-    //                         // Guarantee violated
-    //                         trace!("run violates a guarantee before termination");
-    //                         return Some(false);
-    //                     } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
-    //                         // Can do branch fast-forwarding here because properties are invariant under forwarding
-    //                         bump.reset();
-    //                         branch_run.fastforward(&bump);
-    //                         if let Some(len) = states.get(&branch_run) {
-    //                             // Found loop: what to do?
-    //                             // if executions_stack
-    //                             //     .last()
-    //                             //     .is_some_and(|(_, _, branch_len)| branch_len >= len)
-    //                             // {
-    //                             //     // Loop can be exited,
-    //                             //     // terminate branch exploration
-    //                             // } else {
-    //                             // Inescapable loop
-    //                             trace!("(in)escapable loop found, run fails");
-    //                             return Some(false);
-    //                             // }
-    //                         } else {
-    //                             executions_stack.push((
-    //                                 branch_oracle,
-    //                                 branch_run,
-    //                                 state_trace.len(),
-    //                             ));
-    //                             ample_branches += 1;
-    //                         }
-    //                     } else {
-    //                         // All properties verified
-    //                         // Terminate branch exploration
-    //                         continue;
-    //                     }
-    //                 } else {
-    //                     drop(ample_transitions);
-    //                     bump.reset();
-    //                     run.transition(&mut oracle, action, post, &bump).unwrap();
-    //                     // TODO FIXME: is it possible to avoid clone? Is it expensive?
-    //                     ample.clone_into(&mut ample_bkp);
-    //                     amples.iter_mut().for_each(|(set, invalidate)| {
-    //                         *invalidate = set.is_superset(&ample_bkp)
-    //                     });
-    //                     // Add ample set to stack
-    //                     if ample_branches > 0 {
-    //                         // If possible, recycle memory
-    //                         if let Some(mut set) = recycling_stack.pop() {
-    //                             // Clone ample set into recycled memory
-    //                             set.iter_mut().zip(amples.iter()).for_each(
-    //                                 |((to_set, to_invalid), (from_set, from_invalid))| {
-    //                                     to_set.clone_from(from_set);
-    //                                     *to_invalid = *from_invalid;
-    //                                 },
-    //                             );
-    //                             ample_sets_stack.push((set, ample_branches));
-    //                         } else {
-    //                             ample_sets_stack.push((amples.clone(), ample_branches));
-    //                         }
-    //                         // trace!("branches: {ample_branches}");
-    //                     }
-    //                     if !oracle.output_guarantees().all(|b| b.is_none_or(|b| b)) {
-    //                         // Guarantee violated
-    //                         trace!("run violates a guarantee before termination");
-    //                         return Some(false);
-    //                     } else if oracle.output_guarantees().any(|b| b.is_none()) {
-    //                         bump.reset();
-    //                         run.fastforward(&bump);
-    //                         if let Some(len) = states.get(&run) {
-    //                             // Found loop: what to do?
-    //                             // if executions_stack
-    //                             //     .last()
-    //                             //     .is_some_and(|(_, _, branch_len)| branch_len >= len)
-    //                             // {
-    //                             //     // Loop can be exited,
-    //                             //     // terminate branch exploration
-    //                             //     break 'w;
-    //                             // } else {
-    //                             // Inescapable loop
-    //                             trace!("inescapable loop found, run fails");
-    //                             // return Some(false);
-    //                             panic!("inescapable loop found, run fails");
-    //                             // }
-    //                         } else {
-    //                             // NOTE: First insert state with state trace len,
-    //                             // then push to state trace, so indexes correspond.
-    //                             assert!(states.insert(run.clone(), state_trace.len()).is_none());
-    //                             state_trace.push(run.clone());
-    //                             // continue loop with same run and oracle
-    //                             continue 'l;
-    //                         }
-    //                     } else {
-    //                         // All properties verified
-    //                         // Terminate branch exploration
-    //                         // No transitions left in this branch so exit transitions iteration
-    //                         // NOTE: breaking needed to satisfy borrow checker
-    //                         break;
-    //                     }
-    //                 }
-    //             }
-    //         } else if run.cs.is_waiting(&bump) {
-    //             run.time_tick();
-    //             oracle.update_time(run.time());
-    //             if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-    //                 // Guarantee violated
-    //                 trace!("execution branch violates a guarantee (partial execution)");
-    //                 return Some(false);
-    //             } else if oracle.output_guarantees().any(|b| b.is_none()) {
-    //                 bump.reset();
-    //                 run.fastforward(&bump);
-    //                 assert!(
-    //                     states.insert(run.clone(), state_trace.len()).is_none(),
-    //                     "no state with the same time can already be in"
-    //                 );
-    //                 state_trace.push(run.clone());
-    //                 amples
-    //                     .iter_mut()
-    //                     .for_each(|(_set, invalidate)| *invalidate = true);
-    //                 // continue loop with same run and oracle
-    //                 continue 'l;
-    //             } else {
-    //                 // Execution branch satisfies all guarantees
-    //                 recycling_stack.push(amples);
-    //             }
-    //         } else if oracle.final_output_guarantees().any(|b| !b) {
-    //             // Branch execution terminated
-    //             assert_eq!(
-    //                 run.cs
-    //                     .nosync_possible_transitions()
-    //                     .flat_map(
-    //                         |(action, transitions)| transitions.map(move |post| (action, post))
-    //                     )
-    //                     .count(),
-    //                 0
-    //             );
-    //             assert!(!run.cs.is_waiting(&bump));
-    //             // Guarantee violated
-    //             trace!("execution branch violates a guarantee (full execution)");
-    //             return Some(false);
-    //         } else {
-    //             // Branch execution terminated
-    //             // Execution branch satisfies all guarantees
-    //             recycling_stack.push(amples);
-    //         }
-
-    //         if let Some((branch_oracle, branch_run, trace_len)) = executions_stack.pop() {
-    //             trace!("branches: {}", executions_stack.len());
-    //             assert!(trace_len <= state_trace.len());
-    //             for state in state_trace.drain(trace_len..) {
-    //                 // state must be present
-    //                 assert!(states.remove(&state).is_some());
-    //             }
-    //             // continue loop with next run and oracle
-    //             run = branch_run;
-    //             oracle = branch_oracle;
-    //             assert!(states.insert(run.clone(), state_trace.len()).is_none());
-    //             state_trace.push(run.clone());
-    //             // Recover ample set corresponding to new state
-    //             if ample_sets_stack.last().unwrap().1 > 1 {
-    //                 let (stack_amples, count) = ample_sets_stack.last_mut().unwrap();
-    //                 *count -= 1;
-    //                 // If possible, recycle memory
-    //                 if let Some(mut set) = recycling_stack.pop() {
-    //                     // Clone ample set into recycled memory
-    //                     set.iter_mut().zip(stack_amples.iter()).for_each(
-    //                         |((to_set, to_invalid), (from_set, from_invalid))| {
-    //                             to_set.clone_from(from_set);
-    //                             *to_invalid = *from_invalid;
-    //                         },
-    //                     );
-    //                     amples = set;
-    //                 } else {
-    //                     amples = stack_amples.clone();
-    //                 }
-    //             } else {
-    //                 amples = ample_sets_stack.pop().unwrap().0;
-    //             }
-    //         } else {
-    //             // run terminated
-    //             trace!("run verifies all guarantees");
-    //             return Some(true);
-    //         }
-    //     }
-    //     trace!("run stopped");
-    //     None
-    // }
-
-    // #[inline]
-    // pub fn is_stutter(&self, action: Action) -> bool {
-    //     self.cs
-    //         .communication(action)
-    //         .is_none_or(|(c, _)| self.ports.binary_search(&c).is_err())
-    // }
-
-    // #[inline]
-    // pub fn are_independent(&self, action_1: Action, action_2: Action) -> bool {
-    //     action_1.0 != action_2.0
-    //         && self.cs.communication(action_1).is_none_or(|(ch_1, _)| {
-    //             self.cs
-    //                 .communication(action_2)
-    //                 .is_none_or(|(ch_2, _)| ch_1 != ch_2)
-    //         })
-    // }
 }
 
 /// Transition system model based on a [`ChannelSystem`].
@@ -1174,17 +967,18 @@ impl<'def> TransitionSystemRun<'def> {
             .cs
             .transition(action, post, bump)?
             .map(|event| (action, event));
-        if let Some((_, event)) = last_event
-            && let EventType::Send(ref vals) = event.event_type
-            && let Ok(index) = self.ts.ports.binary_search(&event.channel)
-        {
-            // Since we have to update old values,
-            // the vectors are already allocated and their len is always the same.
-            // Copying from slice should be faster than cloning.
+        if let Some((_, event)) = last_event {
+            if let EventType::Send(ref vals) = event.event_type
+                && let Ok(index) = self.ts.ports.binary_search(&event.channel)
+            {
+                // Since we have to update old values,
+                // the vectors are already allocated and their len is always the same.
+                // Copying from slice should be faster than cloning.
+                self.vals[index].copy_from_slice(vals);
+                let labels = bumpalo::collections::Vec::from_iter_in(self.labels(), bump);
+                oracle.update_state(&labels);
+            }
             self.last_event = Some(event.channel);
-            self.vals[index].copy_from_slice(vals);
-            let labels = bumpalo::collections::Vec::from_iter_in(self.labels(), bump);
-            oracle.update_state(&labels);
             Ok(Some(event))
         } else {
             self.last_event = None;

@@ -168,13 +168,18 @@ impl<O: Oracle + Clone> Scan<O> {
             Scheduler::Uniform => self
                 .model
                 .experiment_sample(self.oracle.clone(), self.running.clone()),
+            // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
             Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => self
-                .model
-                .experiment_exhaustive(self.oracle.clone(), self.running.clone()),
-            Scheduler::Priority => self
-                .model
-                .experiment_priority(self.oracle.clone(), self.running.clone()),
+            Scheduler::Exhaustive => {
+                self.model
+                    .experiment_exhaustive(self.oracle.clone(), false, self.running.clone())
+                    .0
+            }
+            Scheduler::Priority => {
+                self.model
+                    .experiment_priority(self.oracle.clone(), false, self.running.clone())
+                    .0
+            }
         };
         if let Some(guarantees) = result
             && self.running.load(Ordering::Relaxed)
@@ -248,25 +253,35 @@ impl<O: Oracle + Clone> Scan<O> {
 
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`].
-    pub fn traces<T>(&self, runs: usize, path: PathBuf, model_data: &T::ModelData)
-    where
+    pub fn traces<T>(
+        &self,
+        runs: usize,
+        path: PathBuf,
+        model_data: &T::ModelData,
+        scheduler: Scheduler,
+    ) where
         T: Tracer,
     {
-        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
         let start_time = Instant::now();
+        self.reset();
         create_traces_dirs_tree(path.clone());
 
         (0..runs).for_each(|idx| {
-            self.trace::<T>(path.clone(), model_data, idx);
+            self.trace::<T>(path.clone(), model_data, scheduler, idx);
         });
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
     }
 
-    fn trace<T>(&self, mut path: PathBuf, model_data: &T::ModelData, idx: usize)
-    where
+    fn trace<T>(
+        &self,
+        mut path: PathBuf,
+        model_data: &T::ModelData,
+        scheduler: Scheduler,
+        idx: usize,
+    ) where
         T: Tracer,
     {
         let filename = PathBuf::new()
@@ -280,11 +295,43 @@ impl<O: Oracle + Clone> Scan<O> {
             .filename(filename.to_str().expect("file name"))
             .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
-        let tracer = T::init(writer, model_data);
-        if let Some(verified) = self
-            .model
-            .trace::<T, _>(self.oracle.clone(), tracer, model_data)
-        {
+        let mut tracer = T::init(writer, model_data);
+        let outcome = match scheduler {
+            Scheduler::Uniform => self
+                .model
+                .trace::<T, _>(self.oracle.clone(), tracer, model_data),
+            // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
+            Scheduler::Sampling => todo!(),
+            Scheduler::Exhaustive => {
+                let (outcome, trace) = self.model.experiment_exhaustive(
+                    self.oracle.clone(),
+                    true,
+                    self.running.clone(),
+                );
+                // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
+                // Same issue for time-tick events
+                if let Some(trace) = trace {
+                    for (time, action, event, state) in trace {
+                        tracer.trace(model_data, action, &event, time, &state);
+                    }
+                }
+                outcome
+            }
+            Scheduler::Priority => {
+                let (outcome, trace) =
+                    self.model
+                        .experiment_priority(self.oracle.clone(), true, self.running.clone());
+                // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
+                // Same issue for time-tick events
+                if let Some(trace) = trace {
+                    for (time, action, event, state) in trace {
+                        tracer.trace(model_data, action, &event, time, &state);
+                    }
+                }
+                outcome
+            }
+        };
+        if let Some(verified) = outcome {
             let mut new_path = path.clone();
             // pop file name
             new_path.pop();
@@ -345,18 +392,23 @@ where
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`],
     /// spawning multiple threads.
-    pub fn par_traces<T>(&self, runs: usize, path: PathBuf, model_data: &T::ModelData)
-    where
+    pub fn par_traces<T>(
+        &self,
+        runs: usize,
+        path: PathBuf,
+        model_data: &T::ModelData,
+        scheduler: Scheduler,
+    ) where
         T: Tracer,
         T::ModelData: Sync,
     {
-        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
         let start_time = Instant::now();
+        self.reset();
         create_traces_dirs_tree(path.clone());
 
         (0..runs).into_par_iter().for_each(|idx| {
-            self.trace::<T>(path.clone(), model_data, idx);
+            self.trace::<T>(path.clone(), model_data, scheduler, idx);
         });
 
         let elapsed = start_time.elapsed();
