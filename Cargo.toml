@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "Statistical model checker for large concurrent systems."
 documentation = "https://convince-project.github.io/scan/crates/scan/index.html"
@@ -9,13 +9,7 @@ repository = "https://github.com/convince-project/scan"
 readme = "README.md"
 license = "Apache-2.0"
 keywords = ["verification", "model-checking"]
-categories = [
-  "compilers",
-  "concurrency",
-  "parser-implementations",
-  "science::robotics",
-  "simulation"
-]
+categories = ["compilers", "concurrency", "parser-implementations", "science::robotics", "simulation"]
 exclude = ["scan_book/*", ".github/*"]
 
 [features]
@@ -44,14 +38,7 @@ debug = "full"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [workspace]
-members = [
-  "scan_core",
-  "scan_scxml",
-  "scan_jani",
-  "scan_promela",
-  "scan_pmtl",
-  "scan_mtl"
-]
+members = ["scan_core", "scan_scxml", "scan_jani", "scan_promela", "scan_pmtl", "scan_mtl"]
 
 [workspace.dependencies]
 anyhow = "1.0.104"
@@ -68,9 +55,9 @@ clap-verbosity-flag = "3.0.4"
 env_logger = "0.11.11"
 indicatif = { version = "0.18.6", features = ["improved_unicode"] }
 log = { workspace = true }
-smc_scan_core = { version = "0.2.0", path = "scan_core" }
-smc_scan_jani = { version = "0.2.0", path = "scan_jani", optional = true }
-smc_scan_scxml = { version = "0.3.0", path = "scan_scxml", optional = true }
-smc_scan_promela = { version = "0.2.0", path = "scan_promela", optional = true }
+smc_scan_core = { version = "0.2.1", path = "scan_core" }
+smc_scan_jani = { version = "0.2.1", path = "scan_jani", optional = true }
+smc_scan_scxml = { version = "0.3.2", path = "scan_scxml", optional = true }
+smc_scan_promela = { version = "0.2.1", path = "scan_promela", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

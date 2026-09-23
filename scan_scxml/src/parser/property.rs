@@ -6,7 +6,7 @@ use boa_interner::Interner;
 use log::{error, info, trace};
 use quick_xml::{Reader, XmlVersion, events::Event};
 use scan_pmtl::Pmtl;
-use std::{collections::HashMap, io::BufRead};
+use std::{collections::BTreeMap, io::BufRead};
 
 const TAG_PORTS: &str = "ports";
 const TAG_PORT: &str = "scxml_event_send";
@@ -51,7 +51,7 @@ impl From<&PropertyTag> for &'static str {
 
 #[derive(Debug, Clone)]
 pub struct Properties {
-    pub(crate) ports: HashMap<String, ParserPort>,
+    pub(crate) ports: BTreeMap<String, ParserPort>,
     pub(crate) predicates: Vec<boa_ast::Expression>,
     pub(crate) guarantees: Vec<(String, Pmtl<usize>)>,
     pub(crate) assumes: Vec<(String, Pmtl<usize>)>,
@@ -60,7 +60,7 @@ pub struct Properties {
 impl Properties {
     pub fn new() -> Self {
         Properties {
-            ports: HashMap::new(),
+            ports: BTreeMap::new(),
             predicates: Vec::new(),
             guarantees: Vec::new(),
             assumes: Vec::new(),
@@ -71,7 +71,6 @@ impl Properties {
         &mut self,
         reader: &mut Reader<R>,
         interner: &mut Interner,
-        // omg_types: &OmgTypes,
     ) -> anyhow::Result<()> {
         let mut buf = Vec::new();
         let mut stack: Vec<PropertyTag> = Vec::new();
@@ -102,7 +101,7 @@ impl Properties {
                                 .is_some_and(|tag| matches!(*tag, PropertyTag::Ports)) =>
                         {
                             let attrs = attrs(
-                                tag,
+                                &tag,
                                 &[ATTR_EVENT, ATTR_ORIGIN, ATTR_TARGET],
                                 &[],
                                 xml_version,
@@ -137,7 +136,7 @@ impl Properties {
                     }
                 }
                 Event::End(tag) => {
-                    let tag_name = tag.name().into_inner().to_string();
+                    let tag_name = tag.name().into_inner();
                     if stack
                         .pop()
                         .is_some_and(|state| Into::<&str>::into(&state) == tag_name)
@@ -158,9 +157,10 @@ impl Properties {
                                 .is_some_and(|tag| matches!(*tag, PropertyTag::Port(_, _, _))) =>
                         {
                             if let Some(PropertyTag::Port(event, origin, target)) = stack.last() {
-                                let attrs = attrs(tag, &[ATTR_ID], &[], xml_version).with_context(
-                                    || format!("failed to parse '{TAG_EVENT_VAR}' tag attributes"),
-                                )?;
+                                let attrs = attrs(&tag, &[ATTR_ID], &[], xml_version)
+                                    .with_context(|| {
+                                        format!("failed to parse '{TAG_EVENT_VAR}' tag attributes")
+                                    })?;
                                 let id = attrs[ATTR_ID].clone();
                                 self.ports.insert(
                                     id,
@@ -184,7 +184,7 @@ impl Properties {
                             if let Some(PropertyTag::Port(event, origin, target)) = stack.last_mut()
                             {
                                 let attrs = attrs(
-                                    tag,
+                                    &tag,
                                     &[ATTR_ID, ATTR_PARAM, ATTR_EXPR, ATTR_TYPE],
                                     &[],
                                     xml_version,
@@ -217,7 +217,7 @@ impl Properties {
                         }
                         TAG_PROPERTY => {
                             let attrs =
-                                attrs(tag, &[ATTR_ID, ATTR_EXPR], &[ATTR_LOGIC], xml_version)
+                                attrs(&tag, &[ATTR_ID, ATTR_EXPR], &[ATTR_LOGIC], xml_version)
                                     .with_context(|| {
                                         format!("failed to parse '{TAG_PROPERTY}' tag attributes")
                                     })?;

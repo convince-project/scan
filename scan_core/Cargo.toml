@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan_core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Core module for the Scan model checker."
 documentation = "https://convince-project.github.io/scan/crates/scan_core/index.html"
@@ -9,13 +9,7 @@ repository = "https://github.com/convince-project/scan"
 license = "Apache-2.0"
 readme = "README.md"
 keywords = ["verification", "model-checking"]
-categories = [
-  "compilers",
-  "concurrency",
-  "parser-implementations",
-  "science::robotics",
-  "simulation"
-]
+categories = ["compilers", "concurrency", "parser-implementations", "science::robotics", "simulation"]
 
 [lib]
 name = "scan_core"  # The name of the target.

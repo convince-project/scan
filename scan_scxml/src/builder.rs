@@ -12,7 +12,7 @@ use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
 use scan_pmtl::{Pmtl, PmtlOracle};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 // TODO:
 //
@@ -57,7 +57,7 @@ pub struct ModelBuilder {
     // Associates a struct's id and field id with the index it is assigned in the struct's representation as a product.
     // NOTE: This is decided arbitrarily and not imposed by the OMG type definition.
     // QUESTION: Is there a better way?
-    // structs: HashMap<(String, String), usize>,
+    // structs: BTreeMap<(String, String), usize>,
     // Each State Chart has an associated Program Graph,
     // and an arbitrary, progressive index
     fsm_names: BTreeMap<u16, String>,
@@ -377,7 +377,7 @@ impl ModelBuilder {
         let pg_id = pg_builder.pg_id;
         let ext_queue = pg_builder.ext_queue;
         // Initialize variables from datamodel
-        // NOTE vars cannot be initialized using previously defined vars because datamodel is an HashMap
+        // NOTE vars cannot be initialized using previously defined vars because datamodel is an BTreeMap
         let mut vars: BTreeMap<String, (OmgType, Vec<(Var, Type)>)> = BTreeMap::new();
         for data in scxml.datamodel.iter() {
             let mut omg_type = data
@@ -427,7 +427,7 @@ impl ModelBuilder {
         // Transition initializing datamodel variables.
         // After initializing datamodel, transition to location representing point-of-entry of initial state of State Chart.
         // Map FSM's state ids to corresponding CS's locations.
-        let mut states = HashMap::new();
+        let mut states = BTreeMap::new();
         // Conventionally, the entry-point for a state is a location associated to the id of the state.
         states.insert(scxml.initial.to_owned(), initial_loc);
         // Var representing the current event
@@ -470,7 +470,7 @@ impl ModelBuilder {
         // Use BTreeMap to iter in fixed order
         let mut params_vars: BTreeMap<(usize, String), (OmgType, Vec<(Var, Type)>)> =
             BTreeMap::new(); // maps (event_idx, param_name) -> (omg_type, (param_vars, var_types))
-        let mut params_actions: HashMap<(PgId, usize), Action> = HashMap::new(); // maps (sender_pg_id, event) -> param_action
+        let mut params_actions: BTreeMap<(PgId, usize), Action> = BTreeMap::new(); // maps (sender_pg_id, event) -> param_action
         for (event_index, event_builder) in self
             .events
             .iter()

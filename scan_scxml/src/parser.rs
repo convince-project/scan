@@ -21,7 +21,6 @@ use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::io::BufRead;
 use std::io::Seek;
 use std::path::{Path, PathBuf};
@@ -71,12 +70,12 @@ impl From<ConvinceTag> for &'static str {
 }
 
 fn attrs(
-    tag: quick_xml::events::BytesStart<'_>,
+    tag: &quick_xml::events::BytesStart<'_>,
     keys: &[&str],
     opt_keys: &[&str],
     xml_version: XmlVersion,
-) -> anyhow::Result<HashMap<String, String>> {
-    let mut attrs = HashMap::new();
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut attrs = BTreeMap::new();
     for attr in tag.attributes() {
         let attr = attr?;
         let key = attr.key.into_inner();
@@ -301,7 +300,7 @@ impl Parser {
                                 .last()
                                 .is_some_and(|e| *e == ConvinceTag::Specification) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_PATH], &[], xml_version)
+                            let attrs = attrs(&tag, &[ATTR_PATH], &[], xml_version)
                                 .context("failed to parse 'types' tag attributes")?;
                             let mut path = parent.to_owned();
                             path.extend(&PathBuf::from(attrs.get(ATTR_PATH).unwrap()));
@@ -320,7 +319,7 @@ impl Parser {
                                 .last()
                                 .is_some_and(|e| *e == ConvinceTag::Specification) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_PATH], &[], xml_version)
+                            let attrs = attrs(&tag, &[ATTR_PATH], &[], xml_version)
                                 .context("failed to parse 'properties' tag attributes")?;
                             let mut path = parent.to_owned();
                             path.extend(&PathBuf::from(attrs.get(ATTR_PATH).unwrap()));
@@ -341,8 +340,9 @@ impl Parser {
                         TAG_PROCESS
                             if stack.last().is_some_and(|e| *e == ConvinceTag::ProcessList) =>
                         {
-                            let attrs = attrs(tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC], xml_version)
-                                .context("failed to parse 'process' tag attributes")?;
+                            let attrs =
+                                attrs(&tag, &[ATTR_ID, ATTR_PATH], &[ATTR_MOC], xml_version)
+                                    .context("failed to parse 'process' tag attributes")?;
                             if let Some(moc) = attrs.get(ATTR_MOC)
                                 && moc != "fsm"
                             {
@@ -379,7 +379,6 @@ impl Parser {
                     }
                 }
                 Event::Text(text) => {
-                    let text = text.to_string();
                     if !text.trim().is_empty() {
                         error!(target: "parser", "text elements not allowed, ignoring");
                     }

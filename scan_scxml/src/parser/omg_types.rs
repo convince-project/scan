@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    io::BufRead,
-};
+use std::{collections::BTreeMap, io::BufRead};
 
 use anyhow::{Context, anyhow, bail};
 use log::{error, info, trace, warn};
@@ -118,18 +115,18 @@ impl From<OmgBaseType> for OmgType {
 
 #[derive(Debug, Clone)]
 pub struct OmgTypes {
-    pub type_defs: HashMap<String, OmgTypeDef>,
+    pub type_defs: BTreeMap<String, OmgTypeDef>,
     strings: Vec<String>,
-    strings_idx: HashMap<String, usize>,
+    strings_idx: BTreeMap<String, usize>,
 }
 
 impl OmgTypes {
     pub fn new() -> Self {
         Self {
-            type_defs: HashMap::new(),
+            type_defs: BTreeMap::new(),
             // Empty string is default value so it should always be there
             strings: vec![String::new()],
-            strings_idx: HashMap::from([(String::new(), 0)]),
+            strings_idx: BTreeMap::from([(String::new(), 0)]),
         }
     }
 
@@ -191,7 +188,7 @@ impl OmgTypes {
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
-                            let id = self.parse_id(tag)?;
+                            let id = self.parse_id(&tag)?;
                             self.type_defs
                                 .insert(id.to_owned(), OmgTypeDef::Enumeration(Vec::new()));
                             stack.push(ConvinceTag::Enumeration(id));
@@ -201,7 +198,7 @@ impl OmgTypes {
                                 .last()
                                 .is_some_and(|tag| *tag == ConvinceTag::DataTypeList) =>
                         {
-                            let id = self.parse_id(tag)?;
+                            let id = self.parse_id(&tag)?;
                             self.type_defs
                                 .insert(id.to_owned(), OmgTypeDef::Structure(BTreeMap::new()));
                             stack.push(ConvinceTag::Structure(id));
@@ -234,7 +231,7 @@ impl OmgTypes {
                                 .is_some_and(|tag| matches!(*tag, ConvinceTag::Enumeration(_))) =>
                         {
                             if let Some(ConvinceTag::Enumeration(id)) = stack.last() {
-                                let label = self.parse_id(tag)?;
+                                let label = self.parse_id(&tag)?;
                                 let omg_type = self.type_defs.get_mut(id).unwrap();
                                 if let OmgTypeDef::Enumeration(labels) = omg_type {
                                     if labels.binary_search(&label).is_ok() {
@@ -258,7 +255,7 @@ impl OmgTypes {
                         {
                             if let Some(ConvinceTag::Structure(id)) = stack.last() {
                                 let (field_id, field_type) =
-                                    self.parse_struct(tag).with_context(|| {
+                                    self.parse_struct(&tag).with_context(|| {
                                         format!("failed parsing field of struct {id}")
                                     })?;
                                 let omg_type = self.type_defs.get_mut(id).unwrap();
@@ -311,7 +308,7 @@ impl OmgTypes {
         Ok(())
     }
 
-    fn parse_id(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<String> {
+    fn parse_id(&mut self, tag: &events::BytesStart<'_>) -> anyhow::Result<String> {
         let mut id: Option<String> = None;
         for attr in tag
             .attributes()
@@ -330,7 +327,7 @@ impl OmgTypes {
         id.ok_or(anyhow!(ParserError::MissingAttr(ATTR_ID.to_string())))
     }
 
-    fn parse_struct(&mut self, tag: events::BytesStart<'_>) -> anyhow::Result<(String, OmgType)> {
+    fn parse_struct(&mut self, tag: &events::BytesStart<'_>) -> anyhow::Result<(String, OmgType)> {
         let mut id: Option<String> = None;
         let mut field_type: Option<String> = None;
         for attr in tag
