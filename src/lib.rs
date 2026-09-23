@@ -78,6 +78,43 @@ enum Format {
     Promela,
 }
 
+/// Scheduling strategy used to sample executions
+#[derive(Debug, Default, Clone, Copy, Parser, ValueEnum)]
+#[deny(missing_docs)]
+enum CliScheduler {
+    /// Uniform distribution over non-deterministic choices.
+    #[default]
+    Uniform,
+    /// Schedulers sampled from uniform distribution over scheduler space.
+    ///
+    /// Lightweight sampling strategy from:
+    ///
+    /// __An efficient statistical model checker for nondeterminism and rare events__
+    /// (Carlos E. Budde et al.),
+    /// International Journal on Software Tools for Technology Transfer (2020),
+    /// [https://doi.org/10.1007/s10009-020-00563-2].
+    Sampling,
+    /// Exhaustive exploration of scheduler space.
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Exhaustive,
+    /// Exploration of subspace of schedulers that enforce an order of priority between processes,
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Priority,
+}
+
+impl From<CliScheduler> for scan_core::Scheduler {
+    fn from(val: CliScheduler) -> Self {
+        match val {
+            CliScheduler::Uniform => scan_core::Scheduler::Uniform,
+            CliScheduler::Sampling => scan_core::Scheduler::Sampling,
+            CliScheduler::Exhaustive => scan_core::Scheduler::Exhaustive,
+            CliScheduler::Priority => scan_core::Scheduler::Priority,
+        }
+    }
+}
+
 /// SCAN's available commands.
 #[deny(missing_docs)]
 #[derive(Subcommand)]

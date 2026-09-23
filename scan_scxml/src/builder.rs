@@ -529,8 +529,8 @@ impl ModelBuilder {
             }
         }
         // Make non-mut
-        let param_vars = params_vars;
-        let param_actions = params_actions;
+        let params_vars = params_vars;
+        let params_actions = params_actions;
 
         // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
@@ -616,8 +616,7 @@ impl ModelBuilder {
             let mut known_events = Vec::new();
             // Retrieve external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
-            // from any possible other FSM,
-            // and for any parameter of the event.
+            // and from any possible other FSM.
             for (event_index, event_builder) in self
                 .events
                 .iter()
@@ -636,7 +635,7 @@ impl ModelBuilder {
                     );
                     // Add event (and sender) to list of known events.
                     known_events.push(is_event_sender.to_owned());
-                    if let Some(&read_params) = param_actions.get(&(sender_id, event_index)) {
+                    if let Some(&read_params) = params_actions.get(&(sender_id, event_index)) {
                         self.cs
                             .add_transition(
                                 pg_id,
@@ -659,11 +658,8 @@ impl ModelBuilder {
                 }
             }
             // Proceed if event is unknown (without retrieving parameters).
-            let unknown_event = if known_events.is_empty() {
-                None
-            } else {
-                Some(!(BooleanExpr::Or(known_events)))
-            };
+            let unknown_event =
+                (!known_events.is_empty()).then(|| !(BooleanExpr::Or(known_events)));
             self.cs
                 .add_autonomous_transition(
                     pg_id,
@@ -703,7 +699,7 @@ impl ModelBuilder {
                     .or_insert_with(|| self.cs.new_location(pg_id).expect("pg_id should exist"));
 
                 // Set up origin and parameters for conditional/executable content.
-                if let Some(event_name) = transition.event.as_ref() {
+                if let Some(ref event_name) = transition.event {
                     let event_index = *self
                         .event_indexes
                         .get(event_name)
@@ -712,7 +708,7 @@ impl ModelBuilder {
                         (
                             String::from("_EventDataType"),
                             OmgTypeDef::Structure(BTreeMap::from_iter(
-                                param_vars
+                                params_vars
                                     .iter()
                                     .filter(|((ev_ix, _), _)| *ev_ix == event_index)
                                     .map(|((_, param_name), (t, _))| {
@@ -735,7 +731,7 @@ impl ModelBuilder {
                         .params
                         .keys()
                         .flat_map(|param_name| {
-                            &param_vars
+                            &params_vars
                                 .get(&(event_index, param_name.clone()))
                                 .expect("param")
                                 .1

@@ -4,13 +4,13 @@ use std::fmt::Display;
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct Report {
     pub(crate) model: String,
+    pub(crate) properties: Vec<(String, u32)>,
     pub(crate) precision: f64,
     pub(crate) confidence: f64,
     pub(crate) rate: f64,
     pub(crate) runs: u32,
     pub(crate) successes: u32,
     pub(crate) failures: u32,
-    pub(crate) property_failures: Vec<(String, u32)>,
 }
 
 impl Report {
@@ -34,7 +34,7 @@ impl Display for Report {
             "Completed {} runs with {} successes and {} failures",
             self.runs, self.successes, self.failures
         )?;
-        for (property, violations) in self.property_failures.iter() {
+        for (property, violations) in self.properties.iter() {
             write!(
                 f,
                 "Property {property} success rate: {0:.1$}",
@@ -47,7 +47,7 @@ impl Display for Report {
                 writeln!(f)?;
             }
         }
-        write!(f, "Overall success rate: {:.1$}", self.rate, mag)?;
+        writeln!(f, "Overall success rate: {:.1$}", self.rate, mag)?;
         Ok(())
     }
 }

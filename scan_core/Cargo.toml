@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan_core"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Core module for the Scan model checker."
 documentation = "https://convince-project.github.io/scan/crates/scan_core/index.html"
@@ -20,9 +20,12 @@ thiserror = { workspace = true }
 log = { workspace = true }
 flate2 = { version = "1.1.10", features = ["zlib-rs"], default-features = false }
 get-size2 = { version = "0.11.0", features = ["derive"] }
-rand = { version = "0.10.2" }
+rand = { version = "0.10.3" }
 rayon = "1.12.0"
 bumpalo = { version = "3.20.3", features = ["collections"] }
+fixedbitset = "0.5.7"
+num-rational = { version = "0.4.2", features = ["num-bigint"] }
+petgraph = "0.8.3"
 
 [dev-dependencies]
 criterion = "0.8.2"
