@@ -1620,7 +1620,7 @@ checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 
 [[package]]
 name = "smc_scan"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bumpalo",
  "criterion",
@@ -1655,7 +1655,7 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_jani"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "csv",
@@ -1670,21 +1670,21 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_mtl"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "smc_scan_core",
 ]
 
 [[package]]
 name = "smc_scan_pmtl"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "smc_scan_core",
 ]
 
 [[package]]
 name = "smc_scan_promela"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cfgrammar",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "smc_scan_scxml"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "boa_ast",
