@@ -95,7 +95,7 @@ pub type LocationIdx = u32;
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
-pub struct Location(pub(crate) LocationIdx);
+pub struct Location(LocationIdx);
 
 /// The index for [`Action`]s in a [`ProgramGraph`].
 pub type ActionIdx = u32;
@@ -105,7 +105,7 @@ pub type ActionIdx = u32;
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ProgramGraphBuilder`] or [`ProgramGraph`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
-pub struct Action(pub(crate) ActionIdx);
+pub struct Action(ActionIdx);
 
 impl From<Action> for ActionIdx {
     #[inline]

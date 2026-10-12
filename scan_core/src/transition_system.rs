@@ -522,8 +522,8 @@ impl TransitionSystem {
 
         let mut len_lower_bound = 1;
 
-        let mut post_l = Location(PgId(0), crate::program_graph::Location(0));
-        let mut action_l = Action(PgId(0), crate::program_graph::Action(0));
+        let mut post_l = None;
+        let mut action_l = None;
         // FILO stack: depth-first search
         'l: while running.load(Ordering::Relaxed) {
             // NOTE: at the start of the loop, ample sets need to be updated.
@@ -588,13 +588,13 @@ impl TransitionSystem {
                 // There must be active transitions because we checked earlier
                 assert!(transitions.peek().is_some());
                 'w: while let Some((action, post)) = transitions.next() {
-                    action_l = action;
-                    post_l = post;
+                    action_l = Some(action);
+                    post_l = Some(post);
                     if transitions.peek().is_some() {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
                         branch_run
-                            .transition(&mut branch_oracle, action_l, &[post_l], &bump)
+                            .transition(&mut branch_oracle, action, &[post], &bump)
                             .unwrap();
                         if branch_oracle
                             .output_guarantees()
@@ -665,11 +665,17 @@ impl TransitionSystem {
                 }
                 assert!(transitions.next().is_none());
                 drop(transitions);
+                let action = action_l.expect("active transition");
                 let event = run
-                    .transition(&mut oracle, action_l, &[post_l], &bump)
+                    .transition(
+                        &mut oracle,
+                        action,
+                        &[post_l.expect("active transition")],
+                        &bump,
+                    )
                     .unwrap();
                 if record_trace && let Some(event) = event {
-                    trace.push((run.time(), action_l, event, run.state().to_vec()));
+                    trace.push((run.time(), action, event, run.state().to_vec()));
                 }
                 if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                     // Guarantee violated
@@ -687,7 +693,7 @@ impl TransitionSystem {
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     run.fastforward(&bump);
                     // Update DAG
-                    let a = u16::from(action_l.0) as usize;
+                    let a = u16::from(action.0) as usize;
                     let node_a = dag_ids[a];
                     restricted_ample.ones().for_each(|b| {
                         if b != a {
