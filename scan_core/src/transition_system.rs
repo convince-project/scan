@@ -127,7 +127,7 @@ impl TransitionSystem {
     }
 
     /// Generates an executable run of the model.
-    pub fn new_run(&self) -> TransitionSystemRun<'_> {
+    fn new_run(&self) -> TransitionSystemRun<'_> {
         let mut vals = self.vals.clone();
         vals.shrink_to_fit();
         info!(
@@ -304,7 +304,7 @@ impl TransitionSystem {
                     .ones()
                     .flat_map(|b| {
                         run.cs
-                            .nosync_possible_transitions_pg(PgId(b as u16))
+                            .cached_possible_transitions_pg(PgId(b as u16))
                             .unwrap()
                             .flat_map(|(action, transitions)| {
                                 transitions.map(move |post| (action, post))
@@ -522,6 +522,8 @@ impl TransitionSystem {
 
         let mut len_lower_bound = 1;
 
+        let mut post_l = Location(PgId(0), crate::program_graph::Location(0));
+        let mut action_l = Action(PgId(0), crate::program_graph::Action(0));
         // FILO stack: depth-first search
         'l: while running.load(Ordering::Relaxed) {
             // NOTE: at the start of the loop, ample sets need to be updated.
@@ -571,11 +573,12 @@ impl TransitionSystem {
             if let Some(ample) = ample {
                 assert!(!restricted_ample.is_clear());
                 assert!(restricted_ample.is_subset(ample));
+                bump.reset();
                 let mut transitions = restricted_ample
                     .ones()
                     .flat_map(|b| {
                         run.cs
-                            .nosync_possible_transitions_pg(PgId(b as u16))
+                            .cached_possible_transitions_pg(PgId(b as u16))
                             .unwrap()
                             .flat_map(|(action, transitions)| {
                                 transitions.map(move |post| (action, post))
@@ -585,12 +588,13 @@ impl TransitionSystem {
                 // There must be active transitions because we checked earlier
                 assert!(transitions.peek().is_some());
                 'w: while let Some((action, post)) = transitions.next() {
+                    action_l = action;
+                    post_l = post;
                     if transitions.peek().is_some() {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
-                        bump.reset();
                         branch_run
-                            .transition(&mut branch_oracle, action, &[post], &bump)
+                            .transition(&mut branch_oracle, action_l, &[post_l], &bump)
                             .unwrap();
                         if branch_oracle
                             .output_guarantees()
@@ -611,7 +615,6 @@ impl TransitionSystem {
                                 record_trace.then_some(trace),
                             );
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
                             branch_run.fastforward(&bump);
                             // Prepare new DAG
                             let mut branch_dag = if let Some(mut rec_dag) = recycling_dags.pop() {
@@ -657,60 +660,60 @@ impl TransitionSystem {
                             branches += 1;
                         }
                     } else {
-                        drop(transitions);
-                        bump.reset();
-                        let event = run.transition(&mut oracle, action, &[post], &bump).unwrap();
-                        if record_trace && let Some(event) = event {
-                            trace.push((run.time(), action, event, run.state().to_vec()));
-                        }
-                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                            // Guarantee violated
-                            branches += 1;
-                            trace!(
-                                "run violates a guarantee: processed {branches} branches in {:?}",
-                                start_time.elapsed()
-                            );
-                            return (
-                                Some(Vec::from_iter(
-                                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                                )),
-                                record_trace.then_some(trace),
-                            );
-                        } else if oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
-                            run.fastforward(&bump);
-                            // Update DAG
-                            let a = u16::from(action.0) as usize;
-                            let node_a = dag_ids[a];
-                            restricted_ample.ones().for_each(|b| {
-                                if b != a {
-                                    let node_b = dag_ids[b];
-                                    // update_edge avoids creating duplicated edges
-                                    let _ = dag
-                                        .try_update_edge(node_a, node_b, ())
-                                        .expect("edge must be valid");
-                                }
-                            });
-                            // NOTE: Ample sets, in this case, are closed under intersection,
-                            // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
-                            // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
-                            // NOTE: restricted_ample is **not** an ample set,
-                            // and ample is not necessarily the smallest ample set containing restricted_ample!
-                            amples
-                                .iter_mut()
-                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
-                            // continue loop with same run and oracle
-                            continue 'l;
-                        } else {
-                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
-                            branches += 1;
-                            recycling_sets.push(amples);
-                            recycling_dags.push(dag);
-                            // No transitions left in this branch so exit transitions iteration
-                            // NOTE: break while loop needed to satisfy borrow checker
-                            break 'w;
-                        }
+                        break 'w;
                     }
+                }
+                assert!(transitions.next().is_none());
+                drop(transitions);
+                let event = run
+                    .transition(&mut oracle, action_l, &[post_l], &bump)
+                    .unwrap();
+                if record_trace && let Some(event) = event {
+                    trace.push((run.time(), action_l, event, run.state().to_vec()));
+                }
+                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
+                    // Guarantee violated
+                    branches += 1;
+                    trace!(
+                        "run violates a guarantee: processed {branches} branches in {:?}",
+                        start_time.elapsed()
+                    );
+                    return (
+                        Some(Vec::from_iter(
+                            oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                        )),
+                        record_trace.then_some(trace),
+                    );
+                } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                    run.fastforward(&bump);
+                    // Update DAG
+                    let a = u16::from(action_l.0) as usize;
+                    let node_a = dag_ids[a];
+                    restricted_ample.ones().for_each(|b| {
+                        if b != a {
+                            let node_b = dag_ids[b];
+                            // update_edge avoids creating duplicated edges
+                            let _ = dag
+                                .try_update_edge(node_a, node_b, ())
+                                .expect("edge must be valid");
+                        }
+                    });
+                    // NOTE: Ample sets, in this case, are closed under intersection,
+                    // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
+                    // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
+                    // NOTE: restricted_ample is **not** an ample set,
+                    // and ample is not necessarily the smallest ample set containing restricted_ample!
+                    amples
+                        .iter_mut()
+                        .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
+                    // continue loop with same run and oracle
+                    continue 'l;
+                } else {
+                    // Branch satisfies all guarantees and can be discarded even though execution is incomplete
+                    branches += 1;
+                    recycling_sets.push(amples);
+                    recycling_dags.push(dag);
+                    // No transitions left in this branch so exit transitions iteration
                 }
             } else if run.cs.is_waiting(&bump) {
                 run.time_tick();
@@ -795,7 +798,7 @@ impl TransitionSystem {
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
 #[derive(Debug, Clone)]
-pub struct TransitionSystemRun<'def> {
+struct TransitionSystemRun<'def> {
     ts: &'def TransitionSystem,
     cs: ChannelSystemRun<'def>,
     vals: Vec<Vec<Val>>,
@@ -870,7 +873,7 @@ impl<'def> TransitionSystemRun<'def> {
         {
             while let Some((action, post_state)) = self
                 .cs
-                .nosync_possible_transitions_pg(pg_id)
+                .cached_possible_transitions_pg(pg_id)
                 .expect("pg exists")
                 // .flat_map(|(action, post_states)| post_states.map(move |post| (action, post)))
                 .filter_map(|(action, post_states)| {
@@ -910,12 +913,6 @@ impl<'def> TransitionSystemRun<'def> {
             }
         }
         None
-    }
-
-    /// Returns last event processed by model.
-    #[inline]
-    pub fn last_event(&self) -> Option<Channel> {
-        self.last_event
     }
 
     #[inline]
@@ -986,7 +983,7 @@ impl<'def> TransitionSystemRun<'def> {
         }
     }
 
-    fn ample(&self, amples: &mut [(FixedBitSet, bool)]) {
+    fn ample<'a>(&'a self, amples: &'a mut [(FixedBitSet, bool)]) {
         self.ts
             .pg_list
             .iter()
@@ -1015,17 +1012,10 @@ impl<'def> TransitionSystemRun<'def> {
             .for_each(|(_, invalidate)| *invalidate = false);
     }
 
-    fn ample_pg(&self, pg_id: PgId, ample_pg: &mut FixedBitSet) {
+    fn ample_pg<'a>(&'a self, pg_id: PgId, ample_pg: &'a mut FixedBitSet) {
         ample_pg.clear();
         let mut ample_self = false;
-        for action in self
-            .cs
-            .program_graph(pg_id)
-            .unwrap()
-            .nosync_active_actions()
-            .unwrap()
-        {
-            let action = Action(pg_id, action);
+        for action in self.cs.cached_active_actions_pg(pg_id).unwrap() {
             if let Some((channel, message)) = self.ts.cs.communication(action) {
                 if self.cs.check_message(channel, message) {
                     ample_self = true;
@@ -1102,10 +1092,11 @@ impl<'def> TransitionSystemRun<'def> {
                     .cs
                     .program_graph(pg_id)
                     .unwrap()
-                    .nosync_possible_transitions()
-                    .unwrap()
+                    .cached_possible_transitions()
                     .flat_map(|(action, transitions)| {
-                        transitions.map(move |post| (Action(pg_id, action), Location(pg_id, post)))
+                        transitions
+                            .iter()
+                            .map(move |post| (Action(pg_id, action), Location(pg_id, *post)))
                     });
                 if let Some((action, post)) = transitions.next()
                     && self.ts.cs.communication(action).is_none()

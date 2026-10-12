@@ -1,6 +1,8 @@
 use std::{
     hash::{Hash, Hasher},
+    mem,
     ops::{Bound, RangeBounds},
+    rc::Rc,
 };
 
 use bumpalo::{Bump, collections::CollectIn};
@@ -24,6 +26,7 @@ pub struct ProgramGraphRun<'def> {
     vars: Vec<Val>,
     clocks: Vec<Time>,
     def: &'def ProgramGraph,
+    cache: Rc<Vec<(Action, Vec<Location>)>>,
 }
 
 impl<'def> PartialEq for ProgramGraphRun<'def> {
@@ -47,12 +50,15 @@ impl<'def> Hash for ProgramGraphRun<'def> {
 impl<'def> ProgramGraphRun<'def> {
     /// Create a new executions from a given PG definition.
     pub fn new(program_graph: &'def ProgramGraph) -> Self {
-        Self {
+        let mut pg = Self {
             current_states: program_graph.initial_states.clone(),
             vars: program_graph.vars.clone(),
             clocks: vec![0; program_graph.clocks as usize],
             def: program_graph,
-        }
+            cache: Rc::new(Vec::new()),
+        };
+        pg.refresh_cache();
+        pg
     }
 
     /// Returns the current location.
@@ -120,6 +126,40 @@ impl<'def> ProgramGraphRun<'def> {
                     }),
                 )
             })
+    }
+
+    fn refresh_cache(
+        &mut self,
+        // bump: &'a Bump,
+        // ) -> impl Iterator<Item = (Action, impl Iterator<Item = &'a [Location]>)> {
+    ) {
+        let mut rc = Rc::new(Vec::new());
+        mem::swap(&mut rc, &mut self.cache);
+        if let Some(vec) = Rc::get_mut(&mut rc) {
+            vec.clear();
+            vec.extend(
+                self.nosync_possible_transitions()
+                    .unwrap()
+                    // .map(|(a, trans)| (a, Vec::from_iter(trans.flatten()))),
+                    .map(|(a, trans)| (a, Vec::from_iter(trans))),
+            );
+            self.cache = rc;
+        } else {
+            self.cache = Rc::new(Vec::from_iter(
+                self.nosync_possible_transitions()
+                    .unwrap()
+                    // .map(|(a, trans)| (a, Vec::from_iter(trans.flatten()))),
+                    .map(|(a, trans)| (a, Vec::from_iter(trans))),
+            ))
+        }
+    }
+
+    pub fn cached_possible_transitions(
+        &self,
+        // bump: &'a Bump,
+        // ) -> impl Iterator<Item = (Action, impl Iterator<Item = &'a [Location]>)> {
+    ) -> impl Iterator<Item = (Action, &[Location])> {
+        self.cache.iter().map(|(a, posts)| (*a, posts.as_slice()))
     }
 
     /// Iterates over all transitions that can be admitted in the current state,
@@ -199,6 +239,14 @@ impl<'def> ProgramGraphRun<'def> {
         } else {
             Err(PgError::Sync)
         }
+    }
+
+    // pub fn cached_active_actions<'a>(&'a self, bump: &'a Bump) -> impl Iterator<Item = Action> {
+    pub fn cached_active_actions(&self) -> impl Iterator<Item = Action> {
+        // self.cached_possible_transitions(bump)
+        // .filter_map(|(action, mut trans)| trans.next().is_some().then_some(action))
+        self.cached_possible_transitions()
+            .filter_map(|(action, trans)| (!trans.is_empty()).then_some(action))
     }
 
     fn check_transition(
@@ -333,6 +381,7 @@ impl<'def> ProgramGraphRun<'def> {
             return Err(PgError::Communication(action));
         }
         self.current_states.copy_from_slice(post_states);
+        self.refresh_cache();
         Ok(())
     }
 
@@ -358,6 +407,7 @@ impl<'def> ProgramGraphRun<'def> {
     pub fn wait(&mut self, delta: Time) -> Result<(), PgError> {
         if self.can_wait(delta) {
             self.clocks.iter_mut().for_each(|t| *t += delta);
+            self.refresh_cache();
             Ok(())
         } else {
             Err(PgError::Invariant)
@@ -379,6 +429,7 @@ impl<'def> ProgramGraphRun<'def> {
                     .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], Some(rng)))
                     .collect();
                 self.current_states.copy_from_slice(post_states);
+                self.refresh_cache();
                 Ok(vals)
             } else {
                 Err(PgError::NotSend(action))
@@ -412,6 +463,7 @@ impl<'def> ProgramGraphRun<'def> {
                         *self.vars.get_mut(var.0 as usize).expect("variable exists") = val
                     });
                     self.current_states.copy_from_slice(post_states);
+                    self.refresh_cache();
                     Ok(())
                 } else {
                     Err(PgError::TypeMismatch)

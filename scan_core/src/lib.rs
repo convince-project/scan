@@ -34,7 +34,7 @@ use std::{
 use thiserror::Error;
 pub use time::*;
 pub use tracer::{TraceWriter, Tracer};
-pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
+pub use transition_system::{Atom, TransitionSystem};
 
 const TEMP: &str = ".temp";
 const SUCCESSES: &str = "successes";

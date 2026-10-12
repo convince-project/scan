@@ -133,6 +133,18 @@ impl<'def> ChannelSystemRun<'def> {
             .flat_map(move |pg_id| self.nosync_active_actions_pg(pg_id).expect("pg exists"))
     }
 
+    pub fn cached_active_actions_pg<'a>(
+        &'a self,
+        pg_id: PgId,
+        // bump: &'a Bump,
+    ) -> Result<impl Iterator<Item = Action>, CsError> {
+        self.program_graph(pg_id).map(move |pg| {
+            pg.cached_active_actions()
+                // pg.cached_active_actions(bump)
+                .map(move |action| Action(pg_id, action))
+        })
+    }
+
     /// Iterates over all transitions that can be admitted in the current state for the [`ProgramGraph`] associated to the given [`PgId`].
     ///
     /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
@@ -192,6 +204,33 @@ impl<'def> ChannelSystemRun<'def> {
                     }
                 })
             })
+    }
+
+    pub fn cached_possible_transitions_pg<'a>(
+        &'a self,
+        pg_id: PgId,
+        // bump: &'a Bump,
+    ) -> Result<
+        // impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)>,
+        impl Iterator<Item = (Action, impl Iterator<Item = Location>)>,
+        CsError,
+    > {
+        self.program_graph(pg_id).map(|pg| {
+            pg.cached_possible_transitions()
+                // pg.cached_possible_transitions(bump)
+                .filter_map(move |(action, post)| {
+                    let action = Action(pg_id, action);
+                    if let Some((channel, message)) = self.def.communication(action)
+                        && !self.check_message(channel, message)
+                    {
+                        None
+                    } else {
+                        let post = post.iter().map(move |loc| Location(pg_id, *loc));
+                        // post.map(move |loc| loc.iter().map(move |loc| Location(pg_id, *loc)));
+                        Some((action, post))
+                    }
+                })
+        })
     }
 
     pub fn nosync_active_actions_pg(
