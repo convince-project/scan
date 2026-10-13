@@ -23,8 +23,8 @@ use std::{
 pub struct ChannelSystemRun<'def> {
     rng: SmallRng,
     time: Time,
-    message_queue: Vec<VecDeque<Val>>,
-    program_graphs: Vec<ProgramGraphRun<'def>>,
+    message_queue: Box<[VecDeque<Val>]>,
+    program_graphs: Box<[ProgramGraphRun<'def>]>,
     def: &'def ChannelSystem,
 }
 
@@ -62,15 +62,21 @@ impl<'def> ChannelSystemRun<'def> {
         ChannelSystemRun {
             rng: rand::make_rng(),
             time: 0,
-            program_graphs: Vec::from_iter(
-                cs.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
-            ),
-            message_queue: Vec::from_iter(cs.channels.iter().map(|(types, cap)| match cap {
-                ChannelCapacity::Queue(queue) => queue.map_or_else(VecDeque::new, |cap| {
-                    VecDeque::with_capacity(types.len() * cap)
-                }),
-                ChannelCapacity::Sink => VecDeque::new(),
-            })),
+            program_graphs: cs
+                .program_graphs
+                .iter()
+                .map(|pgdef| pgdef.new_instance())
+                .collect(),
+            message_queue: cs
+                .channels
+                .iter()
+                .map(|(types, cap)| match cap {
+                    ChannelCapacity::Queue(queue) => queue.map_or_else(VecDeque::new, |cap| {
+                        VecDeque::with_capacity(types.len() * cap)
+                    }),
+                    ChannelCapacity::Sink => VecDeque::new(),
+                })
+                .collect(),
             def: cs,
         }
     }
@@ -133,8 +139,8 @@ impl<'def> ChannelSystemRun<'def> {
             .flat_map(move |pg_id| self.nosync_active_actions_pg(pg_id).expect("pg exists"))
     }
 
-    pub fn cached_active_actions_pg<'a>(
-        &'a self,
+    pub fn cached_active_actions_pg(
+        &self,
         pg_id: PgId,
         // bump: &'a Bump,
     ) -> Result<impl Iterator<Item = Action>, CsError> {
@@ -206,8 +212,8 @@ impl<'def> ChannelSystemRun<'def> {
             })
     }
 
-    pub fn cached_possible_transitions_pg<'a>(
-        &'a self,
+    pub fn cached_possible_transitions_pg(
+        &self,
         pg_id: PgId,
         // bump: &'a Bump,
     ) -> Result<
@@ -356,7 +362,7 @@ impl<'def> ChannelSystemRun<'def> {
                     let (types, _) = &self.def.channels[channel.0 as usize];
                     let vals = self.message_queue[channel.0 as usize]
                         .drain(..types.len())
-                        .collect::<Vec<Val>>();
+                        .collect::<Box<[Val]>>();
                     self.program_graphs[pg_id.0 as usize]
                         .receive(
                             action.1,
@@ -364,7 +370,7 @@ impl<'def> ChannelSystemRun<'def> {
                                 .map(|loc| loc.1)
                                 .collect_in::<BumpVec<PgLocation>>(bump)
                                 .as_slice(),
-                            vals.as_slice(),
+                            vals.as_ref(),
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     EventType::Receive(vals)

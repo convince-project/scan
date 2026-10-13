@@ -268,9 +268,9 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, GetSize)]
 pub enum EventType {
     /// Sending a value to a channel.
-    Send(Vec<Val>),
+    Send(Box<[Val]>),
     /// Retrieving a value out of a channel.
-    Receive(Vec<Val>),
+    Receive(Box<[Val]>),
     /// Checking whether a channel is empty.
     ProbeEmptyQueue,
     /// Checking whether a channel is full.
@@ -322,18 +322,18 @@ pub enum ChannelCapacity {
 /// ```
 #[derive(Debug, Clone, GetSize)]
 pub struct ChannelSystem {
-    channels: Vec<(Vec<Type>, ChannelCapacity)>,
-    communications: Vec<Option<(Channel, Message)>>,
-    communications_pg_idxs: Vec<usize>,
-    program_graphs: Vec<ProgramGraph>,
+    channels: Box<[(Box<[Type]>, ChannelCapacity)]>,
+    communications: Box<[Option<(Channel, Message)>]>,
+    communications_pg_idxs: Box<[usize]>,
+    program_graphs: Box<[ProgramGraph]>,
     #[get_size(ignore)]
-    senders: Vec<FixedBitSet>,
+    senders: Box<[FixedBitSet]>,
     #[get_size(ignore)]
-    probe_empty_queues: Vec<FixedBitSet>,
+    probe_empty_queues: Box<[FixedBitSet]>,
     #[get_size(ignore)]
-    receivers: Vec<FixedBitSet>,
+    receivers: Box<[FixedBitSet]>,
     #[get_size(ignore)]
-    probe_full_queues: Vec<FixedBitSet>,
+    probe_full_queues: Box<[FixedBitSet]>,
 }
 
 impl ChannelSystem {
@@ -439,8 +439,8 @@ impl ChannelSystem {
     /// Returns the list of defined channels, given as the pair of their type and capacity
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
     #[inline]
-    pub fn channels(&self) -> &[(Vec<Type>, ChannelCapacity)] {
-        &self.channels
+    pub fn channels(&self) -> &[(Box<[Type]>, ChannelCapacity)] {
+        self.channels.as_ref()
     }
 
     /// Returns the type and capacity of the given channel
@@ -449,13 +449,15 @@ impl ChannelSystem {
     pub fn channel(&self, channel: Channel) -> Result<(&[Type], ChannelCapacity), CsError> {
         self.channels
             .get(channel.0 as usize)
-            .map(|(types, cap)| (types.as_slice(), *cap))
+            .map(|(types, cap)| (types.as_ref(), *cap))
             .ok_or(CsError::MissingChannel(channel))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use bumpalo::Bump;
+
     use super::*;
 
     #[test]
@@ -533,6 +535,7 @@ mod tests {
 
     #[test]
     fn add_communication() -> Result<(), CsError> {
+        let mut bump = Bump::new();
         let mut cs = ChannelSystemBuilder::new();
         let ch = cs.new_channel(vec![Type::Boolean], Some(1));
 
@@ -561,10 +564,11 @@ mod tests {
         let cs_def = cs.build();
         let mut cs = cs_def.new_instance();
         // assert_eq!(cs.possible_transitions().count(), 1);
-        assert_eq!(cs.def().communications_pg_idxs, vec![0, 2, 5]);
+        assert_eq!(cs.def().communications_pg_idxs.as_ref(), &[0, 2, 5]);
 
-        cs.transition(send, &[post1])?;
-        cs.transition(receive, &[post2])?;
+        cs.transition(send, &[post1], &bump)?;
+        bump.reset();
+        cs.transition(receive, &[post2], &bump)?;
         // assert_eq!(cs.possible_transitions().count(), 0);
         Ok(())
     }

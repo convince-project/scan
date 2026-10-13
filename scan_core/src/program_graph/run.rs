@@ -22,9 +22,9 @@ use crate::{BooleanExpr, Time, Val, program_graph::TimeRange};
 /// because only the internal state needs to be duplicated.
 #[derive(Debug, Clone)]
 pub struct ProgramGraphRun<'def> {
-    current_states: Vec<Location>,
-    vars: Vec<Val>,
-    clocks: Vec<Time>,
+    current_states: Box<[Location]>,
+    vars: Box<[Val]>,
+    clocks: Box<[Time]>,
     def: &'def ProgramGraph,
     cache: Rc<Vec<(Action, Vec<Location>)>>,
 }
@@ -53,7 +53,7 @@ impl<'def> ProgramGraphRun<'def> {
         let mut pg = Self {
             current_states: program_graph.initial_states.clone(),
             vars: program_graph.vars.clone(),
-            clocks: vec![0; program_graph.clocks as usize],
+            clocks: vec![0; program_graph.clocks as usize].into(),
             def: program_graph,
             cache: Rc::new(Vec::new()),
         };
@@ -419,7 +419,7 @@ impl<'def> ProgramGraphRun<'def> {
         action: Action,
         post_states: &[Location],
         rng: &'a mut R,
-    ) -> Result<Vec<Val>, PgError> {
+    ) -> Result<Box<[Val]>, PgError> {
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if self.active_transitions(action, post_states, &[]) {

@@ -663,14 +663,18 @@ impl ChannelSystemBuilder {
         assert_eq!(communications_pg_idxs.len(), program_graphs.len() + 1);
 
         let cs = ChannelSystem {
-            channels: self.channels,
-            communications,
-            communications_pg_idxs,
-            program_graphs,
-            senders: self.senders,
-            receivers: self.receivers,
-            probe_empty_queues: self.probe_empty_queues,
-            probe_full_queues: self.probe_full_queues,
+            channels: self
+                .channels
+                .into_iter()
+                .map(|(types, cap)| (types.into(), cap))
+                .collect(),
+            communications: communications.into(),
+            communications_pg_idxs: communications_pg_idxs.into(),
+            program_graphs: program_graphs.into(),
+            senders: self.senders.into(),
+            receivers: self.receivers.into(),
+            probe_empty_queues: self.probe_empty_queues.into(),
+            probe_full_queues: self.probe_full_queues.into(),
         };
 
         info!(

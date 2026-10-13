@@ -1,3 +1,4 @@
+use bumpalo::Bump;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::rngs::SmallRng;
 use rand::{SeedableRng, make_rng};
@@ -5,6 +6,7 @@ use scan_core::program_graph::*;
 use scan_core::*;
 
 fn autonomous_transition(c: &mut Criterion) {
+    let mut bump = Bump::new();
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let post = pg.new_location();
@@ -13,7 +15,8 @@ fn autonomous_transition(c: &mut Criterion) {
     let mut run = pg.new_instance();
     c.bench_function("possible transitions", |b| {
         b.iter(|| {
-            run.possible_transitions().for_each(|(_, trs)| {
+            bump.reset();
+            run.possible_transitions(&bump).for_each(|(_, trs)| {
                 trs.for_each(|post| {
                     let _ = post.count();
                 })
@@ -37,6 +40,7 @@ fn autonomous_transition(c: &mut Criterion) {
 }
 
 fn guard(c: &mut Criterion) {
+    let mut bump = Bump::new();
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let post = pg.new_location();
@@ -47,7 +51,8 @@ fn guard(c: &mut Criterion) {
     let mut run = pg.new_instance();
     c.bench_function("possible transitions with guard", |b| {
         b.iter(|| {
-            run.possible_transitions().for_each(|(_, trs)| {
+            bump.reset();
+            run.possible_transitions(&bump).for_each(|(_, trs)| {
                 trs.for_each(|post| {
                     let _ = post.count();
                 })
@@ -71,6 +76,7 @@ fn guard(c: &mut Criterion) {
 }
 
 fn effect(c: &mut Criterion) {
+    let mut bump = Bump::new();
     let mut pg = ProgramGraphBuilder::new();
     let pre = pg.new_initial_location();
     let post = pg.new_location();
@@ -83,7 +89,8 @@ fn effect(c: &mut Criterion) {
     let mut run = pg.new_instance();
     c.bench_function("possible transitions with effect", |b| {
         b.iter(|| {
-            run.possible_transitions().for_each(|(_, trs)| {
+            bump.reset();
+            run.possible_transitions(&bump).for_each(|(_, trs)| {
                 trs.for_each(|post| {
                     let _ = post.count();
                 })
@@ -111,10 +118,11 @@ criterion_main!(small_benches);
 
 #[inline(always)]
 fn run_to_completion(pg: &mut ProgramGraphRun) {
+    let bump = Bump::new();
     let mut rng = SmallRng::from_seed([0; 32]);
 
     while let Some((action, post)) = pg
-        .possible_transitions()
+        .possible_transitions(&bump)
         .filter_map(|(a, iter)| {
             iter.into_iter()
                 .map(|v| v.last())
@@ -209,6 +217,7 @@ fn counter_pg() -> ProgramGraphBuilder {
 }
 
 fn possible_transitions(c: &mut Criterion) {
+    let mut bump = Bump::new();
     let pgs = [
         (simple_pg(), "simple pg"),
         (condition_pg(), "condition pg"),
@@ -218,11 +227,12 @@ fn possible_transitions(c: &mut Criterion) {
     for (pg, name) in pgs.into_iter() {
         let pg = pg.build();
         let pg = pg.new_instance();
+        bump.reset();
         c.bench_with_input(
             BenchmarkId::new("possible transitions", name),
             &pg,
             |b, pg| {
-                b.iter(|| pg.possible_transitions().count());
+                b.iter(|| pg.possible_transitions(&bump).count());
             },
         );
     }
