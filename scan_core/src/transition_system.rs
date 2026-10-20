@@ -1,30 +1,99 @@
-use std::hash::{Hash, Hasher};
+mod run;
+
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use bumpalo::Bump;
-use bumpalo::collections::CollectIn;
 use fixedbitset::FixedBitSet;
 use log::{info, trace};
 use petgraph::acyclic::Acyclic;
 use petgraph::data::Build;
 use petgraph::graph::DiGraph;
+use rand::make_rng;
 use rand::rngs::SmallRng;
-use rand::seq::IteratorRandom;
-use rand::{RngExt, SeedableRng, make_rng};
 use thiserror::Error;
 
 use crate::channel_system::{
-    Action, Channel, ChannelSystem, ChannelSystemRun, CsError, Event, EventType, Location, Message,
-    PgId, PgIndex,
+    Action, Channel, ChannelSystem, CsError, Event, EventType, PgId, PgIndex,
 };
 use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
+use run::TransitionSystemRun;
 
 type Dag = Acyclic<DiGraph<(), (), PgIndex>>;
 
-type Trace = Vec<(Time, Action, Event, Vec<Vec<Val>>)>;
+/// A Channel System event related to a channel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnedEvent {
+    /// The PG producing the event in the course of a transition.
+    pub pg_id: PgId,
+    /// The channel involved in the event.
+    pub channel: Channel,
+    /// The type of event produced.
+    pub event_type: OwnedEventType,
+}
+
+impl From<Event<'_>> for OwnedEvent {
+    #[inline]
+    fn from(value: Event<'_>) -> Self {
+        OwnedEvent {
+            pg_id: value.pg_id,
+            channel: value.channel,
+            event_type: value.event_type.into(),
+        }
+    }
+}
+
+impl<'a> From<&'a OwnedEvent> for Event<'a> {
+    #[inline]
+    fn from(value: &'a OwnedEvent) -> Self {
+        Event {
+            pg_id: value.pg_id,
+            channel: value.channel,
+            event_type: (&value.event_type).into(),
+        }
+    }
+}
+
+/// A Channel System event type related to a channel.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OwnedEventType {
+    /// Sending a value to a channel.
+    Send(Box<[Val]>),
+    /// Retrieving a value out of a channel.
+    Receive(Box<[Val]>),
+    /// Checking whether a channel is empty.
+    ProbeEmptyQueue,
+    /// Checking whether a channel is full.
+    ProbeFullQueue,
+}
+
+impl<'a> From<&'a OwnedEventType> for EventType<'a> {
+    #[inline]
+    fn from(value: &'a OwnedEventType) -> Self {
+        match value {
+            OwnedEventType::Send(vals) => EventType::Send(vals.as_ref()),
+            OwnedEventType::Receive(vals) => EventType::Receive(vals.as_ref()),
+            OwnedEventType::ProbeEmptyQueue => EventType::ProbeEmptyQueue,
+            OwnedEventType::ProbeFullQueue => EventType::ProbeFullQueue,
+        }
+    }
+}
+
+impl From<EventType<'_>> for OwnedEventType {
+    #[inline]
+    fn from(value: EventType<'_>) -> Self {
+        match value {
+            EventType::Send(vals) => OwnedEventType::Send(vals.to_owned().into_boxed_slice()),
+            EventType::Receive(vals) => OwnedEventType::Receive(vals.to_owned().into_boxed_slice()),
+            EventType::ProbeEmptyQueue => OwnedEventType::ProbeEmptyQueue,
+            EventType::ProbeFullQueue => OwnedEventType::ProbeFullQueue,
+        }
+    }
+}
+
+type Trace<'a> = Vec<(Time, Action, OwnedEvent, Vec<Box<[Val]>>)>;
 
 /// Errors produced by a [`TransitionSystem`].
 #[derive(Debug, Clone, Copy, Error)]
@@ -128,19 +197,12 @@ impl TransitionSystem {
 
     /// Generates an executable run of the model.
     fn new_run(&self) -> TransitionSystemRun<'_> {
-        let mut vals = self.vals.clone();
-        vals.shrink_to_fit();
         info!(
             "create new transition system run with {} ports and {} predicates",
             self.ports.len(),
             self.predicates.len(),
         );
-        TransitionSystemRun {
-            ts: self,
-            cs: self.cs.new_instance(),
-            vals,
-            last_event: None,
-        }
+        TransitionSystemRun::new(self)
     }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
@@ -165,14 +227,17 @@ impl TransitionSystem {
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
-            } else if run
-                .montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
-                .is_some()
+            } else if let Some((_action, event)) =
+                run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
             {
-                labels.clear();
-                labels.extend(run.labels());
-                oracle.update_state(&labels);
-            } else if run.cs.is_waiting(&bump) {
+                if self.ports.binary_search(&event.channel).is_ok()
+                    && matches!(event.event_type, EventType::Send(_))
+                {
+                    labels.clear();
+                    labels.extend(run.labels());
+                    oracle.update_state(&labels);
+                }
+            } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
             } else {
@@ -210,11 +275,15 @@ impl TransitionSystem {
             if let Some((action, event)) =
                 run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
             {
-                tracer.trace(model_data, action, &event, run.time(), run.state());
-                labels.clear();
-                labels.extend(run.labels());
-                oracle.update_state(&labels);
-            } else if run.cs.is_waiting(&bump) {
+                tracer.trace(model_data, action, event, run.time(), run.state());
+                if self.ports.binary_search(&event.channel).is_ok()
+                    && matches!(event.event_type, EventType::Send(_))
+                {
+                    labels.clear();
+                    labels.extend(run.labels());
+                    oracle.update_state(&labels);
+                }
+            } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
             } else {
@@ -225,43 +294,12 @@ impl TransitionSystem {
         Some(Vec::from_iter(oracle.final_output_guarantees()))
     }
 
-    // /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
-    // pub(crate) fn experiment<O: Oracle>(
-    //     &mut self,
-    //     mut oracle: O,
-    //     running: Arc<AtomicBool>,
-    // ) -> RunOutcome {
-    //     // reuse vector to avoid allocations
-    //     let mut labels = Vec::from_iter(self.labels());
-    //     // Initialize oracle with TS initial state
-    //     oracle.update_state(&labels);
-    //     while oracle.output_guarantees().any(|b| b.is_none()) {
-    //         self.transition();
-    //         if !running.load(Ordering::Relaxed) {
-    //             trace!("run stopped");
-    //             return None;
-    //         } else if self.last_event().is_some() {
-    //             labels.clear();
-    //             labels.extend(self.labels());
-    //             oracle.update_state(&labels);
-    //         } else if self.cs.is_waiting() {
-    //             self.time_tick();
-    //             oracle.update_time(self.time());
-    //         } else {
-    //             break;
-    //         }
-    //     }
-    //     trace!("run complete");
-    //     let verified = Vec::from_iter(oracle.final_output_guarantees());
-    //     Some(verified)
-    // }
-
-    pub(crate) fn experiment_exhaustive<O: Oracle + Clone>(
+    pub(crate) fn experiment_exhaustive<'a, O: Oracle + Clone>(
         &self,
         mut oracle: O,
         record_trace: bool,
         running: Arc<AtomicBool>,
-    ) -> (RunOutcome, Option<Trace>) {
+    ) -> (RunOutcome, Option<Trace<'a>>) {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
@@ -303,21 +341,21 @@ impl TransitionSystem {
                 let mut transitions = ample
                     .ones()
                     .flat_map(|b| {
-                        run.cs
-                            .cached_possible_transitions_pg(PgId(b as u16))
+                        run.possible_transitions_pg(PgId(b as PgIndex))
                             .unwrap()
-                            .flat_map(|(action, transitions)| {
-                                transitions.map(move |post| (action, post))
+                            .flat_map(|(action, mut transitions)| {
+                                // NOTE WARN FIXME TODO: hardcode no-sync case
+                                transitions.next().unwrap().map(move |post| (action, post))
                             })
                     })
                     .peekable();
                 // There must be active transitions because we checked earlier
                 assert!(transitions.peek().is_some());
                 'w: while let Some((action, post)) = transitions.next() {
+                    bump.reset();
                     if transitions.peek().is_some() {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
-                        bump.reset();
                         branch_run
                             .transition(&mut branch_oracle, action, &[post], &bump)
                             .unwrap();
@@ -342,7 +380,7 @@ impl TransitionSystem {
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
-                            let a = u16::from(action.0) as usize;
+                            let a = u16::from(action.program_gramph_id()) as usize;
                             let mut branch_amples = if let Some(mut set) = recycling_sets.pop() {
                                 // clone amples into recycled set;
                                 set.iter_mut().zip(amples.iter()).for_each(
@@ -373,7 +411,7 @@ impl TransitionSystem {
                         bump.reset();
                         let event = run.transition(&mut oracle, action, &[post], &bump).unwrap();
                         if record_trace && let Some(event) = event {
-                            trace.push((run.time(), action, event, run.state().to_vec()));
+                            trace.push((run.time(), action, event.into(), run.state().to_owned()));
                         }
                         if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                             // Guarantee violated
@@ -392,7 +430,7 @@ impl TransitionSystem {
                             bump.reset();
                             run.fastforward(&bump);
                             // Update DAG
-                            let a = u16::from(action.0) as usize;
+                            let a = u16::from(action.program_gramph_id()) as usize;
                             // NOTE: Ample sets, in this case, are closed under intersection,
                             // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
                             // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
@@ -411,7 +449,7 @@ impl TransitionSystem {
                         }
                     }
                 }
-            } else if run.cs.is_waiting(&bump) {
+            } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
                 if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
@@ -490,7 +528,7 @@ impl TransitionSystem {
         mut oracle: O,
         record_trace: bool,
         running: Arc<AtomicBool>,
-    ) -> (RunOutcome, Option<Trace>) {
+    ) -> (RunOutcome, Option<Trace<'_>>) {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
@@ -573,12 +611,10 @@ impl TransitionSystem {
             if let Some(ample) = ample {
                 assert!(!restricted_ample.is_clear());
                 assert!(restricted_ample.is_subset(ample));
-                bump.reset();
                 let mut transitions = restricted_ample
                     .ones()
                     .flat_map(|b| {
-                        run.cs
-                            .cached_possible_transitions_pg(PgId(b as u16))
+                        run.possible_transitions_pg(PgId(b as u16))
                             .unwrap()
                             .flat_map(|(action, transitions)| {
                                 transitions.map(move |post| (action, post))
@@ -587,12 +623,15 @@ impl TransitionSystem {
                     .peekable();
                 // There must be active transitions because we checked earlier
                 assert!(transitions.peek().is_some());
-                'w: while let Some((action, post)) = transitions.next() {
+                'w: while let Some((action, mut post)) = transitions.next() {
                     action_l = Some(action);
+                    // NOTE WARN FIXME TODO: hardcode no-sync case
+                    let post = post.next().unwrap();
                     post_l = Some(post);
                     if transitions.peek().is_some() {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
+                        bump.reset();
                         branch_run
                             .transition(&mut branch_oracle, action, &[post], &bump)
                             .unwrap();
@@ -615,6 +654,7 @@ impl TransitionSystem {
                                 record_trace.then_some(trace),
                             );
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
+                            bump.reset();
                             branch_run.fastforward(&bump);
                             // Prepare new DAG
                             let mut branch_dag = if let Some(mut rec_dag) = recycling_dags.pop() {
@@ -623,7 +663,7 @@ impl TransitionSystem {
                             } else {
                                 dag.clone()
                             };
-                            let a = u16::from(action.0) as usize;
+                            let a = u16::from(action.program_gramph_id()) as usize;
                             let node_a = dag_ids[a];
                             restricted_ample.ones().for_each(|b| {
                                 if b != a {
@@ -666,6 +706,7 @@ impl TransitionSystem {
                 assert!(transitions.next().is_none());
                 drop(transitions);
                 let action = action_l.expect("active transition");
+                bump.reset();
                 let event = run
                     .transition(
                         &mut oracle,
@@ -675,7 +716,7 @@ impl TransitionSystem {
                     )
                     .unwrap();
                 if record_trace && let Some(event) = event {
-                    trace.push((run.time(), action, event, run.state().to_vec()));
+                    trace.push((run.time(), action, event.into(), run.state().to_vec()));
                 }
                 if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                     // Guarantee violated
@@ -691,9 +732,10 @@ impl TransitionSystem {
                         record_trace.then_some(trace),
                     );
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
+                    bump.reset();
                     run.fastforward(&bump);
                     // Update DAG
-                    let a = u16::from(action.0) as usize;
+                    let a = u16::from(action.program_gramph_id()) as usize;
                     let node_a = dag_ids[a];
                     restricted_ample.ones().for_each(|b| {
                         if b != a {
@@ -721,7 +763,7 @@ impl TransitionSystem {
                     recycling_dags.push(dag);
                     // No transitions left in this branch so exit transitions iteration
                 }
-            } else if run.cs.is_waiting(&bump) {
+            } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
                 if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
@@ -796,330 +838,5 @@ impl TransitionSystem {
             start_time.elapsed()
         );
         (None, None)
-    }
-}
-
-/// Transition system model based on a [`ChannelSystem`].
-///
-/// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
-/// and determining a set of predicates.
-#[derive(Debug, Clone)]
-struct TransitionSystemRun<'def> {
-    ts: &'def TransitionSystem,
-    cs: ChannelSystemRun<'def>,
-    vals: Vec<Vec<Val>>,
-    last_event: Option<Channel>,
-}
-
-impl<'def> PartialEq for TransitionSystemRun<'def> {
-    fn eq(&self, other: &Self) -> bool {
-        self.cs == other.cs && self.vals == other.vals && self.last_event == other.last_event
-    }
-}
-
-impl<'def> Eq for TransitionSystemRun<'def> {}
-
-impl<'def> Hash for TransitionSystemRun<'def> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.cs.hash(state);
-        self.vals.hash(state);
-        self.last_event.hash(state);
-    }
-}
-
-impl<'def> TransitionSystemRun<'def> {
-    fn montecarlo_transition<O: Oracle, R: RngExt>(
-        &mut self,
-        oracle: &mut O,
-        pg_list: &mut [PgId],
-        rng: &mut R,
-        bump: &Bump,
-    ) -> Option<(Action, Event)> {
-        // Setting pgs_left as length resets the queue
-        let mut pgs_left = pg_list.len();
-        while pgs_left > 0 {
-            // Select random pg within 0..pgs_left
-            let pg_select = rng.random_range(0..pgs_left);
-            let pg_id = pg_list[pg_select];
-            // Execute randomly chosen transitions on the picked PG until an event is generated,
-            // or no more transition is possible
-            // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
-            // Hopefully it will be possible to treat all cases in a general way eventually.
-            if let Some((action, event)) = self.montecarlo_transition_pg(pg_id, oracle, rng, bump) {
-                return Some((action, event));
-            } else {
-                // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
-                // Decrease the length of the queue (so that selected element is removed)
-                pgs_left -= 1;
-                pg_list.swap(pg_select, pgs_left);
-            }
-        }
-        None
-    }
-
-    fn montecarlo_transition_pg<O: Oracle, R: RngExt>(
-        &mut self,
-        pg_id: PgId,
-        oracle: &mut O,
-        rng: &mut R,
-        bump: &Bump,
-    ) -> Option<(Action, Event)> {
-        let mut rng_extra = SmallRng::from_rng(rng);
-        // Execute randomly chosen transitions on the picked PG until an event is generated,
-        // or no more transition is possible
-        // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
-        // Hopefully it will be possible to treat all cases in a general way eventually.
-        if self
-            .cs
-            .program_graph(pg_id)
-            .expect("pg exists")
-            .current_states()
-            .len()
-            == 1
-        {
-            while let Some((action, post_state)) = self
-                .cs
-                .cached_possible_transitions_pg(pg_id)
-                .expect("pg exists")
-                // .flat_map(|(action, post_states)| post_states.map(move |post| (action, post)))
-                .filter_map(|(action, post_states)| {
-                    post_states.choose(&mut rng_extra).map(|loc| (action, loc))
-                })
-                .choose(rng)
-            {
-                let event = self
-                    .transition(oracle, action, &[post_state], bump)
-                    .expect("successful transition");
-                if event.is_some() {
-                    return event.map(|ev| (action, ev));
-                }
-            }
-        } else {
-            use bumpalo::collections::Vec as BumpVec;
-
-            while let Some((action, post_states)) = self
-                .cs
-                .possible_transitions_pg(pg_id, bump)
-                .expect("pg exists")
-                .filter_map(|(action, post_states)| {
-                    post_states
-                        .map(|locs| locs.choose(&mut rng_extra))
-                        .collect_in::<Option<BumpVec<Location>>>(bump)
-                        // .collect::<Option<Vec<Location>>>()
-                        .map(|locs| (action, locs))
-                })
-                .choose(rng)
-            {
-                let event = self
-                    .transition(oracle, action, post_states.as_slice(), bump)
-                    .expect("successful transition");
-                if event.is_some() {
-                    return event.map(|ev| (action, ev));
-                }
-            }
-        }
-        None
-    }
-
-    #[inline]
-    fn time(&self) -> Time {
-        self.cs.time()
-    }
-
-    #[inline]
-    fn time_tick(&mut self) {
-        self.cs.wait(1).expect("time error")
-    }
-
-    fn labels(&self) -> impl Iterator<Item = bool> {
-        self.ts.predicates.iter().map(|prop| {
-            prop.eval::<SmallRng>(
-                &|port| match port {
-                    Atom::State(channel, idx) => {
-                        let port_idx = self
-                            .ts
-                            .ports
-                            .binary_search(&channel)
-                            .expect("port must exist and be initialized");
-                        self.vals[port_idx][idx]
-                    }
-                    Atom::Event(event_channel) => Val::Boolean(
-                        self.last_event
-                            .as_ref()
-                            .is_some_and(|&channel| channel == event_channel),
-                    ),
-                },
-                None,
-            )
-        })
-    }
-
-    #[inline]
-    fn state(&self) -> &[Vec<Val>] {
-        &self.vals
-    }
-
-    pub(crate) fn transition<'a, O: Oracle>(
-        &'a mut self,
-        oracle: &mut O,
-        action: Action,
-        post: &[Location],
-        bump: &'a Bump,
-    ) -> Result<Option<Event>, CsError> {
-        let last_event = self
-            .cs
-            .transition(action, post, bump)?
-            .map(|event| (action, event));
-        if let Some((_, event)) = last_event {
-            if let EventType::Send(ref vals) = event.event_type
-                && let Ok(index) = self.ts.ports.binary_search(&event.channel)
-            {
-                // Since we have to update old values,
-                // the vectors are already allocated and their len is always the same.
-                // Copying from slice should be faster than cloning.
-                self.vals[index].copy_from_slice(vals);
-                let labels = bumpalo::collections::Vec::from_iter_in(self.labels(), bump);
-                oracle.update_state(&labels);
-            }
-            self.last_event = Some(event.channel);
-            Ok(Some(event))
-        } else {
-            self.last_event = None;
-            Ok(None)
-        }
-    }
-
-    fn ample<'a>(&'a self, amples: &'a mut [(FixedBitSet, bool)]) {
-        self.ts
-            .pg_list
-            .iter()
-            .zip(amples.iter_mut())
-            .filter(|(_pg_id, (_set, invalidate))| *invalidate)
-            .for_each(|(pg_id, (set, _))| self.ample_pg(*pg_id, set));
-
-        for i in 0..amples.len() {
-            // skip j == i
-            for j in 0..amples.len() {
-                // only consider invalid j_set's
-                if i != j
-                    && let Ok([(i_set, _), (j_set, true)]) = amples.get_disjoint_mut([i, j])
-                    && j_set.contains(i)
-                {
-                    let j_bit = j_set[j];
-                    j_set.set(i, false);
-                    j_set.union_with(i_set);
-                    j_set.set(j, j_bit);
-                }
-            }
-        }
-
-        amples
-            .iter_mut()
-            .for_each(|(_, invalidate)| *invalidate = false);
-    }
-
-    fn ample_pg<'a>(&'a self, pg_id: PgId, ample_pg: &'a mut FixedBitSet) {
-        ample_pg.clear();
-        let mut ample_self = false;
-        for action in self.cs.cached_active_actions_pg(pg_id).unwrap() {
-            if let Some((channel, message)) = self.ts.cs.communication(action) {
-                if self.cs.check_message(channel, message) {
-                    ample_self = true;
-                    match message {
-                        Message::Send if self.ts.ports.contains(&channel) => {
-                            // Channel is a port so action is not stutter
-                            ample_pg.insert_range(..);
-                            break;
-                        }
-                        Message::Send => {
-                            ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
-                            // NOTE: If an execution fragment has a ProbeEmptyQueue action on a channel that is not initially empty,
-                            // then it must be preceded by a Receive action;
-                            // so, if the channel is not empty and Receive actions belong to the ample set, ProbeEmptyQueue does not need to belong to the ample set.
-                            // Otherwise, we add ProbeEmptyQueue actions to the ample set.
-                            if self.cs.is_empty(channel)
-                                || !ample_pg
-                                    .is_superset(self.ts.cs.receivers_from_set(channel).unwrap())
-                            {
-                                ample_pg
-                                    .union_with(self.ts.cs.probe_empty_queue_set(channel).unwrap());
-                            }
-                        }
-                        Message::ProbeEmptyQueue => {
-                            // Channel is empty
-                            ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
-                        }
-                        Message::Receive => {
-                            // Channel is not empty
-                            ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
-                        }
-                        Message::ProbeFullQueue => todo!(),
-                    }
-                } else {
-                    // non-active action is not added to ample set,
-                    // but ample set must contain all actions which could potentially activate it.
-                    // Probes (empty/full-queue) never need to be added
-                    match message {
-                        Message::Send => {
-                            ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
-                            unreachable!("send actions are always possible");
-                        }
-                        Message::ProbeEmptyQueue => {
-                            // Channel is not empty
-                            ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
-                        }
-                        Message::Receive => {
-                            // Channel is empty
-                            ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
-                        }
-                        Message::ProbeFullQueue => todo!(),
-                    }
-                }
-            } else {
-                ample_self = true;
-            }
-        }
-        ample_pg.set(u16::from(pg_id) as usize, ample_self);
-    }
-
-    #[inline]
-    fn fastforward<'a>(&'a mut self, bump: &'a Bump) {
-        for &pg_id in &self.ts.pg_list {
-            self.fastforward_pg(pg_id, bump);
-        }
-    }
-
-    // Resolves tsr steps made of non-communication transition and pushes them to the stack
-    fn fastforward_pg<'a>(&'a mut self, pg_id: PgId, bump: &'a Bump) {
-        loop {
-            let choice;
-            {
-                let mut transitions = self
-                    .cs
-                    .program_graph(pg_id)
-                    .unwrap()
-                    .cached_possible_transitions()
-                    .flat_map(|(action, transitions)| {
-                        transitions
-                            .iter()
-                            .map(move |post| (Action(pg_id, action), Location(pg_id, *post)))
-                    });
-                if let Some((action, post)) = transitions.next()
-                    && self.ts.cs.communication(action).is_none()
-                    && transitions.next().is_none()
-                {
-                    choice = Some((action, post));
-                } else {
-                    choice = None;
-                }
-            }
-            if let Some((action, post)) = choice {
-                self.cs
-                    .transition(action, &[post], bump)
-                    .expect("transition must succeed");
-            } else {
-                break;
-            }
-        }
     }
 }

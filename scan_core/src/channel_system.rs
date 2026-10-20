@@ -164,7 +164,14 @@ pub struct Location(pub(crate) PgId, pub(crate) PgLocation);
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Action(pub(crate) PgId, pub(crate) PgAction);
+pub struct Action(PgId, PgAction);
+
+impl Action {
+    #[inline]
+    pub fn program_gramph_id(&self) -> PgId {
+        self.0
+    }
+}
 
 /// An indexing object for typed variables in a CS.
 ///
@@ -254,23 +261,23 @@ pub enum CsError {
 }
 
 /// A Channel System event related to a channel.
-#[derive(Debug, Clone, PartialEq, GetSize)]
-pub struct Event {
+#[derive(Debug, Clone, Copy, PartialEq, GetSize)]
+pub struct Event<'a> {
     /// The PG producing the event in the course of a transition.
     pub pg_id: PgId,
     /// The channel involved in the event.
     pub channel: Channel,
     /// The type of event produced.
-    pub event_type: EventType,
+    pub event_type: EventType<'a>,
 }
 
 /// A Channel System event type related to a channel.
-#[derive(Debug, Clone, PartialEq, GetSize)]
-pub enum EventType {
+#[derive(Debug, Clone, Copy, PartialEq, GetSize)]
+pub enum EventType<'a> {
     /// Sending a value to a channel.
-    Send(Box<[Val]>),
+    Send(&'a [Val]),
     /// Retrieving a value out of a channel.
-    Receive(Box<[Val]>),
+    Receive(&'a [Val]),
     /// Checking whether a channel is empty.
     ProbeEmptyQueue,
     /// Checking whether a channel is full.
@@ -349,21 +356,20 @@ impl ChannelSystem {
 
     #[inline]
     pub fn communication(&self, action: Action) -> Option<(Channel, Message)> {
-        if action.1 == EPSILON {
-            None
-        } else {
-            let start = self.communications_pg_idxs[action.0.0 as usize];
-            self.communications[start + ActionIdx::from(action.1) as usize]
-        }
+        // if action.1 == EPSILON {
+        //     None
+        // } else {
+        //     let start = self.communications_pg_idxs[action.0.0 as usize];
+        //     self.communications[start + ActionIdx::from(action.1) as usize]
+        // }
+        self.communications_pg_idxs
+            .get(action.0.0 as usize)
+            .and_then(|&start| {
+                self.communications
+                    .get(start + ActionIdx::from(action.1) as usize)
+                    .and_then(|&d| d)
+            })
     }
-
-    // #[inline]
-    // pub fn communicates_to(&self, pg_id: PgId, channel: Channel) -> bool {
-    //     self.communications[self.communications_pg_idxs[pg_id.0 as usize]
-    //         ..self.communications_pg_idxs[pg_id.0 as usize + 1]]
-    //         .iter()
-    //         .any(|comm| comm.is_some_and(|(ch, _)| ch == channel))
-    // }
 
     #[inline]
     pub fn senders_to_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {

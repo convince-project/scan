@@ -78,14 +78,12 @@
 
 mod builder;
 mod run;
-mod transitions;
 
 use crate::{TimeRange, grammar::*};
 pub use builder::*;
 use get_size2::GetSize;
 pub use run::ProgramGraphRun;
 use thiserror::Error;
-use transitions::TransitionsIterator;
 
 /// The index for [`Location`]s in a [`ProgramGraph`].
 pub type LocationIdx = u32;
@@ -290,7 +288,6 @@ impl ProgramGraph {
 
 #[cfg(test)]
 mod tests {
-    use bumpalo::Bump;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -298,18 +295,16 @@ mod tests {
 
     #[test]
     fn wait() {
-        let bump = Bump::new();
         let mut builder = ProgramGraphBuilder::new();
         let _ = builder.new_initial_location();
         let pg_def = builder.build();
         let mut pg = pg_def.new_instance();
-        assert_eq!(pg.possible_transitions(&bump).count(), 0);
+        assert_eq!(pg.possible_transitions().count(), 0);
         pg.wait(1).expect("wait 1 time unit");
     }
 
     #[test]
     fn transition() {
-        let bump = Bump::new();
         let mut builder = ProgramGraphBuilder::new();
         let initial = builder.new_initial_location();
         let r#final = builder.new_location();
@@ -320,7 +315,7 @@ mod tests {
         let mut pg = pg_def.new_instance();
         assert_eq!(pg.current_states(), &[initial]);
         {
-            let mut possible_transitions = pg.possible_transitions(&bump);
+            let mut possible_transitions = pg.possible_transitions();
             assert!(
                 possible_transitions
                     .next()
@@ -332,12 +327,11 @@ mod tests {
         pg.transition(EPSILON, &[r#final], &mut rng)
             .expect("transition to final");
         assert_eq!(pg.current_states(), &[r#final]);
-        assert_eq!(pg.possible_transitions(&bump).count(), 0);
+        assert_eq!(pg.possible_transitions().count(), 0);
     }
 
     #[test]
     fn guard() {
-        let bump = Bump::new();
         let mut builder = ProgramGraphBuilder::new();
         let initial = builder.new_initial_location();
         let r#final = builder.new_location();
@@ -355,11 +349,11 @@ mod tests {
             .expect("transition to final");
         assert_eq!(pg.current_states(), &[r#final]);
         // It is not possible to transition from final to initial
-        let mut possible_transitions = pg.possible_transitions(&bump);
+        let mut possible_transitions = pg.possible_transitions();
         let (next_action, mut next_locations) = possible_transitions.next().unwrap();
         assert_eq!(next_action, EPSILON);
-        let mut next_location = next_locations.next().unwrap();
-        assert!(next_location.next().is_none());
+        let next_location = next_locations.next().unwrap();
+        assert!(next_location.is_empty());
         assert!(possible_transitions.next().is_none());
     }
 
@@ -425,7 +419,6 @@ mod tests {
 
     #[test]
     fn program_graph() -> Result<(), PgError> {
-        let bump = Bump::new();
         // Create Program Graph
         let mut builder = ProgramGraphBuilder::new();
         // Variables
@@ -456,30 +449,29 @@ mod tests {
         // Execution
         let pg_def = builder.build();
         let mut pg = pg_def.new_instance();
-        assert_eq!(pg.possible_transitions(&bump).count(), 1);
+        assert_eq!(pg.possible_transitions().count(), 1);
         pg.transition(initialize, &[center], &mut rng)
             .expect("initialize");
-        assert_eq!(pg.possible_transitions(&bump).count(), 2);
+        assert_eq!(pg.possible_transitions().count(), 2);
         pg.transition(move_right, &[right], &mut rng)
             .expect("move right");
-        assert_eq!(pg.possible_transitions(&bump).count(), 1);
+        assert_eq!(pg.possible_transitions().count(), 1);
         pg.transition(move_right, &[right], &mut rng)
             .expect_err("already right");
-        assert_eq!(pg.possible_transitions(&bump).count(), 1);
+        assert_eq!(pg.possible_transitions().count(), 1);
         pg.transition(move_left, &[center], &mut rng)
             .expect("move left");
-        assert_eq!(pg.possible_transitions(&bump).count(), 2);
+        assert_eq!(pg.possible_transitions().count(), 2);
         pg.transition(move_left, &[left], &mut rng)
             .expect("move left");
         assert!(
-            pg.possible_transitions(&bump)
+            pg.possible_transitions()
                 .next()
                 .unwrap()
                 .1
                 .next()
                 .unwrap()
-                .next()
-                .is_none()
+                .is_empty()
         );
         pg.transition(move_left, &[left], &mut rng)
             .expect_err("battery = 0");

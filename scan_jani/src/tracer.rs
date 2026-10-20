@@ -36,9 +36,9 @@ impl Tracer for TracePrinter {
         &mut self,
         data: &Self::ModelData,
         action: Action,
-        _event: &Event,
+        _event: Event<'_>,
         time: Time,
-        ports: &[Vec<Val>],
+        ports: &[Box<[Val]>],
     ) {
         let time = time.to_string();
         let action_name = data

@@ -18,7 +18,7 @@ impl Drop for TracePrinter {
 impl TracePrinter {
     const HEADER: [&'static str; 5] = ["Time", "Event", "Origin", "Target", "Params"];
 
-    fn format_state(&self, model: &ScxmlModel, event: &Event, ports: &[Vec<Val>]) -> Vec<String> {
+    fn format_state(&self, model: &ScxmlModel, event: Event, ports: &[Box<[Val]>]) -> Vec<String> {
         // Assumes model.port_vals are ordered
         model
             .port_vars
@@ -77,9 +77,9 @@ impl Tracer for TracePrinter {
         &mut self,
         data: &ScxmlModel,
         _action: Action,
-        event: &Event,
+        event: Event<'_>,
         time: Time,
-        ports: &[Vec<Val>],
+        ports: &[Box<[Val]>],
     ) {
         let mut fields = Vec::new();
         let time = time.to_string();
@@ -94,7 +94,7 @@ impl Tracer for TracePrinter {
             origin_name = data.fsm_names.get(&(*src).into()).unwrap().to_owned();
             target_name = data.fsm_names.get(&(*trg).into()).unwrap().to_owned();
             (event_name, param_types) = data.events.get(*event_idx).unwrap().clone();
-            if let EventType::Send(ref vals) = event.event_type {
+            if let EventType::Send(vals) = event.event_type {
                 params =
                     format_val_from_def(vals, param_types.as_ref().unwrap(), &data.omg_types, true);
             } else {
@@ -102,7 +102,7 @@ impl Tracer for TracePrinter {
             }
         } else if let Some(trg) = data.ext_queues.get(&event.channel) {
             target_name = data.fsm_names.get(&(*trg).into()).unwrap().to_owned();
-            if let EventType::Send(ref vals) = event.event_type {
+            if let EventType::Send(vals) = event.event_type {
                 if let (Val::Natural(sent_event), Val::Natural(origin)) = (vals[0], vals[1]) {
                     origin_name = data.fsm_names.get(&(origin as u16)).unwrap().to_owned();
                     (event_name, param_types) = data.events[sent_event as usize].clone();
@@ -119,7 +119,7 @@ impl Tracer for TracePrinter {
         } else if data.int_queues.contains(&event.channel) {
             origin_name = data.fsm_names.get(&event.pg_id.into()).unwrap().to_owned();
             target_name = origin_name.clone();
-            if let EventType::Send(ref vals) = event.event_type {
+            if let EventType::Send(vals) = event.event_type {
                 if let Val::Natural(sent_event) = vals[0] {
                     (event_name, param_types) = data.events[sent_event as usize].clone();
                     if param_types.is_some() {

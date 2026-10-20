@@ -27,8 +27,8 @@ pub trait Tracer {
         &mut self,
         data: &Self::ModelData,
         action: Action,
-        event: &Event,
+        event: Event<'_>,
         time: Time,
-        ports: &[Vec<Val>],
+        ports: &[Box<[Val]>],
     );
 }

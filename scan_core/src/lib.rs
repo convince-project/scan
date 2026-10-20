@@ -312,7 +312,7 @@ impl<O: Oracle + Clone> Scan<O> {
                 // Same issue for time-tick events
                 if let Some(trace) = trace {
                     for (time, action, event, state) in trace {
-                        tracer.trace(model_data, action, &event, time, &state);
+                        tracer.trace(model_data, action, (&event).into(), time, &state);
                     }
                 }
                 outcome
@@ -325,7 +325,7 @@ impl<O: Oracle + Clone> Scan<O> {
                 // Same issue for time-tick events
                 if let Some(trace) = trace {
                     for (time, action, event, state) in trace {
-                        tracer.trace(model_data, action, &event, time, &state);
+                        tracer.trace(model_data, action, (&event).into(), time, &state);
                     }
                 }
                 outcome
