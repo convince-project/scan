@@ -215,28 +215,22 @@ impl TransitionSystem {
         let mut rng: SmallRng = make_rng();
         let mut pg_list = self.pg_list.clone();
         let mut run = self.new_run();
-
-        // reuse vector to avoid allocations
-        let mut labels = Vec::from_iter(run.labels());
-        // Initialize oracle with TS initial state
-        oracle.update_state(&labels);
         run.fastforward(&bump);
+
+        // Initialize oracle with TS initial state
+        let labels = Vec::from_iter(run.labels());
+        oracle.update_state(&labels);
 
         while oracle.output_guarantees().any(|b| b.is_none()) {
             bump.reset();
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
-            } else if let Some((_action, event)) =
-                run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
+            } else if run
+                .montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
+                .is_some()
             {
-                if self.ports.binary_search(&event.channel).is_ok()
-                    && matches!(event.event_type, EventType::Send(_))
-                {
-                    labels.clear();
-                    labels.extend(run.labels());
-                    oracle.update_state(&labels);
-                }
+                continue;
             } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
@@ -264,10 +258,12 @@ impl TransitionSystem {
         let mut rng: SmallRng = make_rng();
         let mut pg_list = self.pg_list.clone();
         let mut run = self.new_run();
-        // reuse vector to avoid allocations
-        let mut labels = Vec::from_iter(run.labels());
+        run.fastforward(&bump);
+
         // Initialize oracle with TS initial state
+        let labels = Vec::from_iter(run.labels());
         oracle.update_state(&labels);
+
         // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
         // Same issue for time-tick events
         while oracle.output_guarantees().any(|b| b.is_none()) {
@@ -276,13 +272,6 @@ impl TransitionSystem {
                 run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
             {
                 tracer.trace(model_data, action, event, run.time(), run.state());
-                if self.ports.binary_search(&event.channel).is_ok()
-                    && matches!(event.event_type, EventType::Send(_))
-                {
-                    labels.clear();
-                    labels.extend(run.labels());
-                    oracle.update_state(&labels);
-                }
             } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
