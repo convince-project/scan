@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use bumpalo::Bump;
 use fixedbitset::FixedBitSet;
+use itertools::Itertools;
 use log::{info, trace};
 use petgraph::acyclic::Acyclic;
 use petgraph::data::Build;
@@ -332,21 +333,22 @@ impl TransitionSystem {
                     .flat_map(|b| {
                         run.possible_transitions_pg(PgId(b as PgIndex))
                             .unwrap()
-                            .flat_map(|(action, mut transitions)| {
-                                // NOTE WARN FIXME TODO: hardcode no-sync case
-                                transitions.next().unwrap().map(move |post| (action, post))
+                            .flat_map(|(action, posts)| {
+                                posts
+                                    .multi_cartesian_product()
+                                    .map(move |posts| (action, posts))
                             })
                     })
                     .peekable();
                 // There must be active transitions because we checked earlier
                 assert!(transitions.peek().is_some());
-                'w: while let Some((action, post)) = transitions.next() {
-                    bump.reset();
+                'w: while let Some((action, posts)) = transitions.next() {
                     if transitions.peek().is_some() {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
+                        bump.reset();
                         branch_run
-                            .transition(&mut branch_oracle, action, &[post], &bump)
+                            .transition(&mut branch_oracle, action, &posts, &bump)
                             .unwrap();
                         if branch_oracle
                             .output_guarantees()
@@ -398,7 +400,7 @@ impl TransitionSystem {
                     } else {
                         drop(transitions);
                         bump.reset();
-                        let event = run.transition(&mut oracle, action, &[post], &bump).unwrap();
+                        let event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
                         if record_trace && let Some(event) = event {
                             trace.push((run.time(), action, event.into(), run.state().to_owned()));
                         }
@@ -549,7 +551,7 @@ impl TransitionSystem {
 
         let mut len_lower_bound = 1;
 
-        let mut post_l = None;
+        let mut posts_last = None;
         let mut action_l = None;
         // FILO stack: depth-first search
         'l: while running.load(Ordering::Relaxed) {
@@ -605,24 +607,23 @@ impl TransitionSystem {
                     .flat_map(|b| {
                         run.possible_transitions_pg(PgId(b as u16))
                             .unwrap()
-                            .flat_map(|(action, transitions)| {
-                                transitions.map(move |post| (action, post))
+                            .flat_map(|(action, posts)| {
+                                posts
+                                    .multi_cartesian_product()
+                                    .map(move |posts| (action, posts))
                             })
                     })
                     .peekable();
                 // There must be active transitions because we checked earlier
                 assert!(transitions.peek().is_some());
-                'w: while let Some((action, mut post)) = transitions.next() {
+                'w: while let Some((action, posts)) = transitions.next() {
                     action_l = Some(action);
-                    // NOTE WARN FIXME TODO: hardcode no-sync case
-                    let post = post.next().unwrap();
-                    post_l = Some(post);
                     if transitions.peek().is_some() {
                         let mut branch_run = run.clone();
                         let mut branch_oracle = oracle.clone();
                         bump.reset();
                         branch_run
-                            .transition(&mut branch_oracle, action, &[post], &bump)
+                            .transition(&mut branch_oracle, action, &posts, &bump)
                             .unwrap();
                         if branch_oracle
                             .output_guarantees()
@@ -689,6 +690,7 @@ impl TransitionSystem {
                             branches += 1;
                         }
                     } else {
+                        posts_last = Some(posts);
                         break 'w;
                     }
                 }
@@ -700,7 +702,7 @@ impl TransitionSystem {
                     .transition(
                         &mut oracle,
                         action,
-                        &[post_l.expect("active transition")],
+                        posts_last.as_ref().expect("active transition"),
                         &bump,
                     )
                     .unwrap();

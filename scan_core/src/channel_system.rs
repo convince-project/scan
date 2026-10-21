@@ -157,7 +157,14 @@ impl From<Channel> for u16 {
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Location(pub(crate) PgId, pub(crate) PgLocation);
+pub struct Location(PgId, PgLocation);
+
+impl Location {
+    #[inline]
+    pub fn program_gramph_id(&self) -> PgId {
+        self.0
+    }
+}
 
 /// An indexing object for actions in a CS.
 ///

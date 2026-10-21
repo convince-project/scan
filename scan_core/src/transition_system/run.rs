@@ -329,7 +329,12 @@ impl<'def> TransitionSystemRun<'def> {
         &self,
         pg_id: PgId,
     ) -> Result<
-        impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)>,
+        impl Iterator<
+            Item = (
+                Action,
+                impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
+            ),
+        >,
         CsError,
     > {
         self.cs.possible_transitions_pg(pg_id)

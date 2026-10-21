@@ -113,7 +113,7 @@ impl<'def> ChannelSystemRun<'def> {
         Item = (
             PgId,
             Action,
-            impl Iterator<Item = impl Iterator<Item = Location>>,
+            impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
         ),
     > {
         self.def.program_graph_ids().flat_map(move |pg_id| {
@@ -142,7 +142,12 @@ impl<'def> ChannelSystemRun<'def> {
         &self,
         pg_id: PgId,
     ) -> Result<
-        impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)>,
+        impl Iterator<
+            Item = (
+                Action,
+                impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
+            ),
+        >,
         CsError,
     > {
         let pg = self.program_graph(pg_id)?;

@@ -129,7 +129,7 @@ impl<'def> ProgramGraphRun<'def> {
     /// The guard (if any) is guaranteed to be satisfied.
     pub fn possible_transitions(
         &self,
-    ) -> impl Iterator<Item = (Action, impl Iterator<Item = &[Location]>)> {
+    ) -> impl Iterator<Item = (Action, impl Iterator<Item = &[Location]> + Clone)> {
         let states = self.current_states.len();
         self.cache_actions
             .iter()
@@ -174,7 +174,7 @@ impl<'def> ProgramGraphRun<'def> {
                 .map(|loc| self.def.locations[loc.0 as usize].0.iter()),
         );
 
-        let len = self.current_states.len();
+        let len = self.def.initial_states.len();
         let mut action = Action(0);
         'l: loop {
             let mut total = 0;
@@ -190,6 +190,7 @@ impl<'def> ProgramGraphRun<'def> {
                 }
             }
             // found next possible action
+            let initial_num_trans = trans.len();
             for state_trans in &self.loc_trans {
                 let num_trans = trans.len();
                 trans.extend(
@@ -214,6 +215,7 @@ impl<'def> ProgramGraphRun<'def> {
             }
             // if all states have active transitions for an action,
             // add action to list of possible actions.
+            assert!(trans.len() > initial_num_trans);
             actions.push(action);
         }
         assert_eq!(states.len(), actions.len() * len + 1);
@@ -237,6 +239,7 @@ impl<'def> ProgramGraphRun<'def> {
             })
     }
 
+    #[inline]
     fn check_transition(
         &self,
         action: Action,
@@ -411,6 +414,9 @@ impl<'def> ProgramGraphRun<'def> {
     ) -> Result<&'a [Val], PgError> {
         if action == EPSILON {
             Err(PgError::NotSend(action))
+        } else if post_states.len() != self.current_states.len() {
+            // WARN FIXME: This error is not appropriate here
+            Err(PgError::Sync)
         } else if self.active_transitions(action, post_states, &[]) {
             if let Effect::Send(effects) = &self.def.effects[action.0 as usize] {
                 let vals = effects
