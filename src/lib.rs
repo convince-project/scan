@@ -295,20 +295,21 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                let properties = args.properties.clone();
-                let (scan, jani_model) = load(&self.model, &properties)?;
+                let (scan, jani_model) = load(&self.model, &args.properties, args.all)?;
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
                 run_verification::<_>(model, &args, progress, json, &scan).print(json);
             }
             Commands::Validate => {
-                let (_scan, _jani_model) = load(&self.model, &[])?;
+                let (_scan, _jani_model) = load(&self.model, &[], true)?;
                 println!("model '{model}' successfully validated");
             }
-            Commands::Trace(args) => {
+            Commands::Trace(mut args) => {
                 args.validate()?;
-                let (scan, jani_model) = load(&self.model, &[])?;
+                let (scan, jani_model) = load(&self.model, &args.properties, args.all)?;
+                // Reorder properties as they appear in the model
+                args.properties = jani_model.guarantees.clone();
                 let path = new_traces_dir();
                 args.trace::<_, TracePrinter>(&scan, path, &jani_model);
                 println!("trace computation for model '{model}' completed");

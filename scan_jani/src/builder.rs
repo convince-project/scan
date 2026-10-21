@@ -25,9 +25,10 @@ pub struct JaniModelData {
 pub(crate) fn build(
     jani_model: Model,
     properties: &[String],
+    all_properties: bool,
 ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
     let builder = JaniBuilder::default();
-    builder.build(jani_model, properties)
+    builder.build(jani_model, properties, all_properties)
 }
 
 #[derive(Default, Debug, Clone)]
@@ -91,6 +92,7 @@ impl JaniBuilder {
         mut self,
         jani_model: Model,
         properties: &[String],
+        all_properties: bool,
     ) -> anyhow::Result<(TransitionSystem, MtlOracle, JaniModelData)> {
         let mut cs = ChannelSystemBuilder::new();
         let pg_id = cs.new_program_graph();
@@ -656,7 +658,7 @@ impl JaniBuilder {
         let property_exprs = jani_model
             .properties
             .iter()
-            .filter(|p| properties.contains(&p.name))
+            .filter(|p| properties.contains(&p.name) || all_properties)
             .map(|p| {
                 self.build_property(&p.expression).and_then(|p| match p {
                     Either::Left(expr) => {
@@ -715,11 +717,11 @@ impl JaniBuilder {
             .for_each(|mtl| oracle.add_guarantee(mtl));
 
         // Finalize, build and return everything
-        // , global_vars, predicates);
         let data = self.data(
             jani_model
                 .properties
                 .iter()
+                .filter(|p| properties.contains(&p.name) || all_properties)
                 .map(|p| p.name.clone())
                 .collect(),
         );
