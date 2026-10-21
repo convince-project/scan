@@ -349,12 +349,7 @@ mod tests {
             .expect("transition to final");
         assert_eq!(pg.current_states(), &[r#final]);
         // It is not possible to transition from final to initial
-        let mut possible_transitions = pg.possible_transitions();
-        let (next_action, mut next_locations) = possible_transitions.next().unwrap();
-        assert_eq!(next_action, EPSILON);
-        let next_location = next_locations.next().unwrap();
-        assert!(next_location.is_empty());
-        assert!(possible_transitions.next().is_none());
+        assert_eq!(pg.possible_transitions().count(), 0);
     }
 
     #[test]
@@ -464,15 +459,7 @@ mod tests {
         assert_eq!(pg.possible_transitions().count(), 2);
         pg.transition(move_left, &[left], &mut rng)
             .expect("move left");
-        assert!(
-            pg.possible_transitions()
-                .next()
-                .unwrap()
-                .1
-                .next()
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(pg.possible_transitions().count(), 0);
         pg.transition(move_left, &[left], &mut rng)
             .expect_err("battery = 0");
         Ok(())
