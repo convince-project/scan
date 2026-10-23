@@ -77,8 +77,7 @@ impl Bar {
         // Spinner
         // Trailing spaces because bar does not overwrite after itself
         let spinner_style =
-            ProgressStyle::with_template("{elapsed_precise} {msg}: {pos}/{len} ({eta})   ")
-                .unwrap();
+            ProgressStyle::with_template("{elapsed_precise} {msg}: {pos}/{len}").unwrap();
         let spinner = ProgressBar::new(0)
             .with_style(spinner_style)
             .with_message("verification progress");
@@ -106,8 +105,10 @@ impl Bar {
                 //     derive_precision(run_status.successes, run_status.failures, confidence);
                 // Status spinner
                 let violations = scan.violations();
-                for (i, (header, property)) in bars_guarantees.iter().enumerate() {
-                    let violations = violations.get(i).copied().unwrap_or(0);
+                for ((header, property), violations) in bars_guarantees
+                    .iter()
+                    .zip(violations.chain([0].into_iter().cycle()))
+                {
                     let pos = runs.saturating_sub(violations as u64);
                     header.set_message(format!("{pos}/{violations}"));
                     header.tick();

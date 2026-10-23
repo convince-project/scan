@@ -8,7 +8,10 @@ use crate::{
 };
 use bumpalo::{Bump, collections::CollectIn};
 use rand::rngs::SmallRng;
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    hash::{Hash, Hasher},
+};
 
 /// Representation of a CS that can be executed transition-by-transition.
 ///
@@ -16,26 +19,31 @@ use std::collections::VecDeque;
 /// meaning that it is not possible to introduce new PGs or modifying them, or add new channels.
 /// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
 /// because only the internal state needs to be duplicated.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChannelSystemRun<'def> {
     rng: SmallRng,
     time: Time,
-    message_queue: Vec<VecDeque<Val>>,
-    program_graphs: Vec<ProgramGraphRun<'def>>,
+    message_queue: Box<[VecDeque<Val>]>,
+    program_graphs: Box<[ProgramGraphRun<'def>]>,
     def: &'def ChannelSystem,
-    bump: Bump,
 }
 
-impl<'def> Clone for ChannelSystemRun<'def> {
-    fn clone(&self) -> Self {
-        Self {
-            rng: self.rng.clone(),
-            time: self.time,
-            message_queue: self.message_queue.clone(),
-            program_graphs: self.program_graphs.clone(),
-            def: self.def,
-            bump: Bump::new(),
-        }
+impl<'def> PartialEq for ChannelSystemRun<'def> {
+    fn eq(&self, other: &Self) -> bool {
+        self.rng == other.rng
+            && self.time == other.time
+            && self.message_queue == other.message_queue
+            && self.program_graphs == other.program_graphs
+    }
+}
+
+impl<'def> Eq for ChannelSystemRun<'def> {}
+
+impl<'def> Hash for ChannelSystemRun<'def> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.time.hash(state);
+        self.message_queue.hash(state);
+        self.program_graphs.hash(state);
     }
 }
 
@@ -54,17 +62,22 @@ impl<'def> ChannelSystemRun<'def> {
         ChannelSystemRun {
             rng: rand::make_rng(),
             time: 0,
-            program_graphs: Vec::from_iter(
-                cs.program_graphs.iter().map(|pgdef| pgdef.new_instance()),
-            ),
-            message_queue: Vec::from_iter(cs.channels.iter().map(|(types, cap)| match cap {
-                ChannelCapacity::Queue(queue) => queue.map_or_else(VecDeque::new, |cap| {
-                    VecDeque::with_capacity(types.len() * cap)
-                }),
-                ChannelCapacity::Sink => VecDeque::new(),
-            })),
+            program_graphs: cs
+                .program_graphs
+                .iter()
+                .map(|pgdef| pgdef.new_instance())
+                .collect(),
+            message_queue: cs
+                .channels
+                .iter()
+                .map(|(types, cap)| match cap {
+                    ChannelCapacity::Queue(queue) => queue.map_or_else(VecDeque::new, |cap| {
+                        VecDeque::with_capacity(types.len() * cap)
+                    }),
+                    ChannelCapacity::Sink => VecDeque::new(),
+                })
+                .collect(),
             def: cs,
-            bump: Bump::new(),
         }
     }
 
@@ -100,13 +113,21 @@ impl<'def> ChannelSystemRun<'def> {
         Item = (
             PgId,
             Action,
-            impl Iterator<Item = impl Iterator<Item = Location>>,
+            impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
         ),
     > {
         self.def.program_graph_ids().flat_map(move |pg_id| {
             self.possible_transitions_pg(pg_id)
                 .expect("pg exists")
                 .map(move |(action, transitions)| (pg_id, action, transitions))
+        })
+    }
+
+    pub fn active_actions_pg(&self, pg_id: PgId) -> Result<impl Iterator<Item = Action>, CsError> {
+        self.program_graph(pg_id).map(move |pg| {
+            pg.active_actions()
+                .iter()
+                .map(move |&action| Action(pg_id, action))
         })
     }
 
@@ -121,55 +142,49 @@ impl<'def> ChannelSystemRun<'def> {
         &self,
         pg_id: PgId,
     ) -> Result<
-        impl Iterator<Item = (Action, impl Iterator<Item = impl Iterator<Item = Location>>)>,
+        impl Iterator<
+            Item = (
+                Action,
+                impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
+            ),
+        >,
         CsError,
     > {
-        self.program_graph(pg_id).map(|pg| {
-            pg.possible_transitions().filter_map(move |(action, post)| {
-                let action = Action(pg_id, action);
-                if let Some((channel, message)) = self.def.communication(pg_id, action.1)
-                    && !self.check_message(channel, message)
-                {
-                    None
-                } else {
-                    let post = post.map(move |locs| locs.map(move |loc| Location(pg_id, loc)));
-                    Some((action, post))
-                }
+        let pg = self.program_graph(pg_id)?;
+        Ok(pg
+            .possible_transitions()
+            .filter(move |&(action, _)| {
+                self.def
+                    .communication(Action(pg_id, action))
+                    .is_none_or(|(channel, message)| self.check_message(channel, message))
             })
-        })
+            .map(move |(action, post)| {
+                (
+                    Action(pg_id, action),
+                    post.map(move |locs| locs.iter().map(move |loc| Location(pg_id, *loc))),
+                )
+            }))
     }
 
-    /// Iterates over all transitions that can be admitted in the current state for the [`ProgramGraph`] associated to the given [`PgId`],
-    /// optimized for the special (but common) case in which the state of the PG is given by a single location.
-    ///
-    /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
-    /// (the pre-state being necessarily the current state of the machine).
-    /// The (eventual) guard is guaranteed to be satisfied.
-    ///
-    /// See also [`ProgramGraphRun::nosync_possible_transitions`].
-    pub fn nosync_possible_transitions_pg(
+    pub fn possible_transitions_action(
         &self,
-        pg_id: PgId,
-    ) -> Result<impl Iterator<Item = (Action, impl Iterator<Item = Location>)>, CsError> {
-        self.program_graph(pg_id)?
-            .nosync_possible_transitions()
-            .map_err(|err| CsError::ProgramGraph(pg_id, err))
-            .map(|transitions| {
-                transitions.filter_map(move |(action, post)| {
-                    let action = Action(pg_id, action);
-                    if let Some((channel, message)) = self.def.communication(pg_id, action.1)
-                        && !self.check_message(channel, message)
-                    {
-                        None
-                    } else {
-                        let post = post.map(move |loc| Location(pg_id, loc));
-                        Some((action, post))
-                    }
-                })
+        action: Action,
+    ) -> Result<impl Iterator<Item = impl Iterator<Item = Location>>, CsError> {
+        let pg_id = action.0;
+        let pg = self.program_graph(pg_id)?;
+        Ok(self
+            .def
+            .communication(action)
+            .is_none_or(|(channel, message)| self.check_message(channel, message))
+            .then(|| {
+                pg.possible_transitions_action(action.1)
+                    .map(move |locs| locs.iter().map(move |&loc| Location(pg_id, loc)))
             })
+            .into_iter()
+            .flatten())
     }
 
-    fn check_message(&self, channel: Channel, message: Message) -> bool {
+    pub(crate) fn check_message(&self, channel: Channel, message: Message) -> bool {
         let channel_idx = channel.0 as usize;
         let (_, capacity) = self.def.channels[channel_idx];
         let len = self.message_queue[channel_idx].len();
@@ -191,21 +206,26 @@ impl<'def> ChannelSystemRun<'def> {
         }
     }
 
+    #[inline]
+    pub(crate) fn is_channel_empty(&self, channel: Channel) -> bool {
+        let channel_idx = channel.0 as usize;
+        self.message_queue[channel_idx].is_empty()
+    }
+
     /// Executes a transition on the given PG characterized by the argument action and post-state.
     ///
     /// Fails if the requested transition is not admissible.
     ///
     /// See also [`ProgramGraphRun::transition`].
-    pub fn transition(
+    pub fn transition<'a>(
         &mut self,
-        pg_id: PgId,
         action: Action,
         post: &[Location],
-    ) -> Result<Option<Event>, CsError> {
+        bump: &'a Bump,
+    ) -> Result<Option<Event<'a>>, CsError> {
         use bumpalo::collections::Vec as BumpVec;
 
-        self.bump.reset();
-
+        let pg_id = action.0;
         // If action is a communication, check it is legal
         if pg_id.0 >= self.program_graphs.len() as u16 {
             return Err(CsError::MissingPg(pg_id));
@@ -215,7 +235,7 @@ impl<'def> ChannelSystemRun<'def> {
             return Err(CsError::LocationNotInPg(*post, pg_id));
         }
         // If the action is a communication, send/receive the message
-        if let Some((channel, message)) = self.def.communication(pg_id, action.1) {
+        if let Some((channel, message)) = self.def.communication(action) {
             let (_, capacity) = self.def.channels[channel.0 as usize];
             let event_type = match message {
                 Message::Send
@@ -232,13 +252,14 @@ impl<'def> ChannelSystemRun<'def> {
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                .collect_in::<BumpVec<PgLocation>>(bump)
                                 .as_slice(),
                             &mut self.rng,
+                            bump,
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     if matches!(capacity, ChannelCapacity::Queue(_)) {
-                        self.message_queue[channel.0 as usize].extend(&vals);
+                        self.message_queue[channel.0 as usize].extend(vals);
                     }
                     EventType::Send(vals)
                 }
@@ -249,17 +270,18 @@ impl<'def> ChannelSystemRun<'def> {
                     let (types, _) = &self.def.channels[channel.0 as usize];
                     let vals = self.message_queue[channel.0 as usize]
                         .drain(..types.len())
-                        .collect::<Vec<Val>>();
+                        .collect_in::<bumpalo::collections::Vec<Val>>(bump)
+                        .into_bump_slice();
                     self.program_graphs[pg_id.0 as usize]
                         .receive(
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                .collect_in::<BumpVec<PgLocation>>(bump)
                                 .as_slice(),
-                            vals.as_slice(),
+                            vals.as_ref(),
                         )
-                        .expect("communication has been verified before");
+                        .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     EventType::Receive(vals)
                 }
                 Message::ProbeEmptyQueue | Message::ProbeFullQueue
@@ -276,9 +298,10 @@ impl<'def> ChannelSystemRun<'def> {
                             action.1,
                             post.iter()
                                 .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                .collect_in::<BumpVec<PgLocation>>(bump)
                                 .as_slice(),
                             &mut self.rng,
+                            bump,
                         )
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     EventType::ProbeEmptyQueue
@@ -294,9 +317,10 @@ impl<'def> ChannelSystemRun<'def> {
                                     action.1,
                                     post.iter()
                                         .map(|loc| loc.1)
-                                        .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                                        .collect_in::<BumpVec<PgLocation>>(bump)
                                         .as_slice(),
                                     &mut self.rng,
+                                    bump,
                                 )
                                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                             EventType::ProbeFullQueue
@@ -319,7 +343,7 @@ impl<'def> ChannelSystemRun<'def> {
                     action.1,
                     post.iter()
                         .map(|loc| loc.1)
-                        .collect_in::<BumpVec<PgLocation>>(&self.bump)
+                        .collect_in::<BumpVec<PgLocation>>(bump)
                         .as_slice(),
                     &mut self.rng,
                 )

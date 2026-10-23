@@ -484,10 +484,10 @@ impl ProgramGraphBuilder {
         locations.shrink_to_fit();
         // Build program graph
         let pg = ProgramGraph {
-            initial_states: self.initial_states,
-            effects: self.effects,
-            locations,
-            vars: self.vars,
+            initial_states: self.initial_states.into(),
+            effects: self.effects.into(),
+            locations: locations.into(),
+            vars: self.vars.into(),
             clocks: self.clocks,
         };
         info!(

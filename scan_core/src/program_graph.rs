@@ -78,14 +78,12 @@
 
 mod builder;
 mod run;
-mod transitions;
 
 use crate::{TimeRange, grammar::*};
 pub use builder::*;
 use get_size2::GetSize;
 pub use run::ProgramGraphRun;
 use thiserror::Error;
-use transitions::TransitionsIterator;
 
 /// The index for [`Location`]s in a [`ProgramGraph`].
 pub type LocationIdx = u32;
@@ -246,11 +244,10 @@ pub enum PgError {
 /// ```
 #[derive(Debug, Clone, GetSize)]
 pub struct ProgramGraph {
-    initial_states: Vec<Location>,
-    effects: Vec<Effect>,
-    locations: Vec<LocationData>,
-    // Time invariants of each location
-    vars: Vec<Val>,
+    initial_states: Box<[Location]>,
+    effects: Box<[Effect]>,
+    locations: Box<[LocationData]>,
+    vars: Box<[Val]>,
     // Number of clocks
     clocks: u16,
 }
@@ -352,12 +349,7 @@ mod tests {
             .expect("transition to final");
         assert_eq!(pg.current_states(), &[r#final]);
         // It is not possible to transition from final to initial
-        let mut possible_transitions = pg.possible_transitions();
-        let (next_action, mut next_locations) = possible_transitions.next().unwrap();
-        assert_eq!(next_action, EPSILON);
-        let mut next_location = next_locations.next().unwrap();
-        assert!(next_location.next().is_none());
-        assert!(possible_transitions.next().is_none());
+        assert_eq!(pg.possible_transitions().count(), 0);
     }
 
     #[test]
@@ -467,16 +459,7 @@ mod tests {
         assert_eq!(pg.possible_transitions().count(), 2);
         pg.transition(move_left, &[left], &mut rng)
             .expect("move left");
-        assert!(
-            pg.possible_transitions()
-                .next()
-                .unwrap()
-                .1
-                .next()
-                .unwrap()
-                .next()
-                .is_none()
-        );
+        assert_eq!(pg.possible_transitions().count(), 0);
         pg.transition(move_left, &[left], &mut rng)
             .expect_err("battery = 0");
         Ok(())

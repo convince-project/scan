@@ -139,8 +139,8 @@ where
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.strict_rem_euclid(rhs)
             }
-            IntegerExpr::Floor(float_expr) => float_expr.eval(vars, rng).floor() as Integer,
-            IntegerExpr::Ceil(float_expr) => float_expr.eval(vars, rng).ceil() as Integer,
+            IntegerExpr::Floor(float_expr) => float_expr.eval(vars, rng).floor().to_integer(),
+            IntegerExpr::Ceil(float_expr) => float_expr.eval(vars, rng).ceil().to_integer(),
             IntegerExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
                 if ite.eval(vars, rng.as_deref_mut()) {
