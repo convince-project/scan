@@ -20,7 +20,8 @@ use crate::{Atom, Oracle, Time, TransitionSystem, Val};
 pub(crate) struct TransitionSystemRun<'def> {
     ts: &'def super::TransitionSystem,
     cs: ChannelSystemRun<'def>,
-    vals: Box<[Box<[Val]>]>,
+    vals: Box<[Val]>,
+    vals_idx: Box<[usize]>,
     last_event: Option<Channel>,
 }
 
@@ -42,16 +43,24 @@ impl<'def> Hash for TransitionSystemRun<'def> {
 
 impl<'def> TransitionSystemRun<'def> {
     pub(crate) fn new(ts: &'def TransitionSystem) -> Self {
+        let vals_idx = [0]
+            .into_iter()
+            .chain(ts.vals.iter().scan(0, |counter, val| {
+                *counter += val.len();
+                Some(*counter)
+            }))
+            .collect();
         let vals = ts
             .vals
             .iter()
-            .map(|vals| vals.clone().into_boxed_slice())
+            .flat_map(|vals| vals.clone().into_boxed_slice())
             .collect();
         TransitionSystemRun {
             ts,
             cs: ts.cs.new_instance(),
             vals,
             last_event: None,
+            vals_idx,
         }
     }
 
@@ -140,7 +149,7 @@ impl<'def> TransitionSystemRun<'def> {
                             .ports
                             .binary_search(&channel)
                             .expect("port must exist and be initialized");
-                        self.vals[port_idx][idx]
+                        self.vals[self.vals_idx[port_idx] + idx]
                     }
                     Atom::Event(event_channel) => Val::Boolean(
                         self.last_event
@@ -153,8 +162,17 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     #[inline]
-    pub(crate) fn state(&self) -> &[Box<[Val]>] {
-        self.vals.as_ref()
+    pub(crate) fn state(&self, port: Channel) -> Option<&[Val]> {
+        self.ts
+            .ports
+            .binary_search(&port)
+            .ok()
+            .map(|idx| &self.vals[self.vals_idx[idx]..self.vals_idx[idx + 1]])
+    }
+
+    #[inline]
+    pub(crate) fn whole_state(&self) -> &[Val] {
+        &self.vals
     }
 
     pub(crate) fn transition<'a, O: Oracle>(
@@ -175,7 +193,7 @@ impl<'def> TransitionSystemRun<'def> {
                 // Since we have to update old values,
                 // the vectors are already allocated and their len is always the same.
                 // Copying from slice should be faster than cloning.
-                self.vals[index].copy_from_slice(vals);
+                self.vals[self.vals_idx[index]..self.vals_idx[index + 1]].copy_from_slice(vals);
                 let labels = bumpalo::collections::Vec::from_iter_in(self.labels(), bump);
                 oracle.update_state(&labels);
             }

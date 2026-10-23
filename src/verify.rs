@@ -37,7 +37,7 @@ Example:
 pub(crate) struct VerifyArgs {
     /// Scheduling strategy used to sample executions.
     #[arg(long, value_enum)]
-    pub(crate) scheduler: CliScheduler,
+    pub(crate) scheduler: Option<CliScheduler>,
     /// Space-separated list of properties to verify.
     pub(crate) properties: Vec<String>,
     /// Verify all properties found in the model specification.
@@ -87,10 +87,11 @@ impl VerifyArgs {
     where
         O: Oracle + Clone + Sync + 'a,
     {
+        let scheduler = self.scheduler.unwrap_or_default().into();
         let report = if self.single_thread {
-            scan.adaptive(self.confidence, self.precision, self.scheduler.into())
+            scan.adaptive(self.confidence, self.precision, scheduler)
         } else {
-            scan.par_adaptive(self.confidence, self.precision, self.scheduler.into())
+            scan.par_adaptive(self.confidence, self.precision, scheduler)
         }
         .expect("verify");
         let successes = report.successes;

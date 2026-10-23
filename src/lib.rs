@@ -272,6 +272,7 @@ impl Cli {
                 println!("model '{model}' successfully validated");
             }
             Commands::Trace(mut args) => {
+                args.validate()?;
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
@@ -308,6 +309,7 @@ impl Cli {
             Commands::Trace(mut args) => {
                 args.validate()?;
                 let (scan, jani_model) = load(&self.model, &args.properties, args.all)?;
+                validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
                 let path = new_traces_dir();

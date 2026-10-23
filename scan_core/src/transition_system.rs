@@ -94,7 +94,7 @@ impl From<EventType<'_>> for OwnedEventType {
     }
 }
 
-type Trace<'a> = Vec<(Time, Action, OwnedEvent, Vec<Box<[Val]>>)>;
+type Trace<'a> = Vec<(Time, Action, OwnedEvent, Box<[Val]>)>;
 
 /// Errors produced by a [`TransitionSystem`].
 #[derive(Debug, Clone, Copy, Error)]
@@ -166,6 +166,19 @@ impl TransitionSystem {
         assert!(self.ports.is_sorted());
         assert_eq!(self.ports.len(), self.vals.len());
         Ok(())
+    }
+
+    pub fn ports(&self) -> &[Channel] {
+        &self.ports
+    }
+
+    fn port_idxs(&self) -> Box<[usize]> {
+        [0].into_iter()
+            .chain(self.vals.iter().scan(0, |counter, val| {
+                *counter += val.len();
+                Some(*counter)
+            }))
+            .collect()
     }
 
     /// Adds a new predicate to the [`CsModel`],
@@ -245,14 +258,9 @@ impl TransitionSystem {
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
     /// and process the execution trace via the given [`Tracer`].
-    pub(crate) fn trace<T, O: Oracle>(
-        &self,
-        mut oracle: O,
-        mut tracer: T,
-        model_data: &T::ModelData,
-    ) -> RunOutcome
+    pub(crate) fn trace<'a, T, O: Oracle>(&self, oracle: &mut O, tracer: &mut T) -> RunOutcome
     where
-        T: Tracer,
+        T: Tracer<'a>,
     {
         trace!("new run starting");
         let mut bump = Bump::new();
@@ -270,9 +278,9 @@ impl TransitionSystem {
         while oracle.output_guarantees().any(|b| b.is_none()) {
             bump.reset();
             if let Some((action, event)) =
-                run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
+                run.montecarlo_transition(oracle, &mut pg_list, &mut rng, &bump)
             {
-                tracer.trace(model_data, action, event, run.time(), run.state());
+                tracer.trace(action, event, run.time(), &|channel| run.state(channel));
             } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
@@ -284,12 +292,24 @@ impl TransitionSystem {
         Some(Vec::from_iter(oracle.final_output_guarantees()))
     }
 
-    pub(crate) fn experiment_exhaustive<'a, O: Oracle + Clone>(
+    pub fn record_trace<'a, T: Tracer<'a>>(&self, tracer: &mut T, trace: Trace) {
+        let ports_idxs = self.port_idxs();
+        for (time, action, event, state) in trace {
+            tracer.trace(action, (&event).into(), time, &|channel| {
+                self.ports()
+                    .binary_search(&channel)
+                    .ok()
+                    .map(|idx| &state[ports_idxs[idx]..ports_idxs[idx + 1]])
+            });
+        }
+    }
+
+    pub(crate) fn experiment_exhaustive<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
-        mut oracle: O,
-        record_trace: bool,
+        oracle: &mut O,
+        tracer: Option<&mut T>,
         running: Arc<AtomicBool>,
-    ) -> (RunOutcome, Option<Trace<'a>>) {
+    ) -> RunOutcome {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
@@ -360,14 +380,14 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return (
-                                Some(Vec::from_iter(
-                                    branch_oracle
-                                        .output_guarantees()
-                                        .map(|b| b.is_none_or(|b| b)),
-                                )),
-                                record_trace.then_some(trace),
-                            );
+                            if let Some(tracer) = tracer {
+                                self.record_trace(tracer, trace);
+                            }
+                            return Some(Vec::from_iter(
+                                branch_oracle
+                                    .output_guarantees()
+                                    .map(|b| b.is_none_or(|b| b)),
+                            ));
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
@@ -400,9 +420,16 @@ impl TransitionSystem {
                     } else {
                         drop(transitions);
                         bump.reset();
-                        let event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
-                        if record_trace && let Some(event) = event {
-                            trace.push((run.time(), action, event.into(), run.state().to_owned()));
+                        let event = run.transition(oracle, action, &posts, &bump).unwrap();
+                        if tracer.is_some()
+                            && let Some(event) = event
+                        {
+                            trace.push((
+                                run.time(),
+                                action,
+                                event.into(),
+                                run.whole_state().into(),
+                            ));
                         }
                         if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                             // Guarantee violated
@@ -411,12 +438,12 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return (
-                                Some(Vec::from_iter(
-                                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                                )),
-                                record_trace.then_some(trace),
-                            );
+                            if let Some(tracer) = tracer {
+                                self.record_trace(tracer, trace);
+                            }
+                            return Some(Vec::from_iter(
+                                oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                            ));
                         } else if oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             run.fastforward(&bump);
@@ -450,12 +477,12 @@ impl TransitionSystem {
                         "run violates a guarantee: processed {branches} branches in {:?}",
                         start_time.elapsed()
                     );
-                    return (
-                        Some(Vec::from_iter(
-                            oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                        )),
-                        record_trace.then_some(trace),
-                    );
+                    if let Some(tracer) = tracer {
+                        self.record_trace(tracer, trace);
+                    }
+                    return Some(Vec::from_iter(
+                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                    ));
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
@@ -480,10 +507,12 @@ impl TransitionSystem {
                     "run violates a guarantee: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return (
-                    Some(Vec::from_iter(oracle.final_output_guarantees())),
-                    record_trace.then_some(trace),
-                );
+                if let Some(tracer) = tracer {
+                    self.record_trace(tracer, trace);
+                }
+                return Some(Vec::from_iter(
+                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                ));
             }
 
             if let Some((branch_oracle, branch_run, branch_amples, trace_len)) =
@@ -493,7 +522,7 @@ impl TransitionSystem {
                 trace.truncate(trace_len);
                 // continue loop with next run and oracle
                 run = branch_run;
-                oracle = branch_oracle;
+                *oracle = branch_oracle;
                 amples = branch_amples;
             } else {
                 // Model execution terminates and satisfies all guarantees
@@ -501,25 +530,27 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return (
-                    RunOutcome::Some(vec![true; oracle.output_guarantees().count()]),
-                    record_trace.then_some(trace),
-                );
+                if let Some(tracer) = tracer {
+                    self.record_trace(tracer, trace);
+                }
+                return Some(Vec::from_iter(
+                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                ));
             }
         }
         trace!(
             "run stopped: processed {branches} branches in {:?}",
             start_time.elapsed()
         );
-        (None, None)
+        None
     }
 
-    pub(crate) fn experiment_priority<O: Oracle + Clone>(
+    pub(crate) fn experiment_priority<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
-        mut oracle: O,
-        record_trace: bool,
+        oracle: &mut O,
+        tracer: Option<&mut T>,
         running: Arc<AtomicBool>,
-    ) -> (RunOutcome, Option<Trace<'_>>) {
+    ) -> RunOutcome {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
@@ -635,14 +666,14 @@ impl TransitionSystem {
                                 "run violates a guarantee: processed {branches} branches in {:?}",
                                 start_time.elapsed()
                             );
-                            return (
-                                Some(Vec::from_iter(
-                                    branch_oracle
-                                        .output_guarantees()
-                                        .map(|b| b.is_none_or(|b| b)),
-                                )),
-                                record_trace.then_some(trace),
-                            );
+                            if let Some(tracer) = tracer {
+                                self.record_trace(tracer, trace);
+                            }
+                            return Some(Vec::from_iter(
+                                branch_oracle
+                                    .output_guarantees()
+                                    .map(|b| b.is_none_or(|b| b)),
+                            ));
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
@@ -700,14 +731,16 @@ impl TransitionSystem {
                 bump.reset();
                 let event = run
                     .transition(
-                        &mut oracle,
+                        oracle,
                         action,
                         posts_last.as_ref().expect("active transition"),
                         &bump,
                     )
                     .unwrap();
-                if record_trace && let Some(event) = event {
-                    trace.push((run.time(), action, event.into(), run.state().to_vec()));
+                if tracer.is_some()
+                    && let Some(event) = event
+                {
+                    trace.push((run.time(), action, event.into(), run.whole_state().into()));
                 }
                 if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
                     // Guarantee violated
@@ -716,12 +749,12 @@ impl TransitionSystem {
                         "run violates a guarantee: processed {branches} branches in {:?}",
                         start_time.elapsed()
                     );
-                    return (
-                        Some(Vec::from_iter(
-                            oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                        )),
-                        record_trace.then_some(trace),
-                    );
+                    if let Some(tracer) = tracer {
+                        self.record_trace(tracer, trace);
+                    }
+                    return Some(Vec::from_iter(
+                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                    ));
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
@@ -764,12 +797,12 @@ impl TransitionSystem {
                         "run violates a guarantee: processed {branches} branches in {:?}",
                         start_time.elapsed()
                     );
-                    return (
-                        Some(Vec::from_iter(
-                            oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                        )),
-                        record_trace.then_some(trace),
-                    );
+                    if let Some(tracer) = tracer {
+                        self.record_trace(tracer, trace);
+                    }
+                    return Some(Vec::from_iter(
+                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                    ));
                 } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
                     run.fastforward(&bump);
@@ -796,10 +829,12 @@ impl TransitionSystem {
                     "run violates a guarantee: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return (
-                    Some(Vec::from_iter(oracle.final_output_guarantees())),
-                    record_trace.then_some(trace),
-                );
+                if let Some(tracer) = tracer {
+                    self.record_trace(tracer, trace);
+                }
+                return Some(Vec::from_iter(
+                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
+                ));
             }
 
             if let Some((branch_oracle, branch_run, branch_amples, branch_dag, trace_len)) =
@@ -809,7 +844,7 @@ impl TransitionSystem {
                 trace.truncate(trace_len);
                 // continue loop with next run and oracle
                 run = branch_run;
-                oracle = branch_oracle;
+                *oracle = branch_oracle;
                 dag = branch_dag;
                 amples = branch_amples;
             } else {
@@ -818,17 +853,14 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return (
-                    RunOutcome::Some(vec![true; oracle.output_guarantees().count()]),
-                    None,
-                );
+                return RunOutcome::Some(vec![true; oracle.output_guarantees().count()]);
             }
         }
         trace!(
             "run stopped: processed {branches} branches in {:?}",
             start_time.elapsed()
         );
-        (None, None)
+        None
     }
 }
 
