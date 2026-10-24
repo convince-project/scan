@@ -166,23 +166,18 @@ impl<O: Oracle + Clone> Scan<O> {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
 
-        let mut oracle = self.oracle.clone();
+        let oracle = self.oracle.clone();
+        let running = Arc::clone(&self.running);
         let result = match scheduler {
-            Scheduler::Uniform => self
-                .model
-                .experiment_sample(self.oracle.clone(), self.running.clone()),
+            Scheduler::Uniform => self.model.experiment_sample(oracle, running),
             // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
             Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => self.model.experiment_exhaustive::<O, DummyTracer>(
-                &mut oracle,
-                None,
-                self.running.clone(),
-            ),
-            Scheduler::Priority => self.model.experiment_priority::<O, DummyTracer>(
-                &mut oracle,
-                None,
-                self.running.clone(),
-            ),
+            Scheduler::Exhaustive => self
+                .model
+                .experiment_exhaustive::<O, DummyTracer>(oracle, None, running),
+            Scheduler::Priority => self
+                .model
+                .experiment_priority::<O, DummyTracer>(oracle, None, running),
         };
         if let Some(guarantees) = result
             && self.running.load(Ordering::Relaxed)
@@ -300,6 +295,7 @@ impl<O: Oracle + Clone> Scan<O> {
             .write(file, flate2::Compression::best());
         let mut tracer = T::init(writer, model_data);
         let mut oracle = self.oracle.clone();
+        let running = Arc::clone(&self.running);
         // NOTE: Uniform scheduler writes the trace on-the-fly,
         // whether or not it violates the guarantees,
         // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
@@ -308,14 +304,13 @@ impl<O: Oracle + Clone> Scan<O> {
             Scheduler::Uniform => self.model.trace::<T, _>(&mut oracle, &mut tracer),
             // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
             Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => self.model.experiment_exhaustive(
-                &mut oracle,
-                Some(&mut tracer),
-                self.running.clone(),
-            ),
+            Scheduler::Exhaustive => {
+                self.model
+                    .experiment_exhaustive(oracle, Some(&mut tracer), running)
+            }
             Scheduler::Priority => {
                 self.model
-                    .experiment_priority(&mut oracle, Some(&mut tracer), self.running.clone())
+                    .experiment_priority(oracle, Some(&mut tracer), running)
             }
         };
         if let Some(verified) = outcome {

@@ -168,10 +168,6 @@ impl TransitionSystem {
         Ok(())
     }
 
-    pub fn ports(&self) -> &[Channel] {
-        &self.ports
-    }
-
     fn port_idxs(&self) -> Box<[usize]> {
         [0].into_iter()
             .chain(self.vals.iter().scan(0, |counter, val| {
@@ -292,11 +288,11 @@ impl TransitionSystem {
         Some(Vec::from_iter(oracle.final_output_guarantees()))
     }
 
-    pub fn record_trace<'a, T: Tracer<'a>>(&self, tracer: &mut T, trace: Trace) {
+    fn record_trace<'a, T: Tracer<'a>>(&self, tracer: &mut T, trace: Trace) {
         let ports_idxs = self.port_idxs();
         for (time, action, event, state) in trace {
             tracer.trace(action, (&event).into(), time, &|channel| {
-                self.ports()
+                self.ports
                     .binary_search(&channel)
                     .ok()
                     .map(|idx| &state[ports_idxs[idx]..ports_idxs[idx + 1]])
@@ -306,26 +302,32 @@ impl TransitionSystem {
 
     pub(crate) fn experiment_exhaustive<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
-        oracle: &mut O,
+        mut oracle: O,
         tracer: Option<&mut T>,
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
+        let oracle = &mut oracle;
 
-        type BranchData<'a, O> = (O, TransitionSystemRun<'a>, Vec<(FixedBitSet, bool)>, usize);
+        type BranchData<'a, O> = (
+            O,
+            TransitionSystemRun<'a>,
+            Box<[(FixedBitSet, bool)]>,
+            usize,
+        );
         let mut executions_stack: Vec<BranchData<O>> = Vec::new();
         // TODO: measure impact of recycling memory to check wether it is worth it
-        let mut recycling_sets: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
+        let mut recycling_sets: Vec<Box<[(FixedBitSet, bool)]>> = Vec::new();
         let pgs = self.pg_list.len();
-        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs];
+        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
         let mut bump = Bump::new();
         let mut run = self.new_run();
         let mut trace = Vec::new();
 
         // Initialize oracle with TS initial state
-        let state = Vec::from_iter(run.labels());
+        let state: Box<[bool]> = run.labels().collect();
         oracle.update_state(&state);
         run.fastforward(&bump);
 
@@ -510,9 +512,7 @@ impl TransitionSystem {
                 if let Some(tracer) = tracer {
                     self.record_trace(tracer, trace);
                 }
-                return Some(Vec::from_iter(
-                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                ));
+                return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
 
             if let Some((branch_oracle, branch_run, branch_amples, trace_len)) =
@@ -530,12 +530,7 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                if let Some(tracer) = tracer {
-                    self.record_trace(tracer, trace);
-                }
-                return Some(Vec::from_iter(
-                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                ));
+                return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
         }
         trace!(
@@ -547,27 +542,28 @@ impl TransitionSystem {
 
     pub(crate) fn experiment_priority<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
-        oracle: &mut O,
+        mut oracle: O,
         tracer: Option<&mut T>,
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
         // Diagnostics/stats
         let start_time = Instant::now();
         let mut branches: u32 = 0;
+        let oracle = &mut oracle;
 
         type BranchData<'a, O> = (
             O,
             TransitionSystemRun<'a>,
-            Vec<(FixedBitSet, bool)>,
+            Box<[(FixedBitSet, bool)]>,
             Dag,
             usize,
         );
         let mut executions_stack: Vec<BranchData<O>> = Vec::new();
         // TODO: measure impact of recycling memory to check wether it is worth it
-        let mut recycling_sets: Vec<Vec<(FixedBitSet, bool)>> = Vec::new();
+        let mut recycling_sets: Vec<Box<[(FixedBitSet, bool)]>> = Vec::new();
         let mut recycling_dags: Vec<Dag> = Vec::new();
         let pgs = self.pg_list.len();
-        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs];
+        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
         let mut restricted_ample = FixedBitSet::with_capacity(pgs);
         let mut restricted_ample_temp = FixedBitSet::with_capacity(pgs);
         let mut bump = Bump::new();
@@ -832,9 +828,7 @@ impl TransitionSystem {
                 if let Some(tracer) = tracer {
                     self.record_trace(tracer, trace);
                 }
-                return Some(Vec::from_iter(
-                    oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                ));
+                return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
 
             if let Some((branch_oracle, branch_run, branch_amples, branch_dag, trace_len)) =
@@ -853,7 +847,7 @@ impl TransitionSystem {
                     "run verifies all guarantees: processed {branches} branches in {:?}",
                     start_time.elapsed()
                 );
-                return RunOutcome::Some(vec![true; oracle.output_guarantees().count()]);
+                return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
         }
         trace!(
