@@ -168,20 +168,10 @@ impl<O: Oracle + Clone> Scan<O> {
 
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
-        let result = match scheduler {
-            Scheduler::Uniform => self
-                .model
-                .experiment_sample::<O, DummyTracer>(oracle, None, running),
-            // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
-            Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => self
-                .model
-                .experiment_exhaustive::<O, DummyTracer>(oracle, None, running),
-            Scheduler::Priority => self
-                .model
-                .experiment_priority::<O, DummyTracer>(oracle, None, running),
-        };
-        if let Some(guarantees) = result
+        let outcome = self
+            .model
+            .experiment::<O, DummyTracer>(oracle, None, running, scheduler);
+        if let Some(guarantees) = outcome
             && self.running.load(Ordering::Relaxed)
         {
             assert_eq!(guarantees.len(), self.violations().count());
@@ -298,23 +288,11 @@ impl<O: Oracle + Clone> Scan<O> {
         let tracer = Some(T::init(writer, model_data));
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
-        // NOTE: Uniform scheduler writes the trace on-the-fly,
-        // whether or not it violates the guarantees,
-        // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
-        // or nothing if all guarantees where satisfied by all considered schedulers.
-        let outcome = match scheduler {
-            Scheduler::Uniform => self.model.experiment_sample(oracle, tracer, running),
-            // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
-            Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => self.model.experiment_exhaustive(oracle, tracer, running),
-            Scheduler::Priority => self.model.experiment_priority(oracle, tracer, running),
-        };
+        let outcome = self.model.experiment(oracle, tracer, running, scheduler);
         if let Some(verified) = outcome {
             let mut new_path = path.clone();
-            // pop file name
-            new_path.pop();
-            // pop temp folder
-            new_path.pop();
+            new_path.parent().expect("pop file name");
+            new_path.parent().expect("pop temp folder");
             if verified.into_iter().all(|b| b) {
                 new_path.push(SUCCESSES);
             } else {
@@ -397,7 +375,7 @@ where
 fn create_traces_dirs_tree(mut path: PathBuf) {
     create_dir_all(&path).expect("create base dir");
     path.push(TEMP);
-    create_dir(&path).expect("create temp dir");
+    create_dir_all(&path).expect("create temp dir");
     assert!(path.pop());
     path.push(SUCCESSES);
     create_dir(&path).expect("create successes dir");

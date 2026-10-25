@@ -19,7 +19,7 @@ use thiserror::Error;
 use crate::channel_system::{
     Action, Channel, ChannelSystem, CsError, Event, EventType, PgId, PgIndex,
 };
-use crate::{BooleanExpr, Oracle, RunOutcome, Time, Tracer, Val};
+use crate::{BooleanExpr, Oracle, RunOutcome, Scheduler, Time, Tracer, Val};
 use run::TransitionSystemRun;
 
 type Dag = Acyclic<DiGraph<(), (), PgIndex>>;
@@ -216,9 +216,29 @@ impl TransitionSystem {
         TransitionSystemRun::new(self)
     }
 
+    pub(crate) fn experiment<'a, O: Oracle + Clone, T: Tracer<'a>>(
+        &self,
+        oracle: O,
+        tracer: Option<T>,
+        running: Arc<AtomicBool>,
+        scheduler: Scheduler,
+    ) -> RunOutcome {
+        // NOTE: Uniform scheduler writes the trace on-the-fly,
+        // whether or not it violates the guarantees,
+        // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
+        // or nothing if all guarantees where satisfied by all considered schedulers.
+        match scheduler {
+            Scheduler::Uniform => self.experiment_sample(oracle, tracer, running),
+            // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
+            Scheduler::Sampling => todo!(),
+            Scheduler::Exhaustive => self.experiment_exhaustive(oracle, tracer, running),
+            Scheduler::Priority => self.experiment_priority(oracle, tracer, running),
+        }
+    }
+
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
     /// If available, process the execution trace via the given [`Tracer`].
-    pub(crate) fn experiment_sample<'a, O: Oracle, T: Tracer<'a>>(
+    fn experiment_sample<'a, O: Oracle, T: Tracer<'a>>(
         &self,
         mut oracle: O,
         mut tracer: Option<T>,
@@ -268,7 +288,7 @@ impl TransitionSystem {
         }
     }
 
-    pub(crate) fn experiment_exhaustive<'a, O: Oracle + Clone, T: Tracer<'a>>(
+    fn experiment_exhaustive<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
         mut oracle: O,
         tracer: Option<T>,
@@ -508,7 +528,7 @@ impl TransitionSystem {
         None
     }
 
-    pub(crate) fn experiment_priority<'a, O: Oracle + Clone, T: Tracer<'a>>(
+    fn experiment_priority<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
         mut oracle: O,
         tracer: Option<T>,
