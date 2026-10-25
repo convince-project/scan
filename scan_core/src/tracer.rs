@@ -34,6 +34,7 @@ pub trait Tracer<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct DummyTracer;
 
 impl Tracer<'_> for DummyTracer {

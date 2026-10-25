@@ -852,6 +852,7 @@ mod test {
 
     /// A dummy oracle that verifies nothing.
     /// Useful for testing.
+    #[derive(Debug, Clone, Copy)]
     struct DummyOracle;
 
     impl Oracle for DummyOracle {}
@@ -882,6 +883,23 @@ mod test {
         let cs = cs.build();
         let ts = TransitionSystem::new(cs);
         let oracle = DummyOracle;
-        ts.experiment_sample::<_, DummyTracer>(oracle, None, AtomicBool::new(true).into());
+        ts.experiment::<_, DummyTracer>(
+            oracle,
+            None,
+            AtomicBool::new(true).into(),
+            Scheduler::Uniform,
+        );
+        ts.experiment::<_, DummyTracer>(
+            oracle,
+            None,
+            AtomicBool::new(true).into(),
+            Scheduler::Exhaustive,
+        );
+        ts.experiment::<_, DummyTracer>(
+            oracle,
+            None,
+            AtomicBool::new(true).into(),
+            Scheduler::Priority,
+        );
     }
 }
