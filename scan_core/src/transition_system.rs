@@ -109,6 +109,7 @@ pub enum TsError {
 }
 
 impl From<CsError> for TsError {
+    #[inline]
     fn from(value: CsError) -> Self {
         Self::ChannelSystem(value)
     }
@@ -216,9 +217,11 @@ impl TransitionSystem {
     }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`] and returns a [`RunOutcome`].
-    pub(crate) fn experiment_sample<O: Oracle>(
+    /// If available, process the execution trace via the given [`Tracer`].
+    pub(crate) fn experiment_sample<'a, O: Oracle, T: Tracer<'a>>(
         &self,
         mut oracle: O,
+        mut tracer: Option<T>,
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
         let mut bump = Bump::new();
@@ -236,11 +239,12 @@ impl TransitionSystem {
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
-            } else if run
-                .montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
-                .is_some()
+            } else if let Some((action, event)) =
+                run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
             {
-                continue;
+                if let Some(ref mut t) = tracer {
+                    t.trace(action, event, run.time(), &|channel| run.state(channel));
+                }
             } else if run.is_waiting() {
                 run.time_tick();
                 oracle.update_time(run.time());
@@ -252,43 +256,7 @@ impl TransitionSystem {
         Some(Vec::from_iter(oracle.final_output_guarantees()))
     }
 
-    /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
-    /// and process the execution trace via the given [`Tracer`].
-    pub(crate) fn trace<'a, T, O: Oracle>(&self, oracle: &mut O, tracer: &mut T) -> RunOutcome
-    where
-        T: Tracer<'a>,
-    {
-        trace!("new run starting");
-        let mut bump = Bump::new();
-        let mut rng: SmallRng = make_rng();
-        let mut pg_list = self.pg_list.clone();
-        let mut run = self.new_run();
-        run.fastforward(&bump);
-
-        // Initialize oracle with TS initial state
-        let labels = Vec::from_iter(run.labels());
-        oracle.update_state(&labels);
-
-        // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
-        // Same issue for time-tick events
-        while oracle.output_guarantees().any(|b| b.is_none()) {
-            bump.reset();
-            if let Some((action, event)) =
-                run.montecarlo_transition(oracle, &mut pg_list, &mut rng, &bump)
-            {
-                tracer.trace(action, event, run.time(), &|channel| run.state(channel));
-            } else if run.is_waiting() {
-                run.time_tick();
-                oracle.update_time(run.time());
-            } else {
-                break;
-            }
-        }
-        trace!("run complete");
-        Some(Vec::from_iter(oracle.final_output_guarantees()))
-    }
-
-    fn record_trace<'a, T: Tracer<'a>>(&self, tracer: &mut T, trace: Trace) {
+    fn record_trace<'a, T: Tracer<'a>>(&self, mut tracer: T, trace: Trace) {
         let ports_idxs = self.port_idxs();
         for (time, action, event, state) in trace {
             tracer.trace(action, (&event).into(), time, &|channel| {
@@ -303,7 +271,7 @@ impl TransitionSystem {
     pub(crate) fn experiment_exhaustive<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
         mut oracle: O,
-        tracer: Option<&mut T>,
+        tracer: Option<T>,
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
         // Diagnostics/stats
@@ -543,7 +511,7 @@ impl TransitionSystem {
     pub(crate) fn experiment_priority<'a, O: Oracle + Clone, T: Tracer<'a>>(
         &self,
         mut oracle: O,
-        tracer: Option<&mut T>,
+        tracer: Option<T>,
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
         // Diagnostics/stats
@@ -894,6 +862,6 @@ mod test {
         let cs = cs.build();
         let ts = TransitionSystem::new(cs);
         let oracle = DummyOracle;
-        ts.experiment_sample(oracle, AtomicBool::new(true).into());
+        ts.experiment_sample::<_, DummyTracer>(oracle, None, AtomicBool::new(true).into());
     }
 }

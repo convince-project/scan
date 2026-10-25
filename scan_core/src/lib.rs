@@ -169,7 +169,9 @@ impl<O: Oracle + Clone> Scan<O> {
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
         let result = match scheduler {
-            Scheduler::Uniform => self.model.experiment_sample(oracle, running),
+            Scheduler::Uniform => self
+                .model
+                .experiment_sample::<O, DummyTracer>(oracle, None, running),
             // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
             Scheduler::Sampling => todo!(),
             Scheduler::Exhaustive => self
@@ -293,25 +295,19 @@ impl<O: Oracle + Clone> Scan<O> {
             .filename(filename.to_str().expect("file name"))
             .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
-        let mut tracer = T::init(writer, model_data);
-        let mut oracle = self.oracle.clone();
+        let tracer = Some(T::init(writer, model_data));
+        let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
         // NOTE: Uniform scheduler writes the trace on-the-fly,
         // whether or not it violates the guarantees,
         // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
         // or nothing if all guarantees where satisfied by all considered schedulers.
         let outcome = match scheduler {
-            Scheduler::Uniform => self.model.trace::<T, _>(&mut oracle, &mut tracer),
+            Scheduler::Uniform => self.model.experiment_sample(oracle, tracer, running),
             // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
             Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => {
-                self.model
-                    .experiment_exhaustive(oracle, Some(&mut tracer), running)
-            }
-            Scheduler::Priority => {
-                self.model
-                    .experiment_priority(oracle, Some(&mut tracer), running)
-            }
+            Scheduler::Exhaustive => self.model.experiment_exhaustive(oracle, tracer, running),
+            Scheduler::Priority => self.model.experiment_priority(oracle, tracer, running),
         };
         if let Some(verified) = outcome {
             let mut new_path = path.clone();
