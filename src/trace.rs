@@ -58,16 +58,18 @@ impl TraceArgs {
         scan: &'a Scan<Od>,
         path: PathBuf,
         model: &'a Tr::ModelData,
-    ) where
+    ) -> anyhow::Result<()>
+    where
         Od: Oracle + Clone + Sync + 'a,
         Tr: Tracer<'a>,
         Tr::ModelData: Sync,
     {
         let scheduler = self.scheduler.unwrap_or_default().into();
         if self.single_thread {
-            scan.traces::<Tr>(self.traces, path, model, scheduler);
+            scan.traces::<Tr>(self.traces, path, model, scheduler)?;
         } else {
-            scan.par_traces::<Tr>(self.traces, path, model, scheduler);
+            scan.par_traces::<Tr>(self.traces, path, model, scheduler)?;
         }
+        Ok(())
     }
 }
