@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::env::current_dir;
 
 use anyhow::anyhow;
 use clap::Parser;
@@ -55,19 +55,36 @@ impl TraceArgs {
 
     pub(crate) fn trace<'a, Od, Tr>(
         &self,
+        model: &str,
         scan: &'a Scan<Od>,
-        path: PathBuf,
-        model: &'a Tr::ModelData,
+        model_data: &'a Tr::ModelData,
     ) where
         Od: Oracle + Clone + Sync + 'a,
         Tr: Tracer<'a>,
         Tr::ModelData: Sync,
     {
+        let path = new_traces_dir();
         let scheduler = self.scheduler.unwrap_or_default().into();
         if self.single_thread {
-            scan.traces::<Tr>(self.traces, path, model, scheduler);
+            scan.traces::<Tr>(self.traces, path, model_data, scheduler);
         } else {
-            scan.par_traces::<Tr>(self.traces, path, model, scheduler);
+            scan.par_traces::<Tr>(self.traces, path, model_data, scheduler);
+        }
+        println!("trace computation for model '{model}' completed");
+    }
+}
+
+fn new_traces_dir() -> std::path::PathBuf {
+    const FOLDER: &str = "traces";
+
+    let mut path = current_dir().expect("current dir");
+    for i in 0.. {
+        path.push(format!("{}_{i:02}", FOLDER));
+        if std::fs::exists(&path).is_ok_and(|exists| !exists) {
+            break;
+        } else {
+            assert!(path.pop());
         }
     }
+    path
 }

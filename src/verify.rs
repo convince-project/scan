@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use clap::Parser;
 use scan_core::{Oracle, Scan};
 
-use crate::CliScheduler;
+use crate::{CliScheduler, progress::Bar};
 
 use super::report::Report;
 
@@ -80,6 +80,40 @@ impl VerifyArgs {
             Err(anyhow!(BAD_PRECISION))
         } else {
             Ok(())
+        }
+    }
+
+    pub(crate) fn run_verification<'a, O>(
+        &self,
+        model: &str,
+        progress: Option<Bar>,
+        json: bool,
+        scan: &'a Scan<O>,
+    ) -> anyhow::Result<Report>
+    where
+        O: 'a + Oracle + Clone + Sync,
+    {
+        self.validate()?;
+        if !json {
+            println!(
+                "Verifying {model} (-p {} -c {}) {:?}",
+                self.precision, self.confidence, self.properties
+            );
+        }
+        if let Some(bar) = progress {
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    bar.print_progress_bar::<O>(
+                        self.confidence,
+                        self.precision,
+                        &self.properties,
+                        scan,
+                    );
+                });
+                Ok(self.verify::<O>(model.to_owned(), scan))
+            })
+        } else {
+            Ok(self.verify::<O>(model.to_owned(), scan))
         }
     }
 
