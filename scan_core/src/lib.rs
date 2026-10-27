@@ -24,7 +24,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
     fs::{File, create_dir, create_dir_all, rename},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -249,20 +249,20 @@ impl<O: Oracle + Clone> Scan<O> {
         path: PathBuf,
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
-    ) where
+    ) -> std::io::Result<()>
+    where
         T: Tracer<'a>,
     {
         info!("tracing starting");
         let start_time = Instant::now();
         self.reset();
-        create_traces_dirs_tree(path.clone());
+        create_traces_dirs_tree(&path)?;
 
-        (0..runs).for_each(|idx| {
-            self.trace::<T>(path.clone(), model_data, scheduler, idx);
-        });
+        (0..runs).try_for_each(|idx| self.trace::<T>(path.clone(), model_data, scheduler, idx))?;
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
+        Ok(())
     }
 
     fn trace<'a, T>(
@@ -271,7 +271,8 @@ impl<O: Oracle + Clone> Scan<O> {
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
         idx: usize,
-    ) where
+    ) -> std::io::Result<()>
+    where
         T: Tracer<'a>,
     {
         let filename = PathBuf::new()
@@ -280,7 +281,7 @@ impl<O: Oracle + Clone> Scan<O> {
         path.push(TEMP);
         path.push(&filename);
         path.add_extension("gz");
-        let file = File::create_new(&path).expect("create file");
+        let file = File::create_new(&path)?;
         let writer = flate2::GzBuilder::new()
             .filename(filename.to_str().expect("file name"))
             .comment("Scan-generated execution trace")
@@ -299,8 +300,9 @@ impl<O: Oracle + Clone> Scan<O> {
                 new_path.push(FAILURES);
             }
             new_path.push(path.file_name().expect("file name"));
-            rename(&path, new_path).expect("renaming");
+            rename(&path, new_path)?;
         }
+        Ok(())
     }
 }
 
@@ -354,32 +356,33 @@ where
         path: PathBuf,
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
-    ) where
+    ) -> std::io::Result<()>
+    where
         T: Tracer<'a>,
         T::ModelData: Sync,
     {
         info!("tracing starting");
         let start_time = Instant::now();
         self.reset();
-        create_traces_dirs_tree(path.clone());
+        create_traces_dirs_tree(&path)?;
 
-        (0..runs).into_par_iter().for_each(|idx| {
-            self.trace::<T>(path.clone(), model_data, scheduler, idx);
-        });
+        (0..runs)
+            .into_par_iter()
+            .try_for_each(|idx| self.trace::<T>(path.clone(), model_data, scheduler, idx))?;
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
+        Ok(())
     }
 }
 
-fn create_traces_dirs_tree(mut path: PathBuf) {
-    create_dir_all(&path).expect("create base dir");
-    path.push(TEMP);
-    create_dir_all(&path).expect("create temp dir");
+fn create_traces_dirs_tree(path: &Path) -> std::io::Result<()> {
+    let mut path = path.join(TEMP);
+    create_dir_all(&path)?;
     assert!(path.pop());
     path.push(SUCCESSES);
-    create_dir(&path).expect("create successes dir");
+    create_dir(&path)?;
     assert!(path.pop());
     path.push(FAILURES);
-    create_dir(&path).expect("create failures dir");
+    create_dir(&path)
 }

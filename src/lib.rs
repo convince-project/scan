@@ -277,7 +277,7 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                args.trace::<_, TracePrinter>(model, &scan_def, &scxml_model);
+                args.trace::<_, TracePrinter>(model, &scan_def, &scxml_model)?;
             }
         }
         Ok(())
@@ -311,7 +311,7 @@ impl Cli {
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
-                args.trace::<_, TracePrinter>(model, &scan, &jani_model);
+                args.trace::<_, TracePrinter>(model, &scan, &jani_model)?;
             }
         }
         Ok(())
