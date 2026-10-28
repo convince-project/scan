@@ -93,7 +93,6 @@ impl VerifyArgs {
     where
         O: 'a + Oracle + Clone + Sync,
     {
-        self.validate()?;
         if !json {
             println!(
                 "Verifying {model} (-p {} -c {}) {:?}",
