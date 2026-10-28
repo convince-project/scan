@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     Time, Val,
+    channel_system::PgIndex,
     program_graph::{PgError, ProgramGraphRun},
 };
-use bumpalo::{Bump, collections::CollectIn};
 use rand::rngs::SmallRng;
 use std::{
     collections::VecDeque,
@@ -19,13 +19,31 @@ use std::{
 /// meaning that it is not possible to introduce new PGs or modifying them, or add new channels.
 /// Though, this restriction makes it so that cloning the [`ChannelSystem`] is cheap,
 /// because only the internal state needs to be duplicated.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ChannelSystemRun<'def> {
     rng: SmallRng,
     time: Time,
     message_queue: Box<[VecDeque<Val>]>,
     program_graphs: Box<[ProgramGraphRun<'def>]>,
     def: &'def ChannelSystem,
+    alloc_pg_location: Vec<PgLocation>,
+    alloc_vals: Vec<Val>,
+    last_event: Option<Event<'static>>,
+}
+
+impl<'def> Clone for ChannelSystemRun<'def> {
+    fn clone(&self) -> Self {
+        Self {
+            rng: self.rng.clone(),
+            time: self.time,
+            message_queue: self.message_queue.clone(),
+            program_graphs: self.program_graphs.clone(),
+            def: self.def,
+            alloc_pg_location: Vec::with_capacity(self.alloc_pg_location.capacity()),
+            alloc_vals: Vec::with_capacity(self.alloc_vals.capacity()),
+            last_event: self.last_event,
+        }
+    }
 }
 
 impl<'def> PartialEq for ChannelSystemRun<'def> {
@@ -58,6 +76,12 @@ impl<'def> ChannelSystemRun<'def> {
         let pgs = cs.program_graphs.len() as u16;
         let mut pg_list = Vec::from_iter((0..pgs).map(PgId));
         pg_list.shrink_to_fit();
+        let max_pg_locations = cs
+            .program_graphs
+            .iter()
+            .map(|pg| pg.parallel_states())
+            .max()
+            .unwrap_or_default();
 
         ChannelSystemRun {
             rng: rand::make_rng(),
@@ -78,10 +102,14 @@ impl<'def> ChannelSystemRun<'def> {
                 })
                 .collect(),
             def: cs,
+            alloc_pg_location: Vec::with_capacity(max_pg_locations),
+            alloc_vals: Vec::new(),
+            last_event: None,
         }
     }
 
     /// Returns a reference to the underlying [`ChannelSystem`] defining the execution.
+    #[inline]
     pub fn def(&self) -> &ChannelSystem {
         self.def
     }
@@ -123,7 +151,10 @@ impl<'def> ChannelSystemRun<'def> {
         })
     }
 
-    pub fn active_actions_pg(&self, pg_id: PgId) -> Result<impl Iterator<Item = Action>, CsError> {
+    pub(crate) fn active_actions_pg(
+        &self,
+        pg_id: PgId,
+    ) -> Result<impl Iterator<Item = Action>, CsError> {
         self.program_graph(pg_id).map(move |pg| {
             pg.active_actions()
                 .iter()
@@ -138,16 +169,16 @@ impl<'def> ChannelSystemRun<'def> {
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
     /// See also [`ProgramGraphRun::possible_transitions`].
-    pub fn possible_transitions_pg(
-        &self,
+    pub(crate) fn possible_transitions_pg<'a>(
+        &'a self,
         pg_id: PgId,
     ) -> Result<
         impl Iterator<
             Item = (
                 Action,
-                impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
+                impl Iterator<Item = impl Iterator<Item = Location> + Clone + use<'a>> + use<'a>,
             ),
-        >,
+        > + use<'a>,
         CsError,
     > {
         let pg = self.program_graph(pg_id)?;
@@ -164,24 +195,6 @@ impl<'def> ChannelSystemRun<'def> {
                     post.map(move |locs| locs.iter().map(move |loc| Location(pg_id, *loc))),
                 )
             }))
-    }
-
-    pub fn possible_transitions_action(
-        &self,
-        action: Action,
-    ) -> Result<impl Iterator<Item = impl Iterator<Item = Location>>, CsError> {
-        let pg_id = action.0;
-        let pg = self.program_graph(pg_id)?;
-        Ok(self
-            .def
-            .communication(action)
-            .is_none_or(|(channel, message)| self.check_message(channel, message))
-            .then(|| {
-                pg.possible_transitions_action(action.1)
-                    .map(move |locs| locs.iter().map(move |&loc| Location(pg_id, loc)))
-            })
-            .into_iter()
-            .flatten())
     }
 
     pub(crate) fn check_message(&self, channel: Channel, message: Message) -> bool {
@@ -212,19 +225,22 @@ impl<'def> ChannelSystemRun<'def> {
         self.message_queue[channel_idx].is_empty()
     }
 
+    #[inline]
+    pub(crate) fn is_channel_full(&self, channel: Channel) -> bool {
+        let channel_idx = channel.0 as usize;
+        let (_, capacity) = self.def.channels[channel_idx];
+        match capacity {
+            ChannelCapacity::Queue(None) | ChannelCapacity::Sink => false,
+            ChannelCapacity::Queue(Some(cap)) => self.message_queue[channel_idx].len() == cap,
+        }
+    }
+
     /// Executes a transition on the given PG characterized by the argument action and post-state.
     ///
     /// Fails if the requested transition is not admissible.
     ///
     /// See also [`ProgramGraphRun::transition`].
-    pub fn transition<'a>(
-        &mut self,
-        action: Action,
-        post: &[Location],
-        bump: &'a Bump,
-    ) -> Result<Option<Event<'a>>, CsError> {
-        use bumpalo::collections::Vec as BumpVec;
-
+    pub fn transition(&mut self, action: Action, post: &[Location]) -> Result<(), CsError> {
         let pg_id = action.0;
         // If action is a communication, check it is legal
         if pg_id.0 >= self.program_graphs.len() as u16 {
@@ -234,6 +250,8 @@ impl<'def> ChannelSystemRun<'def> {
         } else if let Some(post) = post.iter().find(|l| l.0 != pg_id) {
             return Err(CsError::LocationNotInPg(*post, pg_id));
         }
+        self.alloc_pg_location.clear();
+        self.alloc_pg_location.extend(post.iter().map(|loc| loc.1));
         // If the action is a communication, send/receive the message
         if let Some((channel, message)) = self.def.communication(action) {
             let (_, capacity) = self.def.channels[channel.0 as usize];
@@ -247,42 +265,27 @@ impl<'def> ChannelSystemRun<'def> {
                     return Err(CsError::OutOfCapacity(channel));
                 }
                 Message::Send => {
-                    let vals = self.program_graphs[pg_id.0 as usize]
-                        .send(
-                            action.1,
-                            post.iter()
-                                .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(bump)
-                                .as_slice(),
-                            &mut self.rng,
-                            bump,
-                        )
+                    self.program_graphs[pg_id.0 as usize]
+                        .send(action.1, &self.alloc_pg_location, &mut self.rng)
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     if matches!(capacity, ChannelCapacity::Queue(_)) {
+                        let vals = self.program_graphs[pg_id.0 as usize].sent();
                         self.message_queue[channel.0 as usize].extend(vals);
                     }
-                    EventType::Send(vals)
+                    EventType::Send(&[])
                 }
                 Message::Receive if self.message_queue[channel.0 as usize].is_empty() => {
                     return Err(CsError::Empty(channel));
                 }
                 Message::Receive => {
                     let (types, _) = &self.def.channels[channel.0 as usize];
-                    let vals = self.message_queue[channel.0 as usize]
-                        .drain(..types.len())
-                        .collect_in::<bumpalo::collections::Vec<Val>>(bump)
-                        .into_bump_slice();
+                    self.alloc_vals.clear();
+                    self.alloc_vals
+                        .extend(self.message_queue[channel.0 as usize].drain(..types.len()));
                     self.program_graphs[pg_id.0 as usize]
-                        .receive(
-                            action.1,
-                            post.iter()
-                                .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(bump)
-                                .as_slice(),
-                            vals.as_ref(),
-                        )
+                        .receive(action.1, &self.alloc_pg_location, &self.alloc_vals)
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
-                    EventType::Receive(vals)
+                    EventType::Receive(&[])
                 }
                 Message::ProbeEmptyQueue | Message::ProbeFullQueue
                     if matches!(capacity, ChannelCapacity::Queue(Some(0))) =>
@@ -293,16 +296,8 @@ impl<'def> ChannelSystemRun<'def> {
                     return Err(CsError::NotEmpty(channel));
                 }
                 Message::ProbeEmptyQueue => {
-                    let _ = self.program_graphs[pg_id.0 as usize]
-                        .send(
-                            action.1,
-                            post.iter()
-                                .map(|loc| loc.1)
-                                .collect_in::<BumpVec<PgLocation>>(bump)
-                                .as_slice(),
-                            &mut self.rng,
-                            bump,
-                        )
+                    self.program_graphs[pg_id.0 as usize]
+                        .send(action.1, &self.alloc_pg_location, &mut self.rng)
                         .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                     EventType::ProbeEmptyQueue
                 }
@@ -312,16 +307,8 @@ impl<'def> ChannelSystemRun<'def> {
                     }
                     ChannelCapacity::Queue(Some(capacity)) => {
                         if self.message_queue[channel.0 as usize].len() >= capacity {
-                            let _ = self.program_graphs[pg_id.0 as usize]
-                                .send(
-                                    action.1,
-                                    post.iter()
-                                        .map(|loc| loc.1)
-                                        .collect_in::<BumpVec<PgLocation>>(bump)
-                                        .as_slice(),
-                                    &mut self.rng,
-                                    bump,
-                                )
+                            self.program_graphs[pg_id.0 as usize]
+                                .send(action.1, &self.alloc_pg_location, &mut self.rng)
                                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                             EventType::ProbeFullQueue
                         } else {
@@ -331,25 +318,37 @@ impl<'def> ChannelSystemRun<'def> {
                     ChannelCapacity::Sink => return Err(CsError::NotFull(channel)),
                 },
             };
-            Ok(Some(Event {
+            self.last_event = Some(Event {
                 pg_id,
                 channel,
                 event_type,
-            }))
+            });
         } else {
             // Transition the program graph
             self.program_graphs[pg_id.0 as usize]
-                .transition(
-                    action.1,
-                    post.iter()
-                        .map(|loc| loc.1)
-                        .collect_in::<BumpVec<PgLocation>>(bump)
-                        .as_slice(),
-                    &mut self.rng,
-                )
+                .transition(action.1, &self.alloc_pg_location, &mut self.rng)
                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
-            Ok(None)
+            self.last_event = None;
         }
+        Ok(())
+    }
+
+    pub fn last_event<'a>(&'a self) -> Option<Event<'a>> {
+        let last_event = self.last_event?;
+        let event_type = match last_event.event_type {
+            EventType::Send(_) => EventType::Send(
+                self.program_graphs[PgIndex::from(last_event.pg_id) as usize].sent(),
+            ),
+            EventType::Receive(_) => EventType::Receive(&self.alloc_vals),
+            EventType::ProbeEmptyQueue => EventType::ProbeEmptyQueue,
+            EventType::ProbeFullQueue => EventType::ProbeFullQueue,
+        };
+
+        Some(Event {
+            pg_id: last_event.pg_id,
+            channel: last_event.channel,
+            event_type,
+        })
     }
 
     /// Tries waiting for the given delta of time.

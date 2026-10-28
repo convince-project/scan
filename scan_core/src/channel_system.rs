@@ -89,7 +89,7 @@
 //!
 //! // Perform the transition, which sends a value to the channel queue
 //! // After this, the channel is full
-//! instance.transition(pg_1, send, &[initial_1])
+//! instance.transition(send, &[initial_1])
 //!     .expect("transition is possible");
 //!
 //! // Since the channel is now full, only pg_2 can transition (with receive)
@@ -160,8 +160,9 @@ impl From<Channel> for u16 {
 pub struct Location(PgId, PgLocation);
 
 impl Location {
+    /// The Program Graph the [`Location`] belongs to.
     #[inline]
-    pub fn program_gramph_id(&self) -> PgId {
+    pub fn program_graph_id(&self) -> PgId {
         self.0
     }
 }
@@ -175,7 +176,8 @@ pub struct Action(PgId, PgAction);
 
 impl Action {
     #[inline]
-    pub fn program_gramph_id(&self) -> PgId {
+    /// The Program Graph the [`Action`] belongs to.
+    pub fn program_graph_id(&self) -> PgId {
         self.0
     }
 }
@@ -357,12 +359,13 @@ impl ChannelSystem {
     /// so that spawning instances is (relatively) inexpensive.
     ///
     /// See also [`ProgramGraph::new_instance`].
+    #[inline]
     pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
         ChannelSystemRun::new(self)
     }
 
     #[inline]
-    pub fn communication(&self, action: Action) -> Option<(Channel, Message)> {
+    pub(crate) fn communication(&self, action: Action) -> Option<(Channel, Message)> {
         // if action.1 == EPSILON {
         //     None
         // } else {
@@ -379,62 +382,31 @@ impl ChannelSystem {
     }
 
     #[inline]
-    pub fn senders_to_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(crate) fn senders_to_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.senders
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub fn senders_to(&self, channel: Channel) -> Result<impl Iterator<Item = PgId>, CsError> {
-        self.senders
-            .get(channel.0 as usize)
-            .ok_or(CsError::MissingChannel(channel))
-            .map(|set| set.ones().map(|i| PgId(i as u16)))
-    }
-
-    #[inline]
-    pub fn receivers_from_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(crate) fn receivers_from_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.receivers
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub fn receivers_from(&self, channel: Channel) -> Result<impl Iterator<Item = PgId>, CsError> {
-        self.receivers
-            .get(channel.0 as usize)
-            .ok_or(CsError::MissingChannel(channel))
-            .map(|set| set.ones().map(|i| PgId(i as u16)))
-    }
-
-    #[inline]
-    pub fn probe_empty_queue_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(crate) fn probe_empty_queue_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.probe_empty_queues
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub fn probe_empty_queue(
-        &self,
-        channel: Channel,
-    ) -> Result<impl Iterator<Item = PgId>, CsError> {
-        self.probe_empty_queues
-            .get(channel.0 as usize)
-            .ok_or(CsError::MissingChannel(channel))
-            .map(|set| set.ones().map(|i| PgId(i as u16)))
-    }
-
-    #[inline]
-    pub fn probe_full_queue(
-        &self,
-        channel: Channel,
-    ) -> Result<impl Iterator<Item = PgId>, CsError> {
+    pub(crate) fn probe_full_queue_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.probe_full_queues
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
-            .map(|set| set.ones().map(|i| PgId(i as u16)))
     }
 
     /// Returns an immutable reference to the list of [`ProgramGraph`]s of the Channel System.
@@ -579,9 +551,9 @@ mod tests {
         // assert_eq!(cs.possible_transitions().count(), 1);
         assert_eq!(cs.def().communications_pg_idxs.as_ref(), &[0, 2, 5]);
 
-        cs.transition(send, &[post1], &bump)?;
+        cs.transition(send, &[post1])?;
         bump.reset();
-        cs.transition(receive, &[post2], &bump)?;
+        cs.transition(receive, &[post2])?;
         // assert_eq!(cs.possible_transitions().count(), 0);
         Ok(())
     }

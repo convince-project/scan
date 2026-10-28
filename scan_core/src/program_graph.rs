@@ -237,7 +237,7 @@ pub enum PgError {
 ///
 /// // Perform the (unique) active transition available.
 /// let (e, mut post_locs) = pg.possible_transitions().last().expect("autonomous transition");
-/// let post_loc = post_locs.last().expect("post location").last().expect("post location");
+/// let post_loc = *post_locs.last().expect("post location").last().expect("post location");
 /// assert_eq!(post_loc, initial);
 /// let mut rng: SmallRng = rand::make_rng();
 /// pg.transition(e, &[initial], &mut rng).expect("transition is active");
@@ -253,10 +253,17 @@ pub struct ProgramGraph {
 }
 
 impl ProgramGraph {
+    /// Number of parallel (explicit) states.
+    #[inline]
+    pub fn parallel_states(&self) -> usize {
+        self.initial_states.len()
+    }
+
     /// Creates a new [`ProgramGraphRun`] which allows to execute the PG as defined.
     ///
     /// The new instance borrows the caller to refer to the PG definition without copying its data,
     /// so that spawning instances is (relatively) inexpensive.
+    #[inline]
     pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def> {
         ProgramGraphRun::new(self)
     }
