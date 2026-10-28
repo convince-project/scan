@@ -64,13 +64,13 @@ impl<'def> TransitionSystemRun<'def> {
         }
     }
 
-    pub(crate) fn montecarlo_transition<'a, O: Oracle, R: RngExt>(
+    pub(crate) fn montecarlo_transition<O: Oracle, R: RngExt>(
         &mut self,
         oracle: &mut O,
         pg_list: &mut [PgId],
         rng: &mut R,
-        bump: &'a Bump,
-    ) -> Option<(Action, Event<'a>)> {
+        bump: &Bump,
+    ) -> Option<Action> {
         // Setting pgs_left as length resets the queue
         let mut pgs_left = pg_list.len();
         while pgs_left > 0 {
@@ -81,9 +81,8 @@ impl<'def> TransitionSystemRun<'def> {
             // or no more transition is possible
             // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
             // Hopefully it will be possible to treat all cases in a general way eventually.
-            let result = self.montecarlo_transition_pg(pg_id, oracle, rng, bump);
-            if let Some((action, event)) = result {
-                return Some((action, event));
+            if let Some(action) = self.montecarlo_transition_pg(pg_id, oracle, rng, bump) {
+                return Some(action);
             } else {
                 // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
                 // Decrease the length of the queue (so that selected element is removed)
@@ -95,12 +94,12 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     fn montecarlo_transition_pg<'a, O: Oracle, R: RngExt>(
-        &mut self,
+        &'a mut self,
         pg_id: PgId,
         oracle: &mut O,
         rng: &mut R,
         bump: &'a Bump,
-    ) -> Option<(Action, Event<'a>)> {
+    ) -> Option<Action> {
         let mut rng_extra = SmallRng::from_rng(rng);
         use bumpalo::collections::Vec as BumpVec;
 
@@ -119,11 +118,10 @@ impl<'def> TransitionSystemRun<'def> {
                 )
             })
         {
-            let event = self
-                .transition(oracle, action, post_states, bump)
+            self.transition(oracle, action, post_states, bump)
                 .expect("successful transition");
-            if event.is_some() {
-                return event.map(|ev| (action, ev));
+            if self.cs.last_event().is_some() {
+                return Some(action);
             }
         }
         None
@@ -139,8 +137,9 @@ impl<'def> TransitionSystemRun<'def> {
         self.cs.wait(1).expect("time error")
     }
 
-    pub(crate) fn labels(&self) -> impl Iterator<Item = bool> {
-        self.ts.predicates.iter().map(|prop| {
+    pub(crate) fn labels<'a>(&'a self) -> impl Iterator<Item = bool> + use<'a> {
+        let last_event = self.cs.last_event().map(|ev| ev.channel);
+        self.ts.predicates.iter().map(move |prop| {
             prop.eval::<SmallRng>(
                 &|port| match port {
                     Atom::State(channel, idx) => {
@@ -151,10 +150,9 @@ impl<'def> TransitionSystemRun<'def> {
                             .expect("port must exist and be initialized");
                         self.vals[self.vals_idx[port_idx] + idx]
                     }
-                    Atom::Event(event_channel) => Val::Boolean(
-                        self.last_event
-                            .is_some_and(|channel| channel == event_channel),
-                    ),
+                    Atom::Event(event_channel) => {
+                        Val::Boolean(last_event.is_some_and(|channel| channel == event_channel))
+                    }
                 },
                 None,
             )
@@ -175,34 +173,26 @@ impl<'def> TransitionSystemRun<'def> {
         &self.vals
     }
 
-    pub(crate) fn transition<'a, O: Oracle>(
+    pub(crate) fn transition<O: Oracle>(
         &mut self,
         oracle: &mut O,
         action: Action,
         post: &[Location],
-        bump: &'a Bump,
-    ) -> Result<Option<Event<'a>>, CsError> {
-        let last_event = self
-            .cs
-            .transition(action, post, bump)?
-            .map(|event| (action, event));
-        if let Some((_, event)) = last_event {
-            if let EventType::Send(vals) = event.event_type
-                && let Ok(index) = self.ts.ports.binary_search(&event.channel)
-            {
-                // Since we have to update old values,
-                // the vectors are already allocated and their len is always the same.
-                // Copying from slice should be faster than cloning.
-                self.vals[self.vals_idx[index]..self.vals_idx[index + 1]].copy_from_slice(vals);
-                let labels = bumpalo::collections::Vec::from_iter_in(self.labels(), bump);
-                oracle.update_state(&labels);
-            }
-            self.last_event = Some(event.channel);
-            Ok(Some(event))
-        } else {
-            self.last_event = None;
-            Ok(None)
+        bump: &Bump,
+    ) -> Result<(), CsError> {
+        self.cs.transition(action, post)?;
+        if let Some(event) = self.cs.last_event()
+            && let EventType::Send(vals) = event.event_type
+            && let Ok(index) = self.ts.ports.binary_search(&event.channel)
+        {
+            // Since we have to update old values,
+            // the vectors are already allocated and their len is always the same.
+            // Copying from slice should be faster than cloning.
+            self.vals[self.vals_idx[index]..self.vals_idx[index + 1]].copy_from_slice(vals);
+            let labels = bumpalo::collections::Vec::from_iter_in(self.labels(), bump);
+            oracle.update_state(&labels);
         }
+        Ok(())
     }
 
     pub(crate) fn ample<'a>(&'a self, amples: &'a mut [(FixedBitSet, bool)]) {
@@ -268,8 +258,22 @@ impl<'def> TransitionSystemRun<'def> {
                         Message::Receive => {
                             // Channel is not empty
                             ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
+                            // NOTE: If an execution fragment has a ProbeFullQueue action on a channel that is not initially full,
+                            // then it must be preceded by a Send action;
+                            // so, if the channel is not full and Send actions belong to the ample set, ProbeFullQueue does not need to belong to the ample set.
+                            // Otherwise, we add ProbeFullQueue actions to the ample set.
+                            if self.cs.is_channel_full(channel)
+                                || !ample_pg
+                                    .is_superset(self.ts.cs.senders_to_set(channel).unwrap())
+                            {
+                                ample_pg
+                                    .union_with(self.ts.cs.probe_full_queue_set(channel).unwrap());
+                            }
                         }
-                        Message::ProbeFullQueue => todo!(),
+                        Message::ProbeFullQueue => {
+                            // Channel is full
+                            ample_pg.union_with(self.ts.cs.receivers_from_set(channel).unwrap());
+                        }
                     }
                 } else {
                     // non-active action is not added to ample set,
@@ -288,7 +292,10 @@ impl<'def> TransitionSystemRun<'def> {
                             // Channel is empty
                             ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
                         }
-                        Message::ProbeFullQueue => todo!(),
+                        Message::ProbeFullQueue => {
+                            // Channel is not full
+                            ample_pg.union_with(self.ts.cs.senders_to_set(channel).unwrap());
+                        }
                     }
                 }
             } else {
@@ -330,7 +337,7 @@ impl<'def> TransitionSystemRun<'def> {
             }
             if let Some((action, post)) = choice {
                 self.cs
-                    .transition(action, post, bump)
+                    .transition(action, post)
                     .expect("transition must succeed");
             } else {
                 break;
@@ -356,5 +363,9 @@ impl<'def> TransitionSystemRun<'def> {
         CsError,
     > {
         self.cs.possible_transitions_pg(pg_id)
+    }
+
+    pub(crate) fn last_event(&self) -> Option<Event<'_>> {
+        self.cs.last_event()
     }
 }

@@ -259,9 +259,10 @@ impl TransitionSystem {
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
-            } else if let Some((action, event)) =
+            } else if let Some(action) =
                 run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
             {
+                let event = run.last_event().unwrap();
                 if let Some(ref mut t) = tracer {
                     t.trace(action, event, run.time(), &|channel| run.state(channel));
                 }
@@ -381,7 +382,7 @@ impl TransitionSystem {
                         } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
                             bump.reset();
                             branch_run.fastforward(&bump);
-                            let a = u16::from(action.program_gramph_id()) as usize;
+                            let a = u16::from(action.program_graph_id()) as usize;
                             let mut branch_amples = if let Some(mut set) = recycling_sets.pop() {
                                 // clone amples into recycled set;
                                 set.iter_mut().zip(amples.iter()).for_each(
@@ -410,9 +411,9 @@ impl TransitionSystem {
                     } else {
                         drop(transitions);
                         bump.reset();
-                        let event = run.transition(oracle, action, &posts, &bump).unwrap();
+                        run.transition(oracle, action, &posts, &bump).unwrap();
                         if tracer.is_some()
-                            && let Some(event) = event
+                            && let Some(event) = run.last_event()
                         {
                             trace.push((
                                 run.time(),
@@ -438,7 +439,7 @@ impl TransitionSystem {
                             bump.reset();
                             run.fastforward(&bump);
                             // Update DAG
-                            let a = u16::from(action.program_gramph_id()) as usize;
+                            let a = u16::from(action.program_graph_id()) as usize;
                             // NOTE: Ample sets, in this case, are closed under intersection,
                             // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
                             // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
@@ -668,7 +669,7 @@ impl TransitionSystem {
                             } else {
                                 dag.clone()
                             };
-                            let a = u16::from(action.program_gramph_id()) as usize;
+                            let a = u16::from(action.program_graph_id()) as usize;
                             let node_a = dag_ids[a];
                             restricted_ample.ones().for_each(|b| {
                                 if b != a {
@@ -713,16 +714,15 @@ impl TransitionSystem {
                 drop(transitions);
                 let action = action_l.expect("active transition");
                 bump.reset();
-                let event = run
-                    .transition(
-                        oracle,
-                        action,
-                        posts_last.as_ref().expect("active transition"),
-                        &bump,
-                    )
-                    .unwrap();
+                run.transition(
+                    oracle,
+                    action,
+                    posts_last.as_ref().expect("active transition"),
+                    &bump,
+                )
+                .unwrap();
                 if tracer.is_some()
-                    && let Some(event) = event
+                    && let Some(event) = run.last_event()
                 {
                     trace.push((run.time(), action, event.into(), run.whole_state().into()));
                 }
@@ -743,7 +743,7 @@ impl TransitionSystem {
                     bump.reset();
                     run.fastforward(&bump);
                     // Update DAG
-                    let a = u16::from(action.program_gramph_id()) as usize;
+                    let a = u16::from(action.program_graph_id()) as usize;
                     let node_a = dag_ids[a];
                     restricted_ample.ones().for_each(|b| {
                         if b != a {

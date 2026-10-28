@@ -5,7 +5,6 @@ use std::{
     rc::Rc,
 };
 
-use bumpalo::{Bump, collections::CollectIn};
 use rand::{Rng, rngs::SmallRng};
 
 use super::{
@@ -34,6 +33,7 @@ pub struct ProgramGraphRun<'def> {
     cache_states: Rc<Vec<usize>>,
     // active actions
     cache_actions: Rc<Vec<Action>>,
+    alloc_vals: Vec<Val>,
     iters: Vec<std::slice::Iter<'def, (Action, Vec<Transition>)>>,
     loc_trans: Vec<&'def [Transition]>,
 }
@@ -50,6 +50,7 @@ impl<'def> Clone for ProgramGraphRun<'def> {
             cache_actions: self.cache_actions.clone(),
             iters: Vec::with_capacity(self.current_states.len()),
             loc_trans: vec![[].as_slice(); self.current_states.len()],
+            alloc_vals: Vec::with_capacity(self.alloc_vals.capacity()),
         }
     }
 }
@@ -83,6 +84,15 @@ impl<'def> ProgramGraphRun<'def> {
             .map(|(actions, _)| actions.len())
             .max()
             .unwrap_or(program_graph.effects.len());
+        let max_vals = program_graph
+            .effects
+            .iter()
+            .map(|effect| match effect {
+                Effect::Effects(..) | Effect::Receive(..) => 0,
+                Effect::Send(expressions) => expressions.len(),
+            })
+            .max()
+            .unwrap_or_default();
         let mut pg = Self {
             current_states: program_graph.initial_states.clone(),
             vars: program_graph.vars.clone(),
@@ -94,6 +104,7 @@ impl<'def> ProgramGraphRun<'def> {
             cache_states: Rc::new(Vec::with_capacity(max_actions * states)),
             iters: Vec::with_capacity(program_graph.initial_states.len()),
             loc_trans: vec![[].as_slice(); program_graph.initial_states.len()],
+            alloc_vals: Vec::with_capacity(max_vals),
         };
         pg.refresh_cache();
         pg
@@ -146,7 +157,8 @@ impl<'def> ProgramGraphRun<'def> {
             })
     }
 
-    pub fn active_actions(&self) -> &[Action] {
+    #[inline]
+    pub(crate) fn active_actions(&self) -> &[Action] {
         &self.cache_actions
     }
 
@@ -223,20 +235,6 @@ impl<'def> ProgramGraphRun<'def> {
         self.cache_states = rc_states;
         self.cache_actions = rc_actions;
         self.cache_trans = rc_trans;
-    }
-
-    pub fn possible_transitions_action(&self, action: Action) -> impl Iterator<Item = &[Location]> {
-        let states = self.current_states.len();
-        self.cache_actions
-            .binary_search_by_key(&action, |a| *a)
-            .into_iter()
-            .flat_map(move |action_idx| {
-                self.cache_states[action_idx * states..=(action_idx + 1) * states]
-                    .array_windows()
-                    .map(|&[transitions_idx, next_transitions_idx]| {
-                        &self.cache_trans[transitions_idx..next_transitions_idx]
-                    })
-            })
     }
 
     #[inline]
@@ -405,13 +403,12 @@ impl<'def> ProgramGraphRun<'def> {
         }
     }
 
-    pub(crate) fn send<'a, R: Rng>(
+    pub(crate) fn send<R: Rng>(
         &mut self,
         action: Action,
         post_states: &[Location],
         rng: &mut R,
-        bump: &'a Bump,
-    ) -> Result<&'a [Val], PgError> {
+    ) -> Result<(), PgError> {
         if action == EPSILON {
             Err(PgError::NotSend(action))
         } else if post_states.len() != self.current_states.len() {
@@ -419,19 +416,25 @@ impl<'def> ProgramGraphRun<'def> {
             Err(PgError::Sync)
         } else if self.active_transitions(action, post_states, &[]) {
             if let Effect::Send(effects) = &self.def.effects[action.0 as usize] {
-                let vals = effects
-                    .iter()
-                    .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], Some(rng)))
-                    .collect_in::<bumpalo::collections::Vec<_>>(bump);
+                self.alloc_vals.clear();
+                self.alloc_vals.extend(
+                    effects
+                        .iter()
+                        .map(|effect| effect.eval(&|var| self.vars[var.0 as usize], Some(rng))),
+                );
                 self.current_states.copy_from_slice(post_states);
                 self.refresh_cache();
-                Ok(vals.into_bump_slice())
+                Ok(())
             } else {
                 Err(PgError::NotSend(action))
             }
         } else {
             Err(PgError::UnsatisfiedGuard)
         }
+    }
+
+    pub(crate) fn sent(&self) -> &[Val] {
+        &self.alloc_vals
     }
 
     pub(crate) fn receive(
