@@ -22,12 +22,11 @@ pub(crate) struct TransitionSystemRun<'def> {
     cs: ChannelSystemRun<'def>,
     vals: Box<[Val]>,
     vals_idx: Box<[usize]>,
-    last_event: Option<Channel>,
 }
 
 impl<'def> PartialEq for TransitionSystemRun<'def> {
     fn eq(&self, other: &Self) -> bool {
-        self.cs == other.cs && self.vals == other.vals && self.last_event == other.last_event
+        self.cs == other.cs && self.vals == other.vals
     }
 }
 
@@ -37,7 +36,6 @@ impl<'def> Hash for TransitionSystemRun<'def> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.cs.hash(state);
         self.vals.hash(state);
-        self.last_event.hash(state);
     }
 }
 
@@ -59,7 +57,6 @@ impl<'def> TransitionSystemRun<'def> {
             ts,
             cs: ts.cs.new_instance(),
             vals,
-            last_event: None,
             vals_idx,
         }
     }
@@ -73,6 +70,7 @@ impl<'def> TransitionSystemRun<'def> {
     ) -> Option<Action> {
         // Setting pgs_left as length resets the queue
         let mut pgs_left = pg_list.len();
+        let mut montecarlo_action = None;
         while pgs_left > 0 {
             // Select random pg within 0..pgs_left
             let pg_select = rng.random_range(0..pgs_left);
@@ -81,16 +79,17 @@ impl<'def> TransitionSystemRun<'def> {
             // or no more transition is possible
             // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
             // Hopefully it will be possible to treat all cases in a general way eventually.
-            if let Some(action) = self.montecarlo_transition_pg(pg_id, oracle, rng, bump) {
-                return Some(action);
-            } else {
+            montecarlo_action = self.montecarlo_transition_pg(pg_id, oracle, rng, bump);
+            if montecarlo_action.is_none() {
                 // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
                 // Decrease the length of the queue (so that selected element is removed)
                 pgs_left -= 1;
                 pg_list.swap(pg_select, pgs_left);
+            } else {
+                break;
             }
         }
-        None
+        montecarlo_action
     }
 
     fn montecarlo_transition_pg<'a, O: Oracle, R: RngExt>(
