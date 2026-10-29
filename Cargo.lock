@@ -403,7 +403,7 @@ checksum = "e96a4956774c13c126a8b5af4daa79384f4d826534c95a02d76afb39e2ab64e3"
 dependencies = [
  "encode_unicode",
  "libc",
- "unicode-width 0.2.2",
+ "unicode-width 0.2.3",
  "windows-sys",
 ]
 
@@ -743,7 +743,7 @@ version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
 dependencies = [
- "unicode-width 0.2.2",
+ "unicode-width 0.2.3",
 ]
 
 [[package]]
@@ -891,7 +891,7 @@ dependencies = [
  "console",
  "portable-atomic",
  "unicode-segmentation",
- "unicode-width 0.2.2",
+ "unicode-width 0.2.3",
  "unit-prefix",
  "web-time",
 ]
@@ -1902,9 +1902,9 @@ checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "unit-prefix"

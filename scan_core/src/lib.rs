@@ -246,7 +246,7 @@ impl<O: Oracle + Clone> Scan<O> {
     pub fn traces<'a, T>(
         &self,
         runs: usize,
-        path: PathBuf,
+        path: &Path,
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
     ) -> std::io::Result<()>
@@ -256,9 +256,9 @@ impl<O: Oracle + Clone> Scan<O> {
         info!("tracing starting");
         let start_time = Instant::now();
         self.reset();
-        create_traces_dirs_tree(&path)?;
+        create_traces_dirs_tree(path)?;
 
-        (0..runs).try_for_each(|idx| self.trace::<T>(path.clone(), model_data, scheduler, idx))?;
+        (0..runs).try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
@@ -267,7 +267,7 @@ impl<O: Oracle + Clone> Scan<O> {
 
     fn trace<'a, T>(
         &self,
-        mut path: PathBuf,
+        path: &Path,
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
         idx: usize,
@@ -278,12 +278,12 @@ impl<O: Oracle + Clone> Scan<O> {
         let filename = PathBuf::new()
             .with_file_name(format!("{idx:04}"))
             .with_extension(T::EXTENSION);
-        path.push(TEMP);
+        let mut path = path.join(TEMP);
         path.push(&filename);
         path.add_extension("gz");
         let file = File::create_new(&path)?;
         let writer = flate2::GzBuilder::new()
-            .filename(filename.to_str().expect("file name"))
+            .filename(filename.to_str().expect("file name is utf8"))
             .comment("Scan-generated execution trace")
             .write(file, flate2::Compression::best());
         let tracer = Some(T::init(writer, model_data));
@@ -353,7 +353,7 @@ where
     pub fn par_traces<'a, T>(
         &self,
         runs: usize,
-        path: PathBuf,
+        path: &Path,
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
     ) -> std::io::Result<()>
@@ -364,11 +364,11 @@ where
         info!("tracing starting");
         let start_time = Instant::now();
         self.reset();
-        create_traces_dirs_tree(&path)?;
+        create_traces_dirs_tree(path)?;
 
         (0..runs)
             .into_par_iter()
-            .try_for_each(|idx| self.trace::<T>(path.clone(), model_data, scheduler, idx))?;
+            .try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
@@ -377,8 +377,9 @@ where
 }
 
 fn create_traces_dirs_tree(path: &Path) -> std::io::Result<()> {
+    create_dir_all(path)?;
     let mut path = path.join(TEMP);
-    create_dir_all(&path)?;
+    create_dir(&path)?;
     assert!(path.pop());
     path.push(SUCCESSES);
     create_dir(&path)?;

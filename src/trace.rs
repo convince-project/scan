@@ -58,7 +58,7 @@ impl TraceArgs {
         model: &str,
         scan: &'a Scan<Od>,
         model_data: &'a Tr::ModelData,
-    ) -> anyhow::Result<()>
+    ) -> std::io::Result<()>
     where
         Od: Oracle + Clone + Sync + 'a,
         Tr: Tracer<'a>,
@@ -67,9 +67,9 @@ impl TraceArgs {
         let path = new_traces_dir();
         let scheduler = self.scheduler.unwrap_or_default().into();
         if self.single_thread {
-            scan.traces::<Tr>(self.traces, path, model_data, scheduler)?;
+            scan.traces::<Tr>(self.traces, &path, model_data, scheduler)?;
         } else {
-            scan.par_traces::<Tr>(self.traces, path, model_data, scheduler)?;
+            scan.par_traces::<Tr>(self.traces, &path, model_data, scheduler)?;
         }
         println!("trace computation for model '{model}' completed");
         Ok(())

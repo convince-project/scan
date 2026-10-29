@@ -89,7 +89,7 @@
 //!
 //! // Perform the transition, which sends a value to the channel queue
 //! // After this, the channel is full
-//! instance.transition(send, &[initial_1])
+//! instance.transition(pg_1, send, &[initial_1])
 //!     .expect("transition is possible");
 //!
 //! // Since the channel is now full, only pg_2 can transition (with receive)
@@ -160,7 +160,6 @@ impl From<Channel> for u16 {
 pub struct Location(PgId, PgLocation);
 
 impl Location {
-    /// The Program Graph the [`Location`] belongs to.
     #[inline]
     pub fn program_graph_id(&self) -> PgId {
         self.0
@@ -176,7 +175,6 @@ pub struct Action(PgId, PgAction);
 
 impl Action {
     #[inline]
-    /// The Program Graph the [`Action`] belongs to.
     pub fn program_graph_id(&self) -> PgId {
         self.0
     }
@@ -359,7 +357,6 @@ impl ChannelSystem {
     /// so that spawning instances is (relatively) inexpensive.
     ///
     /// See also [`ProgramGraph::new_instance`].
-    #[inline]
     pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
         ChannelSystemRun::new(self)
     }
@@ -382,28 +379,28 @@ impl ChannelSystem {
     }
 
     #[inline]
-    pub(crate) fn senders_to_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(crate) fn senders_to(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.senders
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub(crate) fn receivers_from_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(crate) fn receivers_from(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.receivers
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub(crate) fn probe_empty_queue_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(crate) fn probe_empty_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.probe_empty_queues
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub(crate) fn probe_full_queue_set(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(crate) fn probe_full_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.probe_full_queues
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
@@ -551,9 +548,9 @@ mod tests {
         // assert_eq!(cs.possible_transitions().count(), 1);
         assert_eq!(cs.def().communications_pg_idxs.as_ref(), &[0, 2, 5]);
 
-        cs.transition(send, &[post1])?;
+        cs.transition(send, &[post1], &bump)?;
         bump.reset();
-        cs.transition(receive, &[post2])?;
+        cs.transition(receive, &[post2], &bump)?;
         // assert_eq!(cs.possible_transitions().count(), 0);
         Ok(())
     }

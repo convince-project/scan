@@ -259,10 +259,9 @@ impl TransitionSystem {
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
-            } else if let Some(action) =
+            } else if let Some((action, event)) =
                 run.montecarlo_transition(&mut oracle, &mut pg_list, &mut rng, &bump)
             {
-                let event = run.last_event().unwrap();
                 if let Some(ref mut t) = tracer {
                     t.trace(action, event, run.time(), &|channel| run.state(channel));
                 }
@@ -411,9 +410,9 @@ impl TransitionSystem {
                     } else {
                         drop(transitions);
                         bump.reset();
-                        run.transition(oracle, action, &posts, &bump).unwrap();
+                        let event = run.transition(oracle, action, &posts, &bump).unwrap();
                         if tracer.is_some()
-                            && let Some(event) = run.last_event()
+                            && let Some(event) = event
                         {
                             trace.push((
                                 run.time(),
@@ -714,15 +713,16 @@ impl TransitionSystem {
                 drop(transitions);
                 let action = action_l.expect("active transition");
                 bump.reset();
-                run.transition(
-                    oracle,
-                    action,
-                    posts_last.as_ref().expect("active transition"),
-                    &bump,
-                )
-                .unwrap();
+                let event = run
+                    .transition(
+                        oracle,
+                        action,
+                        posts_last.as_ref().expect("active transition"),
+                        &bump,
+                    )
+                    .unwrap();
                 if tracer.is_some()
-                    && let Some(event) = run.last_event()
+                    && let Some(event) = event
                 {
                     trace.push((run.time(), action, event.into(), run.whole_state().into()));
                 }
