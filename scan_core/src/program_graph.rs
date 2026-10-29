@@ -261,6 +261,7 @@ impl ProgramGraph {
         ProgramGraphRun::new(self)
     }
 
+    /// Initial states of the [`ProgramGraph`].
     pub fn initial_states(&self) -> &[Location] {
         &self.initial_states
     }

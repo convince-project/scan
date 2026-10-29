@@ -160,6 +160,7 @@ impl From<Channel> for u16 {
 pub struct Location(PgId, PgLocation);
 
 impl Location {
+    /// [`PgId`] of the Program Graph the [`Location`] belongs to within the Channel System.
     #[inline]
     pub fn program_graph_id(&self) -> PgId {
         self.0
@@ -174,6 +175,7 @@ impl Location {
 pub struct Action(PgId, PgAction);
 
 impl Action {
+    /// [`PgId`] of the Program Graph the [`Action`] belongs to within the Channel System.
     #[inline]
     pub fn program_graph_id(&self) -> PgId {
         self.0
