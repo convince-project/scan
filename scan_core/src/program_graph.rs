@@ -264,11 +264,13 @@ impl ProgramGraph {
     ///
     /// The new instance borrows the caller to refer to the PG definition without copying its data,
     /// so that spawning instances is (relatively) inexpensive.
+    #[inline]
     pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def> {
         ProgramGraphRun::new(self)
     }
 
     /// Initial states of the [`ProgramGraph`].
+    #[inline]
     pub fn initial_states(&self) -> &[Location] {
         &self.initial_states
     }
@@ -291,6 +293,28 @@ impl ProgramGraph {
                     .1
                     .partition_point(|&(p, ..)| p < post_state);
                 a_transitions[transitions_idx].1[post_idx_lb..]
+                    .iter()
+                    .take_while(move |&&(p, ..)| p == post_state)
+                    .map(|(_, g, c)| (g.as_ref(), c.as_ref()))
+            })
+    }
+
+    // Returns autonomous transition's guard.
+    // Panics if the pre- or post-state do not exist.
+    #[inline]
+    fn autonomous_guards(
+        &self,
+        pre_state: Location,
+        post_state: Location,
+    ) -> impl Iterator<Item = (Option<&PgGuard>, &[(Clock, TimeRange)])> {
+        self.locations[pre_state.0 as usize]
+            .0
+            .last()
+            .into_iter()
+            .filter(|&&(action, _)| action == EPSILON)
+            .flat_map(move |(_action, transitions)| {
+                let post_idx_lb = transitions.partition_point(|&(p, ..)| p < post_state);
+                transitions[post_idx_lb..]
                     .iter()
                     .take_while(move |&&(p, ..)| p == post_state)
                     .map(|(_, g, c)| (g.as_ref(), c.as_ref()))

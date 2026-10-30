@@ -235,9 +235,7 @@ impl<'def> ProgramGraphRun<'def> {
         constraints: &[(Clock, TimeRange)],
     ) -> bool {
         let (_, ref invariants) = self.def.locations[post_state.0 as usize];
-        if action != EPSILON
-            && let Effect::Effects(_, ref resets) = self.def.effects[action.0 as usize]
-        {
+        if let Some(Effect::Effects(_, resets)) = self.def.effects.get(action.0 as usize) {
             self.active_transition(guard, constraints, invariants, resets)
         } else {
             self.active_autonomous_transition(guard, constraints, invariants)
@@ -306,15 +304,15 @@ impl<'def> ProgramGraphRun<'def> {
             .iter()
             .zip(post_states)
             .all(|(current_state, post_state)| {
-                self.def
-                    .guards(*current_state, EPSILON, *post_state)
-                    .any(|(guard, constraints)| {
+                self.def.autonomous_guards(*current_state, *post_state).any(
+                    |(guard, constraints)| {
                         self.active_autonomous_transition(
                             guard,
                             constraints,
                             &self.def.locations[post_state.0 as usize].1,
                         )
-                    })
+                    },
+                )
             })
     }
 
