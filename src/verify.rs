@@ -120,13 +120,14 @@ impl VerifyArgs {
     where
         O: Oracle + Clone + Sync + 'a,
     {
-        let scheduler = self.scheduler.unwrap_or_default().into();
-        let report = if self.single_thread {
-            scan.adaptive(self.confidence, self.precision, scheduler)
-        } else {
-            scan.par_adaptive(self.confidence, self.precision, scheduler)
-        }
-        .expect("verify");
+        let report = scan
+            .adaptive(
+                self.confidence,
+                self.precision,
+                self.scheduler.unwrap_or_default().into(),
+                self.single_thread,
+            )
+            .expect("verify");
         let successes = report.successes;
         let failures = report.failures;
         let runs = successes + failures;

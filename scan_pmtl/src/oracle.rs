@@ -17,9 +17,9 @@ where
     /// An atomic formula.
     Atom(V),
     /// Logical disjunction of a list of formulae.
-    And(Vec<Pmtl<V>>),
+    And(Box<[Pmtl<V>]>),
     /// Logical conjunction of a list of formulae.
-    Or(Vec<Pmtl<V>>),
+    Or(Box<[Pmtl<V>]>),
     /// Logical negation of a formula.
     Not(Box<Pmtl<V>>),
     /// Logical implication of a antecedent formula and a consequent formula.

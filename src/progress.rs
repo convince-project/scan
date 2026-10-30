@@ -94,7 +94,7 @@ impl Bar {
         progress_bar.tick();
 
         bars.set_move_cursor(true);
-        while scan.running() || (scan.successes() == 0 && scan.failures() == 0) {
+        while scan.is_running() || (scan.successes() == 0 && scan.failures() == 0) {
             let successes = scan.successes();
             let failures = scan.failures();
             let runs = (successes + failures) as u64;

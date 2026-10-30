@@ -138,7 +138,7 @@ impl<O: Oracle> Scan<O> {
 
     /// Tells whether a verification task is currently running.
     #[inline]
-    pub fn running(&self) -> bool {
+    pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
 
@@ -161,7 +161,10 @@ impl<O: Oracle> Scan<O> {
     }
 }
 
-impl<O: Oracle + Clone> Scan<O> {
+impl<O> Scan<O>
+where
+    O: Oracle + Clone + Sync,
+{
     fn verification(&self, confidence: f64, precision: f64, scheduler: Scheduler) {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
@@ -212,6 +215,7 @@ impl<O: Oracle + Clone> Scan<O> {
         confidence: f64,
         precision: f64,
         scheduler: Scheduler,
+        single_thread: bool,
     ) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
@@ -226,10 +230,11 @@ impl<O: Oracle + Clone> Scan<O> {
         info!("verification starting");
         let start_time = Instant::now();
 
-        let runs = (0..)
-            .map(|_| self.verification(confidence, precision, scheduler))
-            .take_while(|_| self.running.load(Ordering::Relaxed))
-            .count() as u32;
+        let runs = if single_thread {
+            self.seq_adaptive(confidence, precision, scheduler)
+        } else {
+            self.par_adaptive(confidence, precision, scheduler)
+        };
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
@@ -241,6 +246,23 @@ impl<O: Oracle + Clone> Scan<O> {
         })
     }
 
+    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
+    /// spawning multiple threads.
+    fn par_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+        (0..usize::MAX)
+            .into_par_iter()
+            .map(|_| self.verification(confidence, precision, scheduler))
+            .take_any_while(|_| self.running.load(Ordering::Relaxed))
+            .count() as u32
+    }
+
+    fn seq_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+        (0..)
+            .map(|_| self.verification(confidence, precision, scheduler))
+            .take_while(|_| self.running.load(Ordering::Relaxed))
+            .count() as u32
+    }
+
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`].
     pub fn traces<'a, T>(
@@ -249,16 +271,24 @@ impl<O: Oracle + Clone> Scan<O> {
         path: &Path,
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
+        single_thread: bool,
     ) -> std::io::Result<()>
     where
         T: Tracer<'a>,
+        T::ModelData: Sync,
     {
         info!("tracing starting");
         let start_time = Instant::now();
         self.reset();
         create_traces_dirs_tree(path)?;
 
-        (0..runs).try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
+        if single_thread {
+            (0..runs).try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
+        } else {
+            (0..runs)
+                .into_par_iter()
+                .try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
+        }
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
@@ -302,76 +332,6 @@ impl<O: Oracle + Clone> Scan<O> {
             new_path.push(path.file_name().expect("file name"));
             rename(&path, new_path)?;
         }
-        Ok(())
-    }
-}
-
-impl<O> Scan<O>
-where
-    O: Oracle + Clone + Sync,
-{
-    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
-    /// spawning multiple threads.
-    pub fn par_adaptive(
-        &self,
-        confidence: f64,
-        precision: f64,
-        scheduler: Scheduler,
-    ) -> Result<Report, ScanError> {
-        if !(0f64 < confidence && confidence < 1f64) {
-            return Err(ScanError::OutOfBoundsConfidence(confidence));
-        }
-        if !(0f64 < precision && precision < 1f64) {
-            return Err(ScanError::OutOfBoundsPrecision(precision));
-        }
-
-        self.reset();
-
-        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
-        info!("verification starting");
-        let start_time = Instant::now();
-
-        let runs = (0..usize::MAX)
-            .into_par_iter()
-            .map(|_| self.verification(confidence, precision, scheduler))
-            .take_any_while(|_| self.running.load(Ordering::Relaxed))
-            .count() as u32;
-
-        let elapsed = start_time.elapsed();
-        info!("verification completed in {elapsed:0.2?}");
-        Ok(Report {
-            runs,
-            successes: self.successes(),
-            failures: self.failures(),
-            violations: self.violations().collect(),
-        })
-    }
-
-    /// Produces and saves the traces for the given number of runs,
-    /// using the provided [`Tracer`],
-    /// spawning multiple threads.
-    pub fn par_traces<'a, T>(
-        &self,
-        runs: usize,
-        path: &Path,
-        model_data: &'a T::ModelData,
-        scheduler: Scheduler,
-    ) -> std::io::Result<()>
-    where
-        T: Tracer<'a>,
-        T::ModelData: Sync,
-    {
-        info!("tracing starting");
-        let start_time = Instant::now();
-        self.reset();
-        create_traces_dirs_tree(path)?;
-
-        (0..runs)
-            .into_par_iter()
-            .try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
-
-        let elapsed = start_time.elapsed();
-        info!("tracing completed in {elapsed:0.2?}");
         Ok(())
     }
 }

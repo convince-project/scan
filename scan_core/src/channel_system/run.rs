@@ -71,7 +71,7 @@ impl<'def> ChannelSystemRun<'def> {
     /// so that spawning instances is (relatively) inexpensive.
     ///
     /// See also [`ProgramGraphRun::new`].
-    pub fn new(cs: &'def ChannelSystem) -> Self {
+    pub(super) fn new(cs: &'def ChannelSystem) -> Self {
         let pgs = cs.program_graphs.len() as u16;
         let mut pg_list = Vec::from_iter((0..pgs).map(PgId));
         pg_list.shrink_to_fit();
@@ -104,48 +104,42 @@ impl<'def> ChannelSystemRun<'def> {
         }
     }
 
-    /// Returns a reference to the underlying [`ChannelSystem`] defining the execution.
-    #[inline]
-    pub fn def(&self) -> &ChannelSystem {
-        self.def
-    }
-
     /// Returns the current time of the CS.
     #[inline]
-    pub fn time(&self) -> Time {
+    pub(crate) fn time(&self) -> Time {
         self.time
     }
 
     /// Returns an immutable reference to the [`ProgramGraphRun`]s of the Channel System associated to the given [`PgId`].
     #[inline]
-    pub fn program_graph(&self, pg_id: PgId) -> Result<&ProgramGraphRun<'_>, CsError> {
+    pub(super) fn program_graph(&self, pg_id: PgId) -> Result<&ProgramGraphRun<'_>, CsError> {
         self.program_graphs
             .get(pg_id.0 as usize)
             .ok_or(CsError::MissingPg(pg_id))
     }
 
-    /// Iterates over all transitions that can be admitted in the current state.
-    ///
-    /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
-    /// (the pre-state being necessarily the current state of the machine).
-    /// The (eventual) guard is guaranteed to be satisfied.
-    ///
-    /// See also [`ProgramGraphRun::possible_transitions`].
-    pub fn possible_transitions(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            PgId,
-            Action,
-            impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
-        ),
-    > {
-        self.def.program_graph_ids().flat_map(move |pg_id| {
-            self.possible_transitions_pg(pg_id)
-                .expect("pg exists")
-                .map(move |(action, transitions)| (pg_id, action, transitions))
-        })
-    }
+    // /// Iterates over all transitions that can be admitted in the current state.
+    // ///
+    // /// An admissible transition is characterized by the PG it executes on, the required action and the post-state
+    // /// (the pre-state being necessarily the current state of the machine).
+    // /// The (eventual) guard is guaranteed to be satisfied.
+    // ///
+    // /// See also [`ProgramGraphRun::possible_transitions`].
+    // pub(crate) fn possible_transitions(
+    //     &self,
+    // ) -> impl Iterator<
+    //     Item = (
+    //         PgId,
+    //         Action,
+    //         impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
+    //     ),
+    // > {
+    //     self.def.program_graph_ids().flat_map(move |pg_id| {
+    //         self.possible_transitions_pg(pg_id)
+    //             .expect("pg exists")
+    //             .map(move |(action, transitions)| (pg_id, action, transitions))
+    //     })
+    // }
 
     pub(crate) fn active_actions_pg(
         &self,
@@ -165,7 +159,7 @@ impl<'def> ChannelSystemRun<'def> {
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
     /// See also [`ProgramGraphRun::possible_transitions`].
-    pub fn possible_transitions_pg<'a>(
+    pub(crate) fn possible_transitions_pg<'a>(
         &'a self,
         pg_id: PgId,
     ) -> Result<
@@ -243,7 +237,7 @@ impl<'def> ChannelSystemRun<'def> {
     /// Fails if the requested transition is not admissible.
     ///
     /// See also [`ProgramGraphRun::transition`].
-    pub fn transition<'a>(
+    pub(crate) fn transition<'a>(
         &mut self,
         action: Action,
         posts: &[Location],
@@ -347,7 +341,7 @@ impl<'def> ChannelSystemRun<'def> {
 
     /// Tries waiting for the given delta of time.
     /// Returns error if any of the PG cannot wait due to some time invariant.
-    pub fn wait(&mut self, delta: Time) -> Result<(), CsError> {
+    pub(crate) fn wait(&mut self, delta: Time) -> Result<(), CsError> {
         if let Some(pg) = self
             .program_graphs
             .iter()
@@ -365,13 +359,13 @@ impl<'def> ChannelSystemRun<'def> {
 
     /// Checks if it is possible to wait a given amount of time-units without violating the time invariants.
     #[inline]
-    pub fn can_wait(&self, delta: Time) -> bool {
+    pub(super) fn can_wait(&self, delta: Time) -> bool {
         self.program_graphs.iter().all(|pg| pg.can_wait(delta))
     }
 
     /// Returns `true` if there is any transition from the current state that will be unlocked at some point in the future.
     #[inline]
-    pub fn is_waiting(&self) -> bool {
+    pub(crate) fn is_waiting(&self) -> bool {
         self.can_wait(1) && self.program_graphs.iter().any(|pg| pg.is_waiting())
     }
 }

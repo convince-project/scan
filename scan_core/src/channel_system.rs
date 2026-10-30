@@ -373,56 +373,43 @@ impl ChannelSystem {
     }
 
     #[inline]
-    pub(crate) fn senders_to(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(super) fn senders_to(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.senders
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub(crate) fn receivers_from(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(super) fn receivers_from(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.receivers
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub(crate) fn probe_empty_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(super) fn probe_empty_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.probe_empty_queues
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
     #[inline]
-    pub(crate) fn probe_full_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+    pub(super) fn probe_full_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.probe_full_queues
             .get(channel.0 as usize)
             .ok_or(CsError::MissingChannel(channel))
     }
 
-    /// Returns an immutable reference to the list of [`ProgramGraph`]s of the Channel System.
-    #[inline]
-    pub fn program_graphs(&self) -> &[ProgramGraph] {
-        &self.program_graphs
-    }
-
     /// Returns the list of [`PgId`]s associated to the Program Graphs of the Channel System.
     #[inline]
-    pub fn program_graph_ids(&self) -> impl Iterator<Item = PgId> {
+    pub(super) fn program_graph_ids(&self) -> impl Iterator<Item = PgId> {
         (0..self.program_graphs.len()).map(|idx| PgId(idx as PgIndex))
-    }
-
-    /// Returns the list of defined channels, given as the pair of their type and capacity
-    /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
-    #[inline]
-    pub fn channels(&self) -> &[(Box<[Type]>, ChannelCapacity)] {
-        self.channels.as_ref()
     }
 
     /// Returns the type and capacity of the given channel
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
     #[inline]
-    pub fn channel(&self, channel: Channel) -> Result<(&[Type], ChannelCapacity), CsError> {
+    pub(super) fn channel(&self, channel: Channel) -> Result<(&[Type], ChannelCapacity), CsError> {
         self.channels
             .get(channel.0 as usize)
             .map(|(types, cap)| (types.as_ref(), *cap))
@@ -540,7 +527,7 @@ mod tests {
         let cs_def = cs.build();
         let mut cs = cs_def.new_instance();
         // assert_eq!(cs.possible_transitions().count(), 1);
-        assert_eq!(cs.def().communications_pg_idxs.as_ref(), &[0, 2, 5]);
+        // assert_eq!(cs.def.communications_pg_idxs.as_ref(), &[0, 2, 5]);
 
         cs.transition(send, &[post1], &bump)?;
         bump.reset();

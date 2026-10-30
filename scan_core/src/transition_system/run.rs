@@ -17,7 +17,7 @@ use crate::{Atom, Oracle, Time, TransitionSystem, Val};
 /// It is essentially a CS which keeps track of the [`Event`]s produced by the execution
 /// and determining a set of predicates.
 #[derive(Debug, Clone)]
-pub(crate) struct TransitionSystemRun<'def> {
+pub(super) struct TransitionSystemRun<'def> {
     ts: &'def super::TransitionSystem,
     cs: ChannelSystemRun<'def>,
     vals: Box<[Val]>,
@@ -42,7 +42,7 @@ impl<'def> Hash for TransitionSystemRun<'def> {
 }
 
 impl<'def> TransitionSystemRun<'def> {
-    pub(crate) fn new(ts: &'def TransitionSystem) -> Self {
+    pub(super) fn new(ts: &'def TransitionSystem) -> Self {
         let vals_idx = [0]
             .into_iter()
             .chain(ts.vals.iter().scan(0, |counter, val| {
@@ -64,7 +64,7 @@ impl<'def> TransitionSystemRun<'def> {
         }
     }
 
-    pub(crate) fn montecarlo_transition<'a, O: Oracle, R: RngExt>(
+    pub(super) fn montecarlo_transition<'a, O: Oracle, R: RngExt>(
         &mut self,
         oracle: &mut O,
         pg_list: &mut [PgId],
@@ -126,16 +126,16 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     #[inline]
-    pub(crate) fn time(&self) -> Time {
+    pub(super) fn time(&self) -> Time {
         self.cs.time()
     }
 
     #[inline]
-    pub(crate) fn time_tick(&mut self) {
+    pub(super) fn time_tick(&mut self) {
         self.cs.wait(1).expect("time error")
     }
 
-    pub(crate) fn labels(&self) -> impl Iterator<Item = bool> {
+    pub(super) fn labels(&self) -> impl Iterator<Item = bool> {
         self.ts.predicates.iter().map(|prop| {
             prop.eval::<SmallRng>(
                 &|port| match port {
@@ -158,7 +158,7 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     #[inline]
-    pub(crate) fn state(&self, port: Channel) -> Option<&[Val]> {
+    pub(super) fn state(&self, port: Channel) -> Option<&[Val]> {
         self.ts
             .ports
             .binary_search(&port)
@@ -167,11 +167,11 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     #[inline]
-    pub(crate) fn whole_state(&self) -> &[Val] {
+    pub(super) fn whole_state(&self) -> &[Val] {
         &self.vals
     }
 
-    pub(crate) fn transition<'a, O: Oracle>(
+    pub(super) fn transition<'a, O: Oracle>(
         &mut self,
         oracle: &mut O,
         action: Action,
@@ -197,7 +197,7 @@ impl<'def> TransitionSystemRun<'def> {
         Ok(last_event)
     }
 
-    pub(crate) fn ample<'a>(&'a self, amples: &'a mut [(FixedBitSet, bool)]) {
+    pub(super) fn ample<'a>(&'a self, amples: &'a mut [(FixedBitSet, bool)]) {
         self.ts
             .pg_list
             .iter()
@@ -303,7 +303,7 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     #[inline]
-    pub(crate) fn fastforward<'a>(&'a mut self, bump: &'a Bump) {
+    pub(super) fn fastforward<'a>(&'a mut self, bump: &'a Bump) {
         for &pg_id in &self.ts.pg_list {
             self.fastforward_pg(pg_id, bump);
         }
@@ -347,12 +347,12 @@ impl<'def> TransitionSystemRun<'def> {
     }
 
     #[inline]
-    pub(crate) fn is_waiting(&self) -> bool {
+    pub(super) fn is_waiting(&self) -> bool {
         self.cs.is_waiting()
     }
 
     #[inline]
-    pub(crate) fn possible_transitions_pg(
+    pub(super) fn possible_transitions_pg(
         &self,
         pg_id: PgId,
     ) -> Result<

@@ -68,6 +68,6 @@ fn elif() {
 fn test(path: &Path) {
     let (scan, ..) = scan_scxml::load(path, &[], true).expect("load model");
     let _ = scan
-        .adaptive(0.95, 0.01, scan_core::Scheduler::Uniform)
+        .adaptive(0.95, 0.01, scan_core::Scheduler::Uniform, true)
         .expect("run verification");
 }

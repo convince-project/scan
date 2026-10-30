@@ -207,6 +207,7 @@ impl TransitionSystem {
     }
 
     /// Generates an executable run of the model.
+    #[inline]
     fn new_run(&self) -> TransitionSystemRun<'_> {
         info!(
             "create new transition system run with {} ports and {} predicates",
