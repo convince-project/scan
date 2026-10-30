@@ -310,12 +310,12 @@ fn parse_predicates(
         Pmtl::And(vec) => vec
             .into_iter()
             .map(|f| parse_predicates(f, predicates, interner))
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Box<[_]>, _>>()
             .map(Pmtl::And),
         Pmtl::Or(vec) => vec
             .into_iter()
             .map(|f| parse_predicates(f, predicates, interner))
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Box<[_]>, _>>()
             .map(Pmtl::Or),
         Pmtl::Not(pmtl) => {
             parse_predicates(*pmtl, predicates, interner).map(|f| Pmtl::Not(Box::new(f)))
