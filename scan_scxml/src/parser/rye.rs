@@ -134,8 +134,8 @@ fn parser<'src>() -> impl Parser<'src, &'src [Token], Pmtl<String>, extra::Err<S
                 .then(temp_unary)
                 .repeated(),
             |lhs, (op, rhs)| match op {
-                Token::And => Pmtl::And(vec![lhs, rhs]),
-                Token::Or => Pmtl::Or(vec![lhs, rhs]),
+                Token::And => Pmtl::And(Box::new([lhs, rhs])),
+                Token::Or => Pmtl::Or(Box::new([lhs, rhs])),
                 Token::Implies => Pmtl::Implies(Box::new((lhs, rhs))),
                 Token::Since => Pmtl::Since(Box::new((lhs, rhs)), TimeRange::new(..)),
                 _ => unreachable!(),

@@ -117,18 +117,19 @@ use crate::program_graph::{
     Action as PgAction, Clock as PgClock, Location as PgLocation, Var as PgVar, *,
 };
 pub use builder::*;
+use fixedbitset::FixedBitSet;
 use get_size2::GetSize;
 pub use run::ChannelSystemRun;
 use thiserror::Error;
 
-type PgIndex = u16;
+pub(crate) type PgIndex = u16;
 
 /// An indexing object for PGs in a CS.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
-pub struct PgId(PgIndex);
+pub struct PgId(pub(crate) PgIndex);
 
 impl From<PgId> for PgIndex {
     #[inline]
@@ -158,12 +159,28 @@ impl From<Channel> for u16 {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Location(PgId, PgLocation);
 
+impl Location {
+    /// [`PgId`] of the Program Graph the [`Location`] belongs to within the Channel System.
+    #[inline]
+    pub fn program_graph_id(&self) -> PgId {
+        self.0
+    }
+}
+
 /// An indexing object for actions in a CS.
 ///
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Action(PgId, PgAction);
+
+impl Action {
+    /// [`PgId`] of the Program Graph the [`Action`] belongs to within the Channel System.
+    #[inline]
+    pub fn program_graph_id(&self) -> PgId {
+        self.0
+    }
+}
 
 /// An indexing object for typed variables in a CS.
 ///
@@ -253,23 +270,23 @@ pub enum CsError {
 }
 
 /// A Channel System event related to a channel.
-#[derive(Debug, Clone, PartialEq, GetSize)]
-pub struct Event {
+#[derive(Debug, Clone, Copy, PartialEq, GetSize)]
+pub struct Event<'a> {
     /// The PG producing the event in the course of a transition.
     pub pg_id: PgId,
     /// The channel involved in the event.
     pub channel: Channel,
     /// The type of event produced.
-    pub event_type: EventType,
+    pub event_type: EventType<'a>,
 }
 
 /// A Channel System event type related to a channel.
-#[derive(Debug, Clone, PartialEq, GetSize)]
-pub enum EventType {
+#[derive(Debug, Clone, Copy, PartialEq, GetSize)]
+pub enum EventType<'a> {
     /// Sending a value to a channel.
-    Send(Vec<Val>),
+    Send(&'a [Val]),
     /// Retrieving a value out of a channel.
-    Receive(Vec<Val>),
+    Receive(&'a [Val]),
     /// Checking whether a channel is empty.
     ProbeEmptyQueue,
     /// Checking whether a channel is full.
@@ -321,10 +338,18 @@ pub enum ChannelCapacity {
 /// ```
 #[derive(Debug, Clone, GetSize)]
 pub struct ChannelSystem {
-    channels: Vec<(Vec<Type>, ChannelCapacity)>,
-    communications: Vec<Option<(Channel, Message)>>,
-    communications_pg_idxs: Vec<usize>,
-    program_graphs: Vec<ProgramGraph>,
+    channels: Box<[(Box<[Type]>, ChannelCapacity)]>,
+    communications: Box<[Option<(Channel, Message)>]>,
+    communications_pg_idxs: Box<[usize]>,
+    program_graphs: Box<[ProgramGraph]>,
+    #[get_size(ignore)]
+    senders: Box<[FixedBitSet]>,
+    #[get_size(ignore)]
+    probe_empty_queues: Box<[FixedBitSet]>,
+    #[get_size(ignore)]
+    receivers: Box<[FixedBitSet]>,
+    #[get_size(ignore)]
+    probe_full_queues: Box<[FixedBitSet]>,
 }
 
 impl ChannelSystem {
@@ -334,18 +359,45 @@ impl ChannelSystem {
     /// so that spawning instances is (relatively) inexpensive.
     ///
     /// See also [`ProgramGraph::new_instance`].
+    #[inline]
     pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
         ChannelSystemRun::new(self)
     }
 
     #[inline]
-    fn communication(&self, pg_id: PgId, pg_action: PgAction) -> Option<(Channel, Message)> {
-        if pg_action == EPSILON {
-            None
-        } else {
-            let start = self.communications_pg_idxs[pg_id.0 as usize];
-            self.communications[start + ActionIdx::from(pg_action) as usize]
-        }
+    pub(super) fn communication(&self, action: Action) -> Option<(Channel, Message)> {
+        let start = self.communications_pg_idxs[PgIndex::from(action.0) as usize];
+        *self
+            .communications
+            .get(start + ActionIdx::from(action.1) as usize)?
+    }
+
+    #[inline]
+    pub(crate) fn senders_to(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+        self.senders
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+    }
+
+    #[inline]
+    pub(crate) fn receivers_from(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+        self.receivers
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+    }
+
+    #[inline]
+    pub(crate) fn probe_empty_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+        self.probe_empty_queues
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
+    }
+
+    #[inline]
+    pub(crate) fn probe_full_queue(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
+        self.probe_full_queues
+            .get(channel.0 as usize)
+            .ok_or(CsError::MissingChannel(channel))
     }
 
     /// Returns an immutable reference to the list of [`ProgramGraph`]s of the Channel System.
@@ -363,8 +415,8 @@ impl ChannelSystem {
     /// Returns the list of defined channels, given as the pair of their type and capacity
     /// (where `None` denotes channels with infinite capacity, and `Some` denotes channels with finite capacity).
     #[inline]
-    pub fn channels(&self) -> &[(Vec<Type>, ChannelCapacity)] {
-        &self.channels
+    pub fn channels(&self) -> &[(Box<[Type]>, ChannelCapacity)] {
+        self.channels.as_ref()
     }
 
     /// Returns the type and capacity of the given channel
@@ -373,13 +425,15 @@ impl ChannelSystem {
     pub fn channel(&self, channel: Channel) -> Result<(&[Type], ChannelCapacity), CsError> {
         self.channels
             .get(channel.0 as usize)
-            .map(|(types, cap)| (types.as_slice(), *cap))
+            .map(|(types, cap)| (types.as_ref(), *cap))
             .ok_or(CsError::MissingChannel(channel))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use bumpalo::Bump;
+
     use super::*;
 
     #[test]
@@ -457,6 +511,7 @@ mod tests {
 
     #[test]
     fn add_communication() -> Result<(), CsError> {
+        let mut bump = Bump::new();
         let mut cs = ChannelSystemBuilder::new();
         let ch = cs.new_channel(vec![Type::Boolean], Some(1));
 
@@ -485,10 +540,11 @@ mod tests {
         let cs_def = cs.build();
         let mut cs = cs_def.new_instance();
         // assert_eq!(cs.possible_transitions().count(), 1);
-        assert_eq!(cs.def().communications_pg_idxs, vec![0, 2, 5]);
+        assert_eq!(cs.def().communications_pg_idxs.as_ref(), &[0, 2, 5]);
 
-        cs.transition(pg1, send, &[post1])?;
-        cs.transition(pg2, receive, &[post2])?;
+        cs.transition(send, &[post1], &bump)?;
+        bump.reset();
+        cs.transition(receive, &[post2], &bump)?;
         // assert_eq!(cs.possible_transitions().count(), 0);
         Ok(())
     }

@@ -1,6 +1,7 @@
 use std::ops::{Add, Div, Mul, Neg};
 
 use get_size2::GetSize;
+use num_rational::Rational64;
 use rand::{Rng, RngExt};
 
 use crate::{
@@ -9,10 +10,11 @@ use crate::{
 };
 
 /// Floating-point values.
-pub type Float = f64;
+pub type Float = Rational64;
 
 /// Floating-point numerical expression.
 #[derive(Debug, Clone, GetSize)]
+#[get_size(ignore(Float))]
 pub enum FloatExpr<V>
 where
     V: Clone,
@@ -21,7 +23,7 @@ where
     // General expressions
     // -------------------
     /// A constant value.
-    Const(Float),
+    Const(#[get_size(size = 16)] Float),
     /// A typed variable.
     Var(V),
     /// Conversion from Natural
@@ -39,9 +41,9 @@ where
     /// Opposite of a numerical expression.
     Opposite(Box<FloatExpr<V>>),
     /// Arithmetic n-ary sum.
-    Sum(Vec<FloatExpr<V>>),
+    Sum(Box<[FloatExpr<V>]>),
     /// Arithmetic n-ary multiplication.
-    Product(Vec<FloatExpr<V>>),
+    Product(Box<[FloatExpr<V>]>),
     /// Div operation
     Div(Box<(FloatExpr<V>, FloatExpr<V>)>),
     // --------------------
@@ -106,16 +108,20 @@ where
                 }
             }
             // NOTE WARN: the u64 as f64 is lossy!
-            FloatExpr::Nat(natural_expr) => natural_expr.eval(vars, rng) as f64,
+            FloatExpr::Nat(natural_expr) => {
+                Float::from_integer(natural_expr.eval(vars, rng) as i64)
+            }
             // NOTE WARN: the i64 as f64 is lossy!
-            FloatExpr::Int(integer_expr) => integer_expr.eval(vars, rng) as f64,
+            FloatExpr::Int(integer_expr) => Float::from_integer(integer_expr.eval(vars, rng)),
             FloatExpr::Rand(bounds) => {
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
                 let lower_bound = lower_bound_expr.eval(vars, rng.as_deref_mut());
                 let upper_bound = upper_bound_expr.eval(vars, rng.as_deref_mut());
-                rng.as_mut()
-                    .expect("rng")
-                    .random_range(lower_bound..upper_bound)
+                let random = rng.as_mut().expect("rng").random_range(
+                    (*lower_bound.numer() as f64 / *lower_bound.denom() as f64)
+                        ..(*upper_bound.numer() as f64 / *upper_bound.denom() as f64),
+                );
+                Float::approximate_float(random).expect("Ratio approximating float")
             }
             FloatExpr::Opposite(float_expr) => -float_expr.eval(vars, rng),
             FloatExpr::Sum(float_exprs) => float_exprs
@@ -272,16 +278,22 @@ where
     fn add(mut self, mut rhs: Self) -> Self::Output {
         if let FloatExpr::Sum(ref mut exprs) = self {
             if let FloatExpr::Sum(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let FloatExpr::Sum(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            FloatExpr::Sum(vec![self, rhs])
+            FloatExpr::Sum(Box::new([self, rhs]))
         }
     }
 }
@@ -295,16 +307,22 @@ where
     fn mul(mut self, mut rhs: Self) -> Self::Output {
         if let FloatExpr::Product(ref mut exprs) = self {
             if let FloatExpr::Product(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let FloatExpr::Product(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            FloatExpr::Product(vec![self, rhs])
+            FloatExpr::Product(Box::new([self, rhs]))
         }
     }
 }

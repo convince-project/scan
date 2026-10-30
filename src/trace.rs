@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::env::current_dir;
 
 use anyhow::anyhow;
 use clap::Parser;
 use scan_core::{Oracle, Scan, Tracer};
+
+use crate::CliScheduler;
 
 const ALL_PROPS_ERR: &str =
     "the --all flag is incompatible with individually-specified properties.\n
@@ -15,6 +17,9 @@ Examples:
 #[derive(Debug, Clone, Parser)]
 #[deny(missing_docs)]
 pub(crate) struct TraceArgs {
+    /// Scheduling strategy used to sample executions.
+    #[arg(long, value_enum)]
+    pub(crate) scheduler: Option<CliScheduler>,
     /// Space-separated list of properties to verify while tracing.
     pub(crate) properties: Vec<String>,
     /// Verify all properties found in the model specification while tracing.
@@ -48,16 +53,40 @@ impl TraceArgs {
         }
     }
 
-    pub(crate) fn trace<'a, Od, Tr>(&self, scan: &'a Scan<Od>, path: PathBuf, model: &Tr::ModelData)
+    pub(crate) fn trace<'a, Od, Tr>(
+        &self,
+        model: &str,
+        scan: &'a Scan<Od>,
+        model_data: &'a Tr::ModelData,
+    ) -> std::io::Result<()>
     where
         Od: Oracle + Clone + Sync + 'a,
-        Tr: Tracer,
+        Tr: Tracer<'a>,
         Tr::ModelData: Sync,
     {
+        let path = new_traces_dir();
+        let scheduler = self.scheduler.unwrap_or_default().into();
         if self.single_thread {
-            scan.traces::<Tr>(self.traces, path, model);
+            scan.traces::<Tr>(self.traces, &path, model_data, scheduler)?;
         } else {
-            scan.par_traces::<Tr>(self.traces, path, model);
+            scan.par_traces::<Tr>(self.traces, &path, model_data, scheduler)?;
+        }
+        println!("trace computation for model '{model}' completed");
+        Ok(())
+    }
+}
+
+fn new_traces_dir() -> std::path::PathBuf {
+    const FOLDER: &str = "traces";
+
+    let mut path = current_dir().expect("current dir");
+    for i in 0.. {
+        path.push(format!("{}_{i:02}", FOLDER));
+        if std::fs::exists(&path).is_ok_and(|exists| !exists) {
+            break;
+        } else {
+            assert!(path.pop());
         }
     }
+    path
 }
