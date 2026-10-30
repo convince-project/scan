@@ -658,8 +658,8 @@ impl ModelBuilder {
                 }
             }
             // Proceed if event is unknown (without retrieving parameters).
-            let unknown_event =
-                (!known_events.is_empty()).then(|| !(BooleanExpr::Or(known_events)));
+            let unknown_event = (!known_events.is_empty())
+                .then(|| !(BooleanExpr::Or(known_events.into_boxed_slice())));
             self.cs
                 .add_autonomous_transition(
                     pg_id,
@@ -1347,7 +1347,7 @@ impl ModelBuilder {
                         port_id.to_owned(),
                         (
                             OmgType::Base(OmgBaseType::Boolean),
-                            vec![Expression::Boolean(BooleanExpr::And(vec![
+                            vec![Expression::Boolean(BooleanExpr::And(Box::new([
                                 BooleanExpr::Var(Atom::Event(ext_queue)),
                                 BooleanExpr::NatEqual(
                                     NaturalExpr::Var(Atom::State(ext_queue, 0)),
@@ -1357,7 +1357,7 @@ impl ModelBuilder {
                                     NaturalExpr::Var(Atom::State(ext_queue, 1)),
                                     NaturalExpr::Const(u16::from(origin) as Natural),
                                 ),
-                            ]))],
+                            ])))],
                         ),
                     );
                     // Default values represent a non-existing event/origin

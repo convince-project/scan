@@ -41,9 +41,9 @@ where
     /// Opposite of a numerical expression.
     Opposite(Box<FloatExpr<V>>),
     /// Arithmetic n-ary sum.
-    Sum(Vec<FloatExpr<V>>),
+    Sum(Box<[FloatExpr<V>]>),
     /// Arithmetic n-ary multiplication.
-    Product(Vec<FloatExpr<V>>),
+    Product(Box<[FloatExpr<V>]>),
     /// Div operation
     Div(Box<(FloatExpr<V>, FloatExpr<V>)>),
     // --------------------
@@ -278,16 +278,22 @@ where
     fn add(mut self, mut rhs: Self) -> Self::Output {
         if let FloatExpr::Sum(ref mut exprs) = self {
             if let FloatExpr::Sum(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let FloatExpr::Sum(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            FloatExpr::Sum(vec![self, rhs])
+            FloatExpr::Sum(Box::new([self, rhs]))
         }
     }
 }
@@ -301,16 +307,22 @@ where
     fn mul(mut self, mut rhs: Self) -> Self::Output {
         if let FloatExpr::Product(ref mut exprs) = self {
             if let FloatExpr::Product(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let FloatExpr::Product(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            FloatExpr::Product(vec![self, rhs])
+            FloatExpr::Product(Box::new([self, rhs]))
         }
     }
 }

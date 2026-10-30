@@ -79,16 +79,14 @@ impl<'def> TransitionSystemRun<'def> {
             let pg_id = pg_list[pg_select];
             // Execute randomly chosen transitions on the picked PG until an event is generated,
             // or no more transition is possible
-            // NOTE: Special treatment for PGs with single-location state for optimization of this common case.
-            // Hopefully it will be possible to treat all cases in a general way eventually.
             let result = self.montecarlo_transition_pg(pg_id, oracle, rng, bump);
-            if result.is_some() {
-                return result;
-            } else {
-                // Swap selected pg with last element of the queue (possibly itself, probably not worth checking)
+            if result.is_none() {
                 // Decrease the length of the queue (so that selected element is removed)
                 pgs_left -= 1;
+                // Swap selected pg with last element of the queue
                 pg_list.swap(pg_select, pgs_left);
+            } else {
+                return result;
             }
         }
         None
@@ -104,7 +102,6 @@ impl<'def> TransitionSystemRun<'def> {
         use bumpalo::collections::Vec as BumpVec;
 
         while let Some((action, post_states)) = self
-            .cs
             .possible_transitions_pg(pg_id)
             .expect("pg exists")
             .choose(rng)
@@ -354,6 +351,7 @@ impl<'def> TransitionSystemRun<'def> {
         self.cs.is_waiting()
     }
 
+    #[inline]
     pub(crate) fn possible_transitions_pg(
         &self,
         pg_id: PgId,

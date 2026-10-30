@@ -33,11 +33,12 @@ pub struct ProgramGraphRun<'def> {
     cache_states: Rc<Vec<usize>>,
     // active actions
     cache_actions: Rc<Vec<Action>>,
-    iters: Vec<std::slice::Iter<'def, (Action, Vec<Transition>)>>,
-    loc_trans: Vec<&'def [Transition]>,
+    iters: Box<[std::slice::Iter<'def, (Action, Box<[Transition]>)>]>,
+    loc_trans: Box<[&'def [Transition]]>,
 }
 
 impl<'def> Clone for ProgramGraphRun<'def> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             current_states: self.current_states.clone(),
@@ -47,14 +48,15 @@ impl<'def> Clone for ProgramGraphRun<'def> {
             cache_trans: self.cache_trans.clone(),
             cache_states: self.cache_states.clone(),
             cache_actions: self.cache_actions.clone(),
-            iters: Vec::with_capacity(self.current_states.len()),
-            loc_trans: vec![[].as_slice(); self.current_states.len()],
+            iters: vec![[].iter(); self.iters.len()].into_boxed_slice(),
+            loc_trans: vec![[].as_slice(); self.loc_trans.len()].into_boxed_slice(),
         }
     }
 }
 
 impl<'def> PartialEq for ProgramGraphRun<'def> {
     // WARN: This does not check that the definitions are the same
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.current_states == other.current_states
             && self.vars == other.vars
@@ -65,6 +67,7 @@ impl<'def> PartialEq for ProgramGraphRun<'def> {
 impl<'def> Eq for ProgramGraphRun<'def> {}
 
 impl<'def> Hash for ProgramGraphRun<'def> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.current_states.hash(state);
         self.vars.hash(state);
@@ -91,8 +94,8 @@ impl<'def> ProgramGraphRun<'def> {
             cache_trans: Rc::new(Vec::new()),
             cache_actions: Rc::new(Vec::with_capacity(max_actions)),
             cache_states: Rc::new(Vec::with_capacity(max_actions * states)),
-            iters: Vec::with_capacity(program_graph.initial_states.len()),
-            loc_trans: vec![[].as_slice(); program_graph.initial_states.len()],
+            iters: vec![[].iter(); program_graph.initial_states.len()].into_boxed_slice(),
+            loc_trans: vec![[].as_slice(); program_graph.initial_states.len()].into_boxed_slice(),
         };
         pg.refresh_cache();
         pg
@@ -132,10 +135,11 @@ impl<'def> ProgramGraphRun<'def> {
         let states = self.current_states.len();
         self.cache_actions
             .iter()
+            .copied()
             .enumerate()
             .map(move |(action_idx, action)| {
                 (
-                    *action,
+                    action,
                     self.cache_states[action_idx * states..=(action_idx + 1) * states]
                         .array_windows()
                         .map(|&[transitions_idx, next_transitions_idx]| {
@@ -145,6 +149,7 @@ impl<'def> ProgramGraphRun<'def> {
             })
     }
 
+    #[inline]
     pub(crate) fn active_actions(&self) -> &[Action] {
         &self.cache_actions
     }
@@ -166,12 +171,9 @@ impl<'def> ProgramGraphRun<'def> {
         let trans = Rc::get_mut(&mut rc_trans).expect("Rc strong count is 1");
         trans.clear();
 
-        self.iters.clear();
-        self.iters.extend(
-            self.current_states
-                .iter()
-                .map(|loc| self.def.locations[loc.0 as usize].0.iter()),
-        );
+        for (old_iter, loc) in self.iters.iter_mut().zip(self.current_states.iter()) {
+            *old_iter = self.def.locations[loc.0 as usize].0.iter();
+        }
 
         let len = self.def.initial_states.len();
         let mut action = Action(0);
@@ -180,7 +182,7 @@ impl<'def> ProgramGraphRun<'def> {
             let mut i = 0;
             while total < len {
                 if let Some(&(next_a, ref next_t)) = self.iters[i].find(|(a, _)| a.0 >= action.0) {
-                    self.loc_trans[i] = next_t.as_slice();
+                    self.loc_trans[i] = next_t;
                     i = (i + 1) % len;
                     total = total * (next_a.0 == action.0) as usize + 1;
                     action = next_a;
@@ -298,6 +300,7 @@ impl<'def> ProgramGraphRun<'def> {
             })
     }
 
+    #[inline]
     fn active_autonomous_transitions(&self, post_states: &[Location]) -> bool {
         self.current_states
             .iter()
@@ -482,7 +485,7 @@ impl<'def> ProgramGraphRun<'def> {
                 .any(|(_action, transitions)|
                     transitions.iter()
                     .any(move |(post_state, guard, constraints)| {
-                        let invariants = self.def.locations[post_state.0 as usize].1.as_slice();
+                        let invariants = self.def.locations[post_state.0 as usize].1.as_ref();
                         // Check guard
                         guard.as_ref().is_none_or(|guard| guard.eval::<SmallRng>(&|var: Var| self.vars[var.0 as usize], None))
                         // Check time constraints

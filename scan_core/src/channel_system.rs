@@ -359,25 +359,17 @@ impl ChannelSystem {
     /// so that spawning instances is (relatively) inexpensive.
     ///
     /// See also [`ProgramGraph::new_instance`].
+    #[inline]
     pub fn new_instance<'def>(&'def self) -> ChannelSystemRun<'def> {
         ChannelSystemRun::new(self)
     }
 
     #[inline]
-    pub(crate) fn communication(&self, action: Action) -> Option<(Channel, Message)> {
-        // if action.1 == EPSILON {
-        //     None
-        // } else {
-        //     let start = self.communications_pg_idxs[action.0.0 as usize];
-        //     self.communications[start + ActionIdx::from(action.1) as usize]
-        // }
-        self.communications_pg_idxs
-            .get(action.0.0 as usize)
-            .and_then(|&start| {
-                self.communications
-                    .get(start + ActionIdx::from(action.1) as usize)
-                    .and_then(|&d| d)
-            })
+    pub(super) fn communication(&self, action: Action) -> Option<(Channel, Message)> {
+        let start = self.communications_pg_idxs[PgIndex::from(action.0) as usize];
+        *self
+            .communications
+            .get(start + ActionIdx::from(action.1) as usize)?
     }
 
     #[inline]

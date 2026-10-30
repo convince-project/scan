@@ -138,14 +138,21 @@ type PgGuard = BooleanExpr<Var>;
 
 #[derive(Debug, Clone, GetSize)]
 enum Effect {
-    Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
-    Send(Vec<Expression<Var>>),
-    Receive(Vec<Var>),
+    Effects(Box<[(Var, Expression<Var>)]>, Box<[Clock]>),
+    Send(Box<[Expression<Var>]>),
+    Receive(Box<[Var]>),
 }
 
-type Transition = (Location, Option<BooleanExpr<Var>>, Vec<(Clock, TimeRange)>);
+type Transition = (
+    Location,
+    Option<BooleanExpr<Var>>,
+    Box<[(Clock, TimeRange)]>,
+);
 
-type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<(Clock, TimeRange)>);
+type LocationData = (
+    Box<[(Action, Box<[Transition]>)]>,
+    Box<[(Clock, TimeRange)]>,
+);
 
 /// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
 #[derive(Debug, Clone, Copy, Error)]
@@ -275,7 +282,7 @@ impl ProgramGraph {
         action: Action,
         post_state: Location,
     ) -> impl Iterator<Item = (Option<&PgGuard>, &[(Clock, TimeRange)])> {
-        let a_transitions = self.locations[pre_state.0 as usize].0.as_slice();
+        let a_transitions = &self.locations[pre_state.0 as usize].0;
         a_transitions
             .binary_search_by_key(&action, |&(a, ..)| a)
             .into_iter()
@@ -286,7 +293,7 @@ impl ProgramGraph {
                 a_transitions[transitions_idx].1[post_idx_lb..]
                     .iter()
                     .take_while(move |&&(p, ..)| p == post_state)
-                    .map(|(_, g, c)| (g.as_ref(), c.as_slice()))
+                    .map(|(_, g, c)| (g.as_ref(), c.as_ref()))
             })
     }
 }

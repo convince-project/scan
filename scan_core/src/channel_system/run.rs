@@ -30,6 +30,7 @@ pub struct ChannelSystemRun<'def> {
 }
 
 impl<'def> Clone for ChannelSystemRun<'def> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             rng: self.rng.clone(),
@@ -43,6 +44,7 @@ impl<'def> Clone for ChannelSystemRun<'def> {
 }
 
 impl<'def> PartialEq for ChannelSystemRun<'def> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.rng == other.rng
             && self.time == other.time
@@ -54,6 +56,7 @@ impl<'def> PartialEq for ChannelSystemRun<'def> {
 impl<'def> Eq for ChannelSystemRun<'def> {}
 
 impl<'def> Hash for ChannelSystemRun<'def> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.time.hash(state);
         self.message_queue.hash(state);
@@ -102,6 +105,7 @@ impl<'def> ChannelSystemRun<'def> {
     }
 
     /// Returns a reference to the underlying [`ChannelSystem`] defining the execution.
+    #[inline]
     pub fn def(&self) -> &ChannelSystem {
         self.def
     }
@@ -161,16 +165,16 @@ impl<'def> ChannelSystemRun<'def> {
     /// The (eventual) guard is guaranteed to be satisfied.
     ///
     /// See also [`ProgramGraphRun::possible_transitions`].
-    pub fn possible_transitions_pg(
-        &self,
+    pub fn possible_transitions_pg<'a>(
+        &'a self,
         pg_id: PgId,
     ) -> Result<
         impl Iterator<
             Item = (
                 Action,
-                impl Iterator<Item = impl Iterator<Item = Location> + Clone>,
+                impl Iterator<Item = impl Iterator<Item = Location> + Clone + use<'a>> + use<'a>,
             ),
-        >,
+        > + use<'a>,
         CsError,
     > {
         let pg = self.program_graph(pg_id)?;
@@ -192,18 +196,20 @@ impl<'def> ChannelSystemRun<'def> {
     pub(crate) fn check_message(&self, channel: Channel, message: Message) -> bool {
         let channel_idx = channel.0 as usize;
         let (_, capacity) = self.def.channels[channel_idx];
-        let len = self.message_queue[channel_idx].len();
         // Channel capacity must never be exceeded!
         // debug_assert!(capacity.is_none_or(|cap| len <= cap));
         // NOTE FIXME currently handshake is unsupported
         // !matches!(capacity, Some(0))
         match capacity {
-            ChannelCapacity::Queue(capacity) => match message {
-                Message::Send => capacity.is_none_or(|cap| len < cap),
-                Message::Receive => len > 0,
-                Message::ProbeFullQueue => capacity.is_some_and(|cap| len == cap),
-                Message::ProbeEmptyQueue => len == 0,
-            },
+            ChannelCapacity::Queue(capacity) => {
+                let len = self.message_queue[channel_idx].len();
+                match message {
+                    Message::Send => capacity.is_none_or(|cap| len < cap),
+                    Message::Receive => len > 0,
+                    Message::ProbeFullQueue => capacity.is_some_and(|cap| len == cap),
+                    Message::ProbeEmptyQueue => len == 0,
+                }
+            }
             ChannelCapacity::Sink => match message {
                 Message::Send | Message::ProbeEmptyQueue => true,
                 Message::Receive | Message::ProbeFullQueue => false,
@@ -314,8 +320,8 @@ impl<'def> ChannelSystemRun<'def> {
                     }
                     ChannelCapacity::Queue(Some(capacity)) => {
                         if self.message_queue[channel.0 as usize].len() >= capacity {
-                            let _ = self.program_graphs[pg_id.0 as usize]
-                                .send(action.1, &self.alloc_loc, &mut self.rng)
+                            self.program_graphs[pg_id.0 as usize]
+                                .receive(action.1, &self.alloc_loc, &[])
                                 .map_err(|err| CsError::ProgramGraph(pg_id, err))?;
                             EventType::ProbeFullQueue
                         } else {

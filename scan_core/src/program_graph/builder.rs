@@ -6,13 +6,32 @@ use log::info;
 
 type LocationBuilderData = (BTreeMap<Action, Vec<Transition>>, Vec<(Clock, TimeRange)>);
 
+#[derive(Debug, Clone, GetSize)]
+enum BuilderEffect {
+    Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
+    Send(Box<[Expression<Var>]>),
+    Receive(Box<[Var]>),
+}
+
+impl From<BuilderEffect> for Effect {
+    fn from(value: BuilderEffect) -> Self {
+        match value {
+            BuilderEffect::Effects(items, clocks) => {
+                Effect::Effects(items.into_boxed_slice(), clocks.into_boxed_slice())
+            }
+            BuilderEffect::Send(expressions) => Effect::Send(expressions),
+            BuilderEffect::Receive(vars) => Effect::Receive(vars),
+        }
+    }
+}
+
 /// Defines and builds a PG.
 #[derive(Debug, Clone)]
 pub struct ProgramGraphBuilder {
     // initial_states: Vec<Location>,
     initial_states: Vec<Location>,
     // Effects are indexed by actions
-    effects: Vec<Effect>,
+    effects: Vec<BuilderEffect>,
     // Transitions are indexed by locations
     // Time invariants of each location
     locations: Vec<LocationBuilderData>,
@@ -91,7 +110,8 @@ impl ProgramGraphBuilder {
     #[inline(always)]
     pub fn new_action(&mut self) -> Action {
         let idx = self.effects.len();
-        self.effects.push(Effect::Effects(Vec::new(), Vec::new()));
+        self.effects
+            .push(BuilderEffect::Effects(Vec::new(), Vec::new()));
         Action(idx as ActionIdx)
     }
 
@@ -122,12 +142,12 @@ impl ProgramGraphBuilder {
             .get_mut(action.0 as usize)
             .ok_or(PgError::MissingAction(action))?
         {
-            Effect::Effects(_, resets) => {
+            BuilderEffect::Effects(_, resets) => {
                 resets.push(clock);
                 Ok(())
             }
-            Effect::Send(_) => Err(PgError::EffectOnSend),
-            Effect::Receive(_) => Err(PgError::EffectOnReceive),
+            BuilderEffect::Send(_) => Err(PgError::EffectOnSend),
+            BuilderEffect::Receive(_) => Err(PgError::EffectOnReceive),
         }
     }
 
@@ -177,12 +197,12 @@ impl ProgramGraphBuilder {
                 .get_mut(action.0 as usize)
                 .ok_or(PgError::MissingAction(action))?
             {
-                Effect::Effects(effects, _) => {
+                BuilderEffect::Effects(effects, _) => {
                     effects.push((var, effect));
                     Ok(())
                 }
-                Effect::Send(_) => Err(PgError::EffectOnSend),
-                Effect::Receive(_) => Err(PgError::EffectOnReceive),
+                BuilderEffect::Send(_) => Err(PgError::EffectOnSend),
+                BuilderEffect::Receive(_) => Err(PgError::EffectOnReceive),
             }
         } else {
             Err(PgError::TypeMismatch)
@@ -199,7 +219,8 @@ impl ProgramGraphBuilder {
         // Actions are indexed progressively
         let idx = self.effects.len();
         msgs.shrink_to_fit();
-        self.effects.push(Effect::Send(msgs));
+        self.effects
+            .push(BuilderEffect::Send(msgs.into_boxed_slice()));
         Ok(Action(idx as ActionIdx))
     }
 
@@ -210,7 +231,8 @@ impl ProgramGraphBuilder {
             // Actions are indexed progressively
             let idx = self.effects.len();
             vars.shrink_to_fit();
-            self.effects.push(Effect::Receive(vars));
+            self.effects
+                .push(BuilderEffect::Receive(vars.into_boxed_slice()));
             Ok(Action(idx as ActionIdx))
         }
     }
@@ -365,7 +387,7 @@ impl ProgramGraphBuilder {
             }
             let (transitions, _) = &mut self.locations[pre.0 as usize];
             constraints.sort_unstable_by_key(|(c, _)| *c);
-            constraints.shrink_to_fit();
+            let constraints = constraints.into_boxed_slice();
             let transition = (post, guard, constraints);
             // WARN: Actions have to be inserted in order but insertion has worst-case complexity O(n)
             // so in some cases insertion of all actions could have complexity O(n^2).
@@ -459,9 +481,8 @@ impl ProgramGraphBuilder {
         self.initial_states.shrink_to_fit();
         self.vars.shrink_to_fit();
         self.effects.iter_mut().for_each(|effect| {
-            if let Effect::Effects(_, resets) = effect {
+            if let BuilderEffect::Effects(_, resets) = effect {
                 resets.sort_unstable();
-                resets.shrink_to_fit();
             }
         });
         self.effects.shrink_to_fit();
@@ -485,8 +506,19 @@ impl ProgramGraphBuilder {
         // Build program graph
         let pg = ProgramGraph {
             initial_states: self.initial_states.into(),
-            effects: self.effects.into(),
-            locations: locations.into(),
+            effects: self.effects.into_iter().map(|be| be.into()).collect(),
+            locations: locations
+                .into_iter()
+                .map(|(trans, invariants)| {
+                    (
+                        trans
+                            .into_iter()
+                            .map(|(action, posts)| (action, posts.into_boxed_slice()))
+                            .collect(),
+                        invariants.into_boxed_slice(),
+                    )
+                })
+                .collect(),
             vars: self.vars.into(),
             clocks: self.clocks,
         };
