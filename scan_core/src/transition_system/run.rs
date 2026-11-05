@@ -197,14 +197,25 @@ impl<'def> TransitionSystemRun<'def> {
         Ok(last_event)
     }
 
-    pub(super) fn ample<'a>(&'a self, amples: &'a mut [(FixedBitSet, bool)]) {
+    pub(super) fn ample<'a>(
+        &'a self,
+        amples: &'a mut [(FixedBitSet, bool)],
+        full_channels: &mut FixedBitSet,
+        empty_channels: &mut FixedBitSet,
+    ) {
+        // let channels_num = self.ts.cs.channels().len();
+        // let mut full_channels = FixedBitSet::with_capacity(channels_num);
+        // let mut empty_channels = FixedBitSet::with_capacity(channels_num);
         self.ts
             .pg_list
             .iter()
             .zip(amples.iter_mut())
             .filter(|(_pg_id, (_set, invalidate))| *invalidate)
-            .for_each(|(pg_id, (set, _))| self.ample_pg(*pg_id, set));
+            .for_each(|(pg_id, (set, _))| {
+                self.ample_pg(*pg_id, set, full_channels, empty_channels)
+            });
 
+        // Transitive closure on the ample sets
         for i in 0..amples.len() {
             // skip j == i
             for j in 0..amples.len() {
@@ -226,8 +237,16 @@ impl<'def> TransitionSystemRun<'def> {
             .for_each(|(_, invalidate)| *invalidate = false);
     }
 
-    fn ample_pg<'a>(&'a self, pg_id: PgId, ample_pg: &'a mut FixedBitSet) {
+    fn ample_pg<'a>(
+        &'a self,
+        pg_id: PgId,
+        ample_pg: &'a mut FixedBitSet,
+        full_channels: &mut FixedBitSet,
+        empty_channels: &mut FixedBitSet,
+    ) {
         ample_pg.clear();
+        full_channels.clear();
+        empty_channels.clear();
         let mut ample_self = false;
         for action in self.cs.active_actions_pg(pg_id).unwrap() {
             if let Some((channel, message)) = self.ts.cs.communication(action) {
@@ -242,16 +261,8 @@ impl<'def> TransitionSystemRun<'def> {
                         // Channel is not full
                         Message::Send => {
                             ample_pg.union_with(self.ts.cs.senders_to(channel).unwrap());
-                            // NOTE: If an execution fragment has a ProbeEmptyQueue action on a channel that is not initially empty,
-                            // then it must be preceded by a Receive action;
-                            // so, if the channel is not empty and Receive actions belong to the ample set,
-                            // ProbeEmptyQueue does not need to belong to the ample set.
-                            // Otherwise, we add ProbeEmptyQueue actions to the ample set.
-                            if self.cs.is_channel_empty(channel).expect("channel exists")
-                                || !ample_pg
-                                    .is_superset(self.ts.cs.receivers_from(channel).unwrap())
-                            {
-                                ample_pg.union_with(self.ts.cs.probe_empty_queue(channel).unwrap());
+                            if self.cs.is_channel_empty(channel).expect("channel exists") {
+                                empty_channels.insert(u16::from(channel) as usize);
                             }
                         }
                         // Channel is empty (thus not full)
@@ -261,15 +272,8 @@ impl<'def> TransitionSystemRun<'def> {
                         // Channel is not empty
                         Message::Receive => {
                             ample_pg.union_with(self.ts.cs.receivers_from(channel).unwrap());
-                            // NOTE: If an execution fragment has a ProbeFullQueue action on a channel that is not initially full,
-                            // then it must be preceded by a Send action;
-                            // so, if the channel is not full and Send actions belong to the ample set,
-                            // ProbeFullQueue does not need to belong to the ample set.
-                            // Otherwise, we add ProbeFullQueue actions to the ample set.
-                            if self.cs.is_channel_full(channel).expect("channel exists")
-                                || !ample_pg.is_superset(self.ts.cs.senders_to(channel).unwrap())
-                            {
-                                ample_pg.union_with(self.ts.cs.probe_full_queue(channel).unwrap());
+                            if self.cs.is_channel_full(channel).expect("channel exists") {
+                                full_channels.insert(u16::from(channel) as usize);
                             }
                         }
                         // Channel is full (thus not empty)
@@ -297,6 +301,30 @@ impl<'def> TransitionSystemRun<'def> {
                 }
             } else {
                 ample_self = true;
+            }
+        }
+        // These two sets are disjoint because no channel can be empty and full at the same time.
+        // Thus, the superset conditions are independent of the relative order in which they are called.
+        for channel in empty_channels.ones() {
+            let channel = Channel(channel as u16);
+            // NOTE: If an execution fragment has a ProbeEmptyQueue action on a channel that is not initially empty,
+            // then it must be preceded by a Receive action;
+            // so, if the channel is not empty and all Receive actions belong to the ample set,
+            // ProbeEmptyQueue does not need to belong to the ample set.
+            // Otherwise, we add ProbeEmptyQueue actions to the ample set.
+            if !ample_pg.is_superset(self.ts.cs.receivers_from(channel).unwrap()) {
+                ample_pg.union_with(self.ts.cs.probe_empty_queue(channel).unwrap());
+            }
+        }
+        for channel in full_channels.ones() {
+            let channel = Channel(channel as u16);
+            // NOTE: If an execution fragment has a ProbeFullQueue action on a channel that is not initially full,
+            // then it must be preceded by a Send action;
+            // so, if the channel is not full and Send actions belong to the ample set,
+            // ProbeFullQueue does not need to belong to the ample set.
+            // Otherwise, we add ProbeFullQueue actions to the ample set.
+            if !ample_pg.is_superset(self.ts.cs.senders_to(channel).unwrap()) {
+                ample_pg.union_with(self.ts.cs.probe_full_queue(channel).unwrap());
             }
         }
         ample_pg.set(PgIndex::from(pg_id) as usize, ample_self);

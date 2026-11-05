@@ -143,7 +143,7 @@ impl From<PgId> for PgIndex {
 /// These cannot be directly created or manipulated,
 /// but have to be generated and/or provided by a [`ChannelSystemBuilder`] or [`ChannelSystem`].
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, GetSize)]
-pub struct Channel(u16);
+pub struct Channel(pub(crate) u16);
 
 impl From<Channel> for u16 {
     #[inline]
@@ -370,6 +370,11 @@ impl ChannelSystem {
         *self
             .communications
             .get(start + ActionIdx::from(action.1) as usize)?
+    }
+
+    #[inline]
+    pub(super) fn channels(&self) -> &[(Box<[Type]>, ChannelCapacity)] {
+        &self.channels
     }
 
     #[inline]
