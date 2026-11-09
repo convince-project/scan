@@ -313,8 +313,8 @@ where
         path.add_extension("gz");
         let file = File::create_new(&path)?;
         let writer = flate2::GzBuilder::new()
-            .filename(filename.to_str().expect("file name is utf8"))
-            .comment("Scan-generated execution trace")
+            .filename(filename.as_os_str().as_encoded_bytes())
+            .comment("SCAN-generated execution trace")
             .write(file, flate2::Compression::best());
         let tracer = Some(T::init(writer, model_data));
         let oracle = self.oracle.clone();
