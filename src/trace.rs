@@ -64,7 +64,7 @@ impl TraceArgs {
         Tr: Tracer<'a>,
         Tr::ModelData: Sync,
     {
-        let path = new_traces_dir();
+        let path = new_traces_dir()?;
         scan.traces::<Tr>(
             self.traces,
             &path,
@@ -77,17 +77,17 @@ impl TraceArgs {
     }
 }
 
-fn new_traces_dir() -> std::path::PathBuf {
+fn new_traces_dir() -> std::io::Result<std::path::PathBuf> {
     const FOLDER: &str = "traces";
 
-    let mut path = current_dir().expect("current dir");
+    let mut path = current_dir()?;
     for i in 0.. {
         path.push(format!("{}_{i:02}", FOLDER));
-        if std::fs::exists(&path).is_ok_and(|exists| !exists) {
-            break;
-        } else {
+        if std::fs::exists(&path)? {
             assert!(path.pop());
+        } else {
+            break;
         }
     }
-    path
+    Ok(path)
 }

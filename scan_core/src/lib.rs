@@ -321,14 +321,17 @@ where
         let running = Arc::clone(&self.running);
         let outcome = self.model.experiment(oracle, tracer, running, scheduler);
         if let Some(verified) = outcome {
-            let mut new_path = path.clone();
-            new_path.parent().expect("pop file name");
-            new_path.parent().expect("pop temp folder");
-            if verified.into_iter().all(|b| b) {
-                new_path.push(SUCCESSES);
+            let dest_folder = if verified.into_iter().all(|b| b) {
+                SUCCESSES
             } else {
-                new_path.push(FAILURES);
-            }
+                FAILURES
+            };
+            let mut new_path = path
+                .parent()
+                .expect("path without file name")
+                .parent()
+                .expect("path without temp folder")
+                .join(dest_folder);
             new_path.push(path.file_name().expect("file name"));
             rename(&path, new_path)?;
         }
