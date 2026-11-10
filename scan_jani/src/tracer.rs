@@ -1,24 +1,25 @@
 use super::JaniModelData;
 use scan_core::{
     Time, TraceWriter, Tracer, Val,
-    channel_system::{Action, Event},
+    channel_system::{Action, Channel, Event},
 };
 
-pub struct TracePrinter {
+pub struct TracePrinter<'a> {
     writer: csv::Writer<TraceWriter>,
+    data: &'a JaniModelData,
 }
 
-impl TracePrinter {
+impl TracePrinter<'_> {
     const HEADER: [&'static str; 2] = ["Time", "Action"];
     const UNKNOWN_ACTION: &'static str = "unknown action";
 }
 
-impl Tracer for TracePrinter {
+impl<'b> Tracer<'b> for TracePrinter<'b> {
     const EXTENSION: &'static str = "csv";
 
     type ModelData = JaniModelData;
 
-    fn init(writer: TraceWriter, data: &Self::ModelData) -> Self {
+    fn init(writer: TraceWriter, data: &'b Self::ModelData) -> Self {
         let mut writer = csv::Writer::from_writer(writer);
         writer
             .write_record(
@@ -29,19 +30,19 @@ impl Tracer for TracePrinter {
             )
             .expect("write header");
 
-        Self { writer }
+        Self { writer, data }
     }
 
-    fn trace(
+    fn trace<'a>(
         &mut self,
-        data: &Self::ModelData,
         action: Action,
-        _event: &Event,
+        event: Event<'_>,
         time: Time,
-        ports: &[Vec<Val>],
+        ports: &'a impl Fn(Channel) -> Option<&'a [Val]>,
     ) {
         let time = time.to_string();
-        let action_name = data
+        let action_name = self
+            .data
             .actions
             .get(&action)
             .cloned()
@@ -50,9 +51,13 @@ impl Tracer for TracePrinter {
 
         self.writer
             .write_record(
-                [time, action_name]
-                    .into_iter()
-                    .chain(ports.first().unwrap().iter().copied().map(format_val)),
+                [time, action_name].into_iter().chain(
+                    ports(event.channel)
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .map(format_val),
+                ),
             )
             .expect("write record");
     }

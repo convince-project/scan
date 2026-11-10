@@ -1,6 +1,6 @@
 [package]
 name = "smc_scan_promela"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Promela frontend for the Scan model checker."
 documentation = "https://convince-project.github.io/scan/crates/scan_promela/index.html"
@@ -25,8 +25,8 @@ cfgrammar = "0.15"
 lrlex = "0.15.0"
 lrpar = "0.15.0"
 regex = "1"
-smc_scan_core = { version = "0.2.1", path = "../scan_core" }
-smc_scan_pmtl = { version = "0.1.1", path = "../scan_pmtl" }
+smc_scan_core = { version = "0.3.0", path = "../scan_core" }
+smc_scan_pmtl = { version = "0.2.0", path = "../scan_pmtl" }
 anyhow = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }

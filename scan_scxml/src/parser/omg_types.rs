@@ -339,7 +339,7 @@ impl OmgTypes {
                     id = Some(attr.value.into_owned());
                 }
                 ATTR_TYPE => {
-                    field_type = Some(attr.value.to_string());
+                    field_type = Some(attr.value.into_owned());
                 }
                 key => {
                     error!("found unknown attribute {key}");

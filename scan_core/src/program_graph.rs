@@ -78,14 +78,12 @@
 
 mod builder;
 mod run;
-mod transitions;
 
 use crate::{TimeRange, grammar::*};
 pub use builder::*;
 use get_size2::GetSize;
 pub use run::ProgramGraphRun;
 use thiserror::Error;
-use transitions::TransitionsIterator;
 
 /// The index for [`Location`]s in a [`ProgramGraph`].
 pub type LocationIdx = u32;
@@ -140,14 +138,21 @@ type PgGuard = BooleanExpr<Var>;
 
 #[derive(Debug, Clone, GetSize)]
 enum Effect {
-    Effects(Vec<(Var, Expression<Var>)>, Vec<Clock>),
-    Send(Vec<Expression<Var>>),
-    Receive(Vec<Var>),
+    Effects(Box<[(Var, Expression<Var>)]>, Box<[Clock]>),
+    Send(Box<[Expression<Var>]>),
+    Receive(Box<[Var]>),
 }
 
-type Transition = (Location, Option<BooleanExpr<Var>>, Vec<(Clock, TimeRange)>);
+type Transition = (
+    Location,
+    Option<BooleanExpr<Var>>,
+    Box<[(Clock, TimeRange)]>,
+);
 
-type LocationData = (Vec<(Action, Vec<Transition>)>, Vec<(Clock, TimeRange)>);
+type LocationData = (
+    Box<[(Action, Box<[Transition]>)]>,
+    Box<[(Clock, TimeRange)]>,
+);
 
 /// The error type for operations with [`ProgramGraphBuilder`]s and [`ProgramGraph`]s.
 #[derive(Debug, Clone, Copy, Error)]
@@ -246,11 +251,10 @@ pub enum PgError {
 /// ```
 #[derive(Debug, Clone, GetSize)]
 pub struct ProgramGraph {
-    initial_states: Vec<Location>,
-    effects: Vec<Effect>,
-    locations: Vec<LocationData>,
-    // Time invariants of each location
-    vars: Vec<Val>,
+    initial_states: Box<[Location]>,
+    effects: Box<[Effect]>,
+    locations: Box<[LocationData]>,
+    vars: Box<[Val]>,
     // Number of clocks
     clocks: u16,
 }
@@ -260,8 +264,15 @@ impl ProgramGraph {
     ///
     /// The new instance borrows the caller to refer to the PG definition without copying its data,
     /// so that spawning instances is (relatively) inexpensive.
+    #[inline]
     pub fn new_instance<'def>(&'def self) -> ProgramGraphRun<'def> {
         ProgramGraphRun::new(self)
+    }
+
+    /// Initial states of the [`ProgramGraph`].
+    #[inline]
+    pub fn initial_states(&self) -> &[Location] {
+        &self.initial_states
     }
 
     // Returns transition's guard.
@@ -273,7 +284,7 @@ impl ProgramGraph {
         action: Action,
         post_state: Location,
     ) -> impl Iterator<Item = (Option<&PgGuard>, &[(Clock, TimeRange)])> {
-        let a_transitions = self.locations[pre_state.0 as usize].0.as_slice();
+        let a_transitions = &self.locations[pre_state.0 as usize].0;
         a_transitions
             .binary_search_by_key(&action, |&(a, ..)| a)
             .into_iter()
@@ -284,7 +295,29 @@ impl ProgramGraph {
                 a_transitions[transitions_idx].1[post_idx_lb..]
                     .iter()
                     .take_while(move |&&(p, ..)| p == post_state)
-                    .map(|(_, g, c)| (g.as_ref(), c.as_slice()))
+                    .map(|(_, g, c)| (g.as_ref(), c.as_ref()))
+            })
+    }
+
+    // Returns autonomous transition's guard.
+    // Panics if the pre- or post-state do not exist.
+    #[inline]
+    fn autonomous_guards(
+        &self,
+        pre_state: Location,
+        post_state: Location,
+    ) -> impl Iterator<Item = (Option<&PgGuard>, &[(Clock, TimeRange)])> {
+        self.locations[pre_state.0 as usize]
+            .0
+            .last()
+            .into_iter()
+            .filter(|&&(action, _)| action == EPSILON)
+            .flat_map(move |(_action, transitions)| {
+                let post_idx_lb = transitions.partition_point(|&(p, ..)| p < post_state);
+                transitions[post_idx_lb..]
+                    .iter()
+                    .take_while(move |&&(p, ..)| p == post_state)
+                    .map(|(_, g, c)| (g.as_ref(), c.as_ref()))
             })
     }
 }
@@ -352,12 +385,7 @@ mod tests {
             .expect("transition to final");
         assert_eq!(pg.current_states(), &[r#final]);
         // It is not possible to transition from final to initial
-        let mut possible_transitions = pg.possible_transitions();
-        let (next_action, mut next_locations) = possible_transitions.next().unwrap();
-        assert_eq!(next_action, EPSILON);
-        let mut next_location = next_locations.next().unwrap();
-        assert!(next_location.next().is_none());
-        assert!(possible_transitions.next().is_none());
+        assert_eq!(pg.possible_transitions().count(), 0);
     }
 
     #[test]
@@ -467,16 +495,7 @@ mod tests {
         assert_eq!(pg.possible_transitions().count(), 2);
         pg.transition(move_left, &[left], &mut rng)
             .expect("move left");
-        assert!(
-            pg.possible_transitions()
-                .next()
-                .unwrap()
-                .1
-                .next()
-                .unwrap()
-                .next()
-                .is_none()
-        );
+        assert_eq!(pg.possible_transitions().count(), 0);
         pg.transition(move_left, &[left], &mut rng)
             .expect_err("battery = 0");
         Ok(())

@@ -24,9 +24,9 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use smc::*;
 use std::{
     fs::{File, create_dir, create_dir_all, rename},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::Instant,
@@ -34,7 +34,9 @@ use std::{
 use thiserror::Error;
 pub use time::*;
 pub use tracer::{TraceWriter, Tracer};
-pub use transition_system::{Atom, TransitionSystem, TransitionSystemRun};
+pub use transition_system::{Atom, TransitionSystem};
+
+use crate::tracer::DummyTracer;
 
 const TEMP: &str = ".temp";
 const SUCCESSES: &str = "successes";
@@ -49,6 +51,32 @@ pub enum ScanError {
     /// Confidence value is out-of-bounds
     #[error("out-of-bounds confidence value: {0}")]
     OutOfBoundsConfidence(f64),
+}
+
+/// Scheduling strategy used to sample executions
+#[derive(Debug, Default, Clone, Copy)]
+#[deny(missing_docs)]
+pub enum Scheduler {
+    /// Uniform distribution over non-deterministic choices.
+    #[default]
+    Uniform,
+    /// Schedulers sampled from uniform distribution over scheduler space.
+    ///
+    /// Lightweight sampling strategy from:
+    ///
+    /// __An efficient statistical model checker for nondeterminism and rare events__
+    /// (Carlos E. Budde et al.),
+    /// International Journal on Software Tools for Technology Transfer (2020),
+    /// [https://doi.org/10.1007/s10009-020-00563-2].
+    Sampling,
+    /// Exhaustive exploration of scheduler space.
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Exhaustive,
+    /// Exploration of subspace of schedulers that enforce an order of priority between processes,
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Priority,
 }
 
 /// Final report for a verification run.
@@ -81,32 +109,36 @@ pub struct Scan<O> {
     running: Arc<AtomicBool>,
     successes: Arc<AtomicU32>,
     failures: Arc<AtomicU32>,
-    violations: Arc<Mutex<Vec<u32>>>,
+    violations: Vec<Arc<AtomicU32>>,
 }
 
-impl<O> Scan<O> {
+impl<O: Oracle> Scan<O> {
     /// Create new [`Scan`] object.
     pub fn new(tsd: TransitionSystem, oracle: O) -> Self {
+        let guarantees = oracle.output_guarantees().count();
+        let violations = Vec::from_iter((0..guarantees).map(|_| Arc::new(AtomicU32::new(0))));
         Scan {
             model: tsd,
             oracle,
             running: Arc::new(AtomicBool::new(false)),
             successes: Arc::new(AtomicU32::new(0)),
             failures: Arc::new(AtomicU32::new(0)),
-            violations: Arc::new(Mutex::new(Vec::new())),
+            violations,
         }
     }
 
     fn reset(&self) {
+        self.running.store(true, Ordering::Relaxed);
         self.successes.store(0, Ordering::Relaxed);
         self.failures.store(0, Ordering::Relaxed);
-        self.violations.lock().unwrap().clear();
-        self.running.store(true, Ordering::Relaxed);
+        self.violations
+            .iter()
+            .for_each(|v| v.store(0, Ordering::Relaxed));
     }
 
     /// Tells whether a verification task is currently running.
     #[inline]
-    pub fn running(&self) -> bool {
+    pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
 
@@ -124,23 +156,28 @@ impl<O> Scan<O> {
 
     /// Returns a vector where each entry contains the number of violations of the associated property in the current verification run.
     #[inline]
-    pub fn violations(&self) -> Vec<u32> {
-        self.violations.lock().expect("lock").clone()
+    pub fn violations(&self) -> impl Iterator<Item = u32> {
+        self.violations.iter().map(|v| v.load(Ordering::Relaxed))
     }
 }
 
-impl<O: Oracle + Clone> Scan<O> {
-    fn verification(&self, confidence: f64, precision: f64) {
+impl<O> Scan<O>
+where
+    O: Oracle + Clone + Sync,
+{
+    fn verification(&self, confidence: f64, precision: f64, scheduler: Scheduler) {
         assert!(0f64 < confidence && confidence < 1f64);
         assert!(0f64 < precision && precision < 1f64);
 
-        let result = self
+        let oracle = self.oracle.clone();
+        let running = Arc::clone(&self.running);
+        let outcome = self
             .model
-            .new_run()
-            .experiment(self.oracle.clone(), self.running.clone());
-        if let Some(guarantees) = result
+            .experiment::<O, DummyTracer>(oracle, None, running, scheduler);
+        if let Some(guarantees) = outcome
             && self.running.load(Ordering::Relaxed)
         {
+            assert_eq!(guarantees.len(), self.violations().count());
             let local_successes;
             let local_failures;
             if guarantees.iter().all(|b| *b) {
@@ -151,14 +188,12 @@ impl<O: Oracle + Clone> Scan<O> {
             } else {
                 local_successes = self.successes.load(Ordering::Relaxed);
                 local_failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
-                let violations = &mut *self.violations.lock().unwrap();
-                violations.resize(violations.len().max(guarantees.len()), 0);
                 guarantees
                     .into_iter()
-                    .zip(violations.iter_mut())
+                    .zip(self.violations.iter())
                     .filter(|(success, _)| !success)
                     .for_each(|(_, violations)| {
-                        *violations += 1;
+                        let _ = violations.fetch_add(1, Ordering::Relaxed);
                     });
                 // If guarantee is violated, we have found a counter-example!
                 trace!("runs: {local_failures} failures");
@@ -175,7 +210,13 @@ impl<O: Oracle + Clone> Scan<O> {
     }
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
-    pub fn adaptive(&self, confidence: f64, precision: f64) -> Result<Report, ScanError> {
+    pub fn adaptive(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+        single_thread: bool,
+    ) -> Result<Report, ScanError> {
         if !(0f64 < confidence && confidence < 1f64) {
             return Err(ScanError::OutOfBoundsConfidence(confidence));
         }
@@ -189,10 +230,11 @@ impl<O: Oracle + Clone> Scan<O> {
         info!("verification starting");
         let start_time = Instant::now();
 
-        let runs = (0..)
-            .map(|_| self.verification(confidence, precision))
-            .take_while(|_| self.running.load(Ordering::Relaxed))
-            .count() as u32;
+        let runs = if single_thread {
+            self.seq_adaptive(confidence, precision, scheduler)
+        } else {
+            self.par_adaptive(confidence, precision, scheduler)
+        };
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
@@ -200,129 +242,111 @@ impl<O: Oracle + Clone> Scan<O> {
             runs,
             successes: self.successes(),
             failures: self.failures(),
-            violations: self.violations(),
+            violations: self.violations().collect(),
         })
+    }
+
+    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
+    /// spawning multiple threads.
+    fn par_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+        (0..usize::MAX)
+            .into_par_iter()
+            .map(|_| self.verification(confidence, precision, scheduler))
+            .take_any_while(|_| self.running.load(Ordering::Relaxed))
+            .count() as u32
+    }
+
+    fn seq_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+        (0..)
+            .map(|_| self.verification(confidence, precision, scheduler))
+            .take_while(|_| self.running.load(Ordering::Relaxed))
+            .count() as u32
     }
 
     /// Produces and saves the traces for the given number of runs,
     /// using the provided [`Tracer`].
-    pub fn traces<T>(&self, runs: usize, path: PathBuf, model_data: &T::ModelData)
+    pub fn traces<'a, T>(
+        &self,
+        runs: usize,
+        path: &Path,
+        model_data: &'a T::ModelData,
+        scheduler: Scheduler,
+        single_thread: bool,
+    ) -> std::io::Result<()>
     where
-        T: Tracer,
+        T: Tracer<'a>,
+        T::ModelData: Sync,
     {
-        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("tracing starting");
         let start_time = Instant::now();
-        create_traces_dirs_tree(path.clone());
+        self.reset();
+        create_traces_dirs_tree(path)?;
 
-        (0..runs).for_each(|idx| {
-            self.trace::<T>(path.clone(), model_data, idx);
-        });
+        if single_thread {
+            (0..runs).try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
+        } else {
+            (0..runs)
+                .into_par_iter()
+                .try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
+        }
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
+        Ok(())
     }
 
-    fn trace<T>(&self, mut path: PathBuf, model_data: &T::ModelData, idx: usize)
+    fn trace<'a, T>(
+        &self,
+        path: &Path,
+        model_data: &'a T::ModelData,
+        scheduler: Scheduler,
+        idx: usize,
+    ) -> std::io::Result<()>
     where
-        T: Tracer,
+        T: Tracer<'a>,
     {
-        let mut ts = self.model.new_run();
         let filename = PathBuf::new()
             .with_file_name(format!("{idx:04}"))
             .with_extension(T::EXTENSION);
-        path.push(TEMP);
+        let mut path = path.join(TEMP);
         path.push(&filename);
         path.add_extension("gz");
-        let file = File::create_new(&path).expect("create file");
+        let file = File::create_new(&path)?;
         let writer = flate2::GzBuilder::new()
-            .filename(filename.to_str().expect("file name"))
-            .comment("Scan-generated execution trace")
+            .filename(filename.as_os_str().as_encoded_bytes())
+            .comment("SCAN-generated execution trace")
             .write(file, flate2::Compression::best());
-        let tracer = T::init(writer, model_data);
-        if let Some(verified) = ts.trace::<T, _>(self.oracle.clone(), tracer, model_data) {
-            let mut new_path = path.clone();
-            // pop file name
-            new_path.pop();
-            // pop temp folder
-            new_path.pop();
-            if verified.into_iter().all(|b| b) {
-                new_path.push(SUCCESSES);
+        let tracer = Some(T::init(writer, model_data));
+        let oracle = self.oracle.clone();
+        let running = Arc::clone(&self.running);
+        let outcome = self.model.experiment(oracle, tracer, running, scheduler);
+        if let Some(verified) = outcome {
+            let dest_folder = if verified.into_iter().all(|b| b) {
+                SUCCESSES
             } else {
-                new_path.push(FAILURES);
-            }
+                FAILURES
+            };
+            let mut new_path = path
+                .parent()
+                .expect("path without file name")
+                .parent()
+                .expect("path without temp folder")
+                .join(dest_folder);
             new_path.push(path.file_name().expect("file name"));
-            rename(&path, new_path).expect("renaming");
+            rename(&path, new_path)?;
         }
+        Ok(())
     }
 }
 
-impl<O> Scan<O>
-where
-    O: Oracle + Clone + Sync,
-{
-    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
-    /// spawning multiple threads.
-    pub fn par_adaptive(&self, confidence: f64, precision: f64) -> Result<Report, ScanError> {
-        if !(0f64 < confidence && confidence < 1f64) {
-            return Err(ScanError::OutOfBoundsConfidence(confidence));
-        }
-        if !(0f64 < precision && precision < 1f64) {
-            return Err(ScanError::OutOfBoundsPrecision(precision));
-        }
-
-        self.reset();
-
-        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
-        info!("verification starting");
-        let start_time = Instant::now();
-
-        let runs = (0..usize::MAX)
-            .into_par_iter()
-            .map(|_| self.verification(confidence, precision))
-            .take_any_while(|_| self.running.load(Ordering::Relaxed))
-            .count() as u32;
-
-        let elapsed = start_time.elapsed();
-        info!("verification completed in {elapsed:0.2?}");
-        Ok(Report {
-            runs,
-            successes: self.successes(),
-            failures: self.failures(),
-            violations: self.violations(),
-        })
-    }
-
-    /// Produces and saves the traces for the given number of runs,
-    /// using the provided [`Tracer`],
-    /// spawning multiple threads.
-    pub fn par_traces<T>(&self, runs: usize, path: PathBuf, model_data: &T::ModelData)
-    where
-        T: Tracer,
-        T::ModelData: Sync,
-    {
-        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
-        info!("tracing starting");
-        let start_time = Instant::now();
-        create_traces_dirs_tree(path.clone());
-
-        (0..runs).into_par_iter().for_each(|idx| {
-            self.trace::<T>(path.clone(), model_data, idx);
-        });
-
-        let elapsed = start_time.elapsed();
-        info!("tracing completed in {elapsed:0.2?}");
-    }
-}
-
-fn create_traces_dirs_tree(mut path: PathBuf) {
-    create_dir_all(&path).expect("create base dir");
-    path.push(TEMP);
-    create_dir(&path).expect("create temp dir");
+fn create_traces_dirs_tree(path: &Path) -> std::io::Result<()> {
+    create_dir_all(path)?;
+    let mut path = path.join(TEMP);
+    create_dir(&path)?;
     assert!(path.pop());
     path.push(SUCCESSES);
-    create_dir(&path).expect("create successes dir");
+    create_dir(&path)?;
     assert!(path.pop());
     path.push(FAILURES);
-    create_dir(&path).expect("create failures dir");
+    create_dir(&path)
 }

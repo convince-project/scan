@@ -21,6 +21,7 @@ pub use tracer::TracePrinter;
 pub fn load<'def>(
     path: &'def Path,
     properties: &'def [String],
+    all_properties: bool,
 ) -> anyhow::Result<(Scan<MtlOracle>, JaniModelData)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parsing JANI model file '{}'", path.display());
@@ -43,7 +44,7 @@ pub fn load<'def>(
 
     let time = std::time::Instant::now();
     info!(target: "build", "building JANI model");
-    let (pg_model, oracle, jani_info) = build(jani_model, properties)?;
+    let (pg_model, oracle, jani_info) = build(jani_model, properties, all_properties)?;
     info!("building model completed in {:?}", time.elapsed());
     Ok((Scan::new(pg_model, oracle), jani_info))
 }

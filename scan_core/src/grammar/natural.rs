@@ -33,9 +33,9 @@ where
     // Arithmetic operators
     // --------------------
     /// Arithmetic n-ary sum.
-    Sum(Vec<NaturalExpr<V>>),
+    Sum(Box<[NaturalExpr<V>]>),
     /// Arithmetic n-ary multiplication.
-    Product(Vec<NaturalExpr<V>>),
+    Product(Box<[NaturalExpr<V>]>),
     /// Mod operation
     Rem(Box<(NaturalExpr<V>, NaturalExpr<V>)>),
     /// Div operation
@@ -251,16 +251,22 @@ where
     fn add(mut self, mut rhs: Self) -> Self::Output {
         if let NaturalExpr::Sum(ref mut exprs) = self {
             if let NaturalExpr::Sum(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let NaturalExpr::Sum(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            NaturalExpr::Sum(vec![self, rhs])
+            NaturalExpr::Sum(Box::new([self, rhs]))
         }
     }
 }
@@ -274,16 +280,22 @@ where
     fn mul(mut self, mut rhs: Self) -> Self::Output {
         if let NaturalExpr::Product(ref mut exprs) = self {
             if let NaturalExpr::Product(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let NaturalExpr::Product(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            NaturalExpr::Product(vec![self, rhs])
+            NaturalExpr::Product(Box::new([self, rhs]))
         }
     }
 }

@@ -37,9 +37,9 @@ where
     /// Opposite of a numerical expression.
     Opposite(Box<IntegerExpr<V>>),
     /// Arithmetic n-ary sum.
-    Sum(Vec<IntegerExpr<V>>),
+    Sum(Box<[IntegerExpr<V>]>),
     /// Arithmetic n-ary multiplication.
-    Product(Vec<IntegerExpr<V>>),
+    Product(Box<[IntegerExpr<V>]>),
     /// Div operation
     Div(Box<(IntegerExpr<V>, IntegerExpr<V>)>),
     /// Rem operation
@@ -139,8 +139,8 @@ where
                 let rhs = rhs_expr.eval(vars, rng);
                 lhs.strict_rem_euclid(rhs)
             }
-            IntegerExpr::Floor(float_expr) => float_expr.eval(vars, rng).floor() as Integer,
-            IntegerExpr::Ceil(float_expr) => float_expr.eval(vars, rng).ceil() as Integer,
+            IntegerExpr::Floor(float_expr) => float_expr.eval(vars, rng).floor().to_integer(),
+            IntegerExpr::Ceil(float_expr) => float_expr.eval(vars, rng).ceil().to_integer(),
             IntegerExpr::Ite(args) => {
                 let (ite, lhs, rhs) = args.as_ref();
                 if ite.eval(vars, rng.as_deref_mut()) {
@@ -283,16 +283,22 @@ where
     fn add(mut self, mut rhs: Self) -> Self::Output {
         if let IntegerExpr::Sum(ref mut exprs) = self {
             if let IntegerExpr::Sum(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let IntegerExpr::Sum(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            IntegerExpr::Sum(vec![self, rhs])
+            IntegerExpr::Sum(Box::new([self, rhs]))
         }
     }
 }
@@ -306,16 +312,22 @@ where
     fn mul(mut self, mut rhs: Self) -> Self::Output {
         if let IntegerExpr::Product(ref mut exprs) = self {
             if let IntegerExpr::Product(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let IntegerExpr::Product(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            IntegerExpr::Product(vec![self, rhs])
+            IntegerExpr::Product(Box::new([self, rhs]))
         }
     }
 }

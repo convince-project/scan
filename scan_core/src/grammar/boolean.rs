@@ -24,9 +24,9 @@ where
     // Logical operators
     // -----------------
     /// n-ary logical conjunction.
-    And(Vec<BooleanExpr<V>>),
+    And(Box<[BooleanExpr<V>]>),
     /// n-ary logical disjunction.
-    Or(Vec<BooleanExpr<V>>),
+    Or(Box<[BooleanExpr<V>]>),
     /// Logical implication.
     Implies(Box<(BooleanExpr<V>, BooleanExpr<V>)>),
     /// Logical negation.
@@ -137,7 +137,9 @@ where
             }
             BooleanExpr::Rand(float_expr) => {
                 let bernoulli = float_expr.eval(vars, rng.as_deref_mut());
-                rng.as_mut().expect("rng").random_bool(bernoulli)
+                rng.as_mut()
+                    .expect("rng")
+                    .random_ratio(*bernoulli.numer() as u32, *bernoulli.denom() as u32)
             }
             BooleanExpr::And(boolean_exprs) => boolean_exprs
                 .iter()
@@ -437,16 +439,22 @@ where
     fn bitand(mut self, mut rhs: Self) -> Self::Output {
         if let BooleanExpr::And(ref mut exprs) = self {
             if let BooleanExpr::And(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let BooleanExpr::And(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            BooleanExpr::And(vec![self, rhs])
+            BooleanExpr::And(Box::new([self, rhs]))
         }
     }
 }
@@ -460,16 +468,22 @@ where
     fn bitor(mut self, mut rhs: Self) -> Self::Output {
         if let BooleanExpr::And(ref mut exprs) = self {
             if let BooleanExpr::Or(rhs_exprs) = rhs {
-                exprs.extend(rhs_exprs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.extend(rhs_exprs);
+                *exprs = exprs_vec.into_boxed_slice();
             } else {
-                exprs.push(rhs);
+                let mut exprs_vec = exprs.to_vec();
+                exprs_vec.push(rhs);
+                *exprs = exprs_vec.into_boxed_slice();
             }
             self
         } else if let BooleanExpr::Or(ref mut rhs_exprs) = rhs {
-            rhs_exprs.push(self);
+            let mut exprs_vec = rhs_exprs.to_vec();
+            exprs_vec.push(self);
+            *rhs_exprs = exprs_vec.into_boxed_slice();
             rhs
         } else {
-            BooleanExpr::Or(vec![self, rhs])
+            BooleanExpr::Or(Box::new([self, rhs]))
         }
     }
 }

@@ -26,13 +26,12 @@ mod report;
 mod trace;
 mod verify;
 
-use std::{env::current_dir, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use progress::Bar;
-use report::Report;
-use scan_core::{Oracle, Scan};
+use scan_core::Scheduler;
 use trace::TraceArgs;
 use verify::VerifyArgs;
 
@@ -76,6 +75,43 @@ enum Format {
     /// WARNING: Promela support is still experimental.
     #[cfg(feature = "promela")]
     Promela,
+}
+
+/// Scheduling strategy used to sample executions
+#[derive(Debug, Default, Clone, Copy, Parser, ValueEnum)]
+#[deny(missing_docs)]
+enum CliScheduler {
+    /// Uniform distribution over non-deterministic choices.
+    #[default]
+    Uniform,
+    /// Schedulers sampled from uniform distribution over scheduler space.
+    ///
+    /// Lightweight sampling strategy from:
+    ///
+    /// __An efficient statistical model checker for nondeterminism and rare events__
+    /// (Carlos E. Budde et al.),
+    /// International Journal on Software Tools for Technology Transfer (2020),
+    /// [https://doi.org/10.1007/s10009-020-00563-2].
+    Sampling,
+    /// Exhaustive exploration of scheduler space.
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Exhaustive,
+    /// Exploration of subspace of schedulers that enforce an order of priority between processes,
+    ///
+    /// Search is optimized via Partial Order Reduction.
+    Priority,
+}
+
+impl From<CliScheduler> for Scheduler {
+    fn from(val: CliScheduler) -> Self {
+        match val {
+            CliScheduler::Uniform => Scheduler::Uniform,
+            CliScheduler::Sampling => Scheduler::Sampling,
+            CliScheduler::Exhaustive => Scheduler::Exhaustive,
+            CliScheduler::Priority => Scheduler::Priority,
+        }
+    }
 }
 
 /// SCAN's available commands.
@@ -227,7 +263,8 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                run_verification::<_>(model, &args, progress, json, &scan_def).print(json);
+                args.run_verification::<_>(model, progress, json, &scan_def)?
+                    .print(json);
             }
             Commands::Validate => {
                 let (_scan, _scxml_model) = load(&self.model, &[], true)?;
@@ -235,13 +272,12 @@ impl Cli {
                 println!("model '{model}' successfully validated");
             }
             Commands::Trace(mut args) => {
+                args.validate()?;
                 let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                let path = new_traces_dir();
-                args.trace::<_, TracePrinter>(&scan_def, path, &scxml_model);
-                println!("trace computation for model '{model}' completed");
+                args.trace::<_, TracePrinter>(model, &scan_def, &scxml_model)?;
             }
         }
         Ok(())
@@ -258,23 +294,24 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                let properties = args.properties.clone();
-                let (scan, jani_model) = load(&self.model, &properties)?;
+                let (scan, jani_model) = load(&self.model, &args.properties, args.all)?;
                 validate_properties(&args.properties, &jani_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = jani_model.guarantees.clone();
-                run_verification::<_>(model, &args, progress, json, &scan).print(json);
+                args.run_verification::<_>(model, progress, json, &scan)?
+                    .print(json);
             }
             Commands::Validate => {
-                let (_scan, _jani_model) = load(&self.model, &[])?;
+                let (_scan, _jani_model) = load(&self.model, &[], true)?;
                 println!("model '{model}' successfully validated");
             }
-            Commands::Trace(args) => {
+            Commands::Trace(mut args) => {
                 args.validate()?;
-                let (scan, jani_model) = load(&self.model, &[])?;
-                let path = new_traces_dir();
-                args.trace::<_, TracePrinter>(&scan, path, &jani_model);
-                println!("trace computation for model '{model}' completed");
+                let (scan, jani_model) = load(&self.model, &args.properties, args.all)?;
+                validate_properties(&args.properties, &jani_model.guarantees)?;
+                // Reorder properties as they appear in the model
+                args.properties = jani_model.guarantees.clone();
+                args.trace::<_, TracePrinter>(model, &scan, &jani_model)?;
             }
         }
         Ok(())
@@ -317,54 +354,6 @@ fn validate_properties(props: &[String], all_props: &[String]) -> anyhow::Result
     } else {
         Ok(())
     }
-}
-
-fn run_verification<'a, O>(
-    model: &str,
-    args: &VerifyArgs,
-    progress: Option<Bar>,
-    json: bool,
-    scan: &'a Scan<O>,
-) -> Report
-where
-    O: 'a + Oracle + Clone + Sync,
-{
-    if !json {
-        println!(
-            "Verifying {model} (-p {} -c {}) {:?}",
-            args.precision, args.confidence, args.properties
-        );
-    }
-    if let Some(bar) = progress {
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                bar.print_progress_bar::<O>(
-                    args.confidence,
-                    args.precision,
-                    &args.properties,
-                    scan,
-                );
-            });
-            args.verify::<O>(model.to_owned(), scan)
-        })
-    } else {
-        args.verify::<O>(model.to_owned(), scan)
-    }
-}
-
-fn new_traces_dir() -> std::path::PathBuf {
-    const FOLDER: &str = "traces";
-
-    let mut path = current_dir().expect("current dir");
-    for i in 0.. {
-        path.push(format!("{}_{i:02}", FOLDER));
-        if std::fs::exists(&path).is_ok_and(|exists| !exists) {
-            break;
-        } else {
-            assert!(path.pop());
-        }
-    }
-    path
 }
 
 // From Clap tutorial <https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html#testing>
