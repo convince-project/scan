@@ -373,11 +373,6 @@ impl ChannelSystem {
     }
 
     #[inline]
-    pub(super) fn channels(&self) -> &[(Box<[Type]>, ChannelCapacity)] {
-        &self.channels
-    }
-
-    #[inline]
     pub(super) fn senders_to(&self, channel: Channel) -> Result<&FixedBitSet, CsError> {
         self.senders
             .get(channel.0 as usize)

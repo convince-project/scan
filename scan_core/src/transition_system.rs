@@ -311,9 +311,6 @@ impl TransitionSystem {
         let mut recycling_sets: Vec<Box<[(FixedBitSet, bool)]>> = Vec::new();
         let pgs = self.pg_list.len();
         let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
-        let channels_num = self.cs.channels().len();
-        let mut full_channels = FixedBitSet::with_capacity(channels_num);
-        let mut empty_channels = FixedBitSet::with_capacity(channels_num);
         let mut bump = Bump::new();
         let mut run = self.new_run();
         let mut trace = Vec::new();
@@ -332,7 +329,7 @@ impl TransitionSystem {
                 .iter()
                 .all(|(set, invalid)| *invalid || set.is_clear())
             {
-                run.ample(&mut amples, &mut full_channels, &mut empty_channels);
+                run.ample(&mut amples);
             }
 
             // Find most suitable ample set
@@ -556,9 +553,6 @@ impl TransitionSystem {
         let mut recycling_dags: Vec<Dag> = Vec::new();
         let pgs = self.pg_list.len();
         let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
-        let channels_num = self.cs.channels().len();
-        let mut full_channels = FixedBitSet::with_capacity(channels_num);
-        let mut empty_channels = FixedBitSet::with_capacity(channels_num);
         let mut restricted_ample = FixedBitSet::with_capacity(pgs);
         let mut restricted_ample_temp = FixedBitSet::with_capacity(pgs);
         let mut bump = Bump::new();
@@ -584,7 +578,7 @@ impl TransitionSystem {
                 .iter()
                 .all(|(set, invalid)| *invalid || set.is_clear())
             {
-                run.ample(&mut amples, &mut full_channels, &mut empty_channels);
+                run.ample(&mut amples);
                 len_lower_bound = 1;
             }
 

@@ -211,27 +211,6 @@ impl<'def> ChannelSystemRun<'def> {
         }
     }
 
-    #[inline]
-    pub(crate) fn is_channel_empty(&self, channel: Channel) -> Result<bool, CsError> {
-        let channel_idx = channel.0 as usize;
-        self.message_queue
-            .get(channel_idx)
-            .ok_or(CsError::MissingChannel(channel))
-            .map(|channel| channel.is_empty())
-    }
-
-    #[inline]
-    pub(crate) fn is_channel_full(&self, channel: Channel) -> Result<bool, CsError> {
-        let channel_idx = channel.0 as usize;
-        match self.def.channel(channel)?.1 {
-            ChannelCapacity::Queue(capacity) => match capacity {
-                Some(capacity) => Ok(self.message_queue[channel_idx].len() >= capacity),
-                None => Ok(false),
-            },
-            ChannelCapacity::Sink => Ok(false),
-        }
-    }
-
     /// Executes a transition on the given PG characterized by the argument action and post-state.
     ///
     /// Fails if the requested transition is not admissible.
