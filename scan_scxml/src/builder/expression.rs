@@ -275,12 +275,13 @@ where
                     vec![Expression::from(idx)]
                 }
                 LiteralKind::Num(f) => vec![Expression::from(
-                    Float::approximate_float(*f).expect("approximate float into integer"),
+                    *f, // Float::approximate_float(*f).expect("approximate float into integer"),
                 )],
                 LiteralKind::Int(i)
                     if expr_type.is_some_and(|t| matches!(t, OmgType::Base(OmgBaseType::F64))) =>
                 {
-                    vec![Expression::from(Float::from_integer(*i as i64))]
+                    vec![Expression::from(*i as Float)]
+                    // vec![Expression::from(Float::from_integer(*i as i64))]
                 }
                 LiteralKind::Int(i)
                     if expr_type
@@ -530,8 +531,10 @@ where
                                 match field.as_str() {
                                     "random" => {
                                         vec![Expression::Float(FloatExpr::Rand(Box::new((
-                                            FloatExpr::from(Float::from_integer(0)),
-                                            FloatExpr::from(Float::from_integer(1)),
+                                            FloatExpr::from(0 as Float),
+                                            FloatExpr::from(1 as Float),
+                                            // FloatExpr::from(Float::from_integer(0)),
+                                            // FloatExpr::from(Float::from_integer(1)),
                                         ))))]
                                     }
                                     "floor" => {

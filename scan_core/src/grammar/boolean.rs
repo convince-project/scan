@@ -137,9 +137,8 @@ where
             }
             BooleanExpr::Rand(float_expr) => {
                 let bernoulli = float_expr.eval(vars, rng.as_deref_mut());
-                rng.as_mut()
-                    .expect("rng")
-                    .random_ratio(*bernoulli.numer() as u32, *bernoulli.denom() as u32)
+                rng.as_mut().expect("rng").random_bool(bernoulli)
+                // .random_ratio(*bernoulli.numer() as u32, *bernoulli.denom() as u32)
             }
             BooleanExpr::And(boolean_exprs) => boolean_exprs
                 .iter()

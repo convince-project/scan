@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{Oracle, Scan};
+use scan_core::{OracleTree, Oracle, Scan};
 
 use crate::{CliScheduler, progress::Bar};
 
@@ -122,6 +122,73 @@ impl VerifyArgs {
     {
         let report = scan
             .adaptive(
+                self.confidence,
+                self.precision,
+                self.scheduler.unwrap_or_default().into(),
+                self.single_thread,
+            )
+            .expect("verify");
+        let successes = report.successes;
+        let failures = report.failures;
+        let runs = successes + failures;
+        let rate = successes as f64 / runs as f64;
+        let properties = self
+            .properties
+            .iter()
+            .cloned()
+            .zip(report.violations.into_iter().chain([0].into_iter().cycle()))
+            .collect::<Vec<(String, u32)>>();
+        Report {
+            model,
+            properties,
+            precision: self.precision,
+            confidence: self.confidence,
+            rate,
+            runs,
+            successes,
+            failures,
+        }
+    }
+
+    pub(crate) fn run_verification_tree<'a, O>(
+        &self,
+        model: &str,
+        progress: Option<Bar>,
+        json: bool,
+        scan: &'a Scan<O>,
+    ) -> anyhow::Result<Report>
+    where
+        O: 'a + OracleTree + Clone + Sync,
+    {
+        if !json {
+            println!(
+                "Verifying {model} (-p {} -c {}) {:?}",
+                self.precision, self.confidence, self.properties
+            );
+        }
+        if let Some(bar) = progress {
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    bar.print_progress_bar::<O>(
+                        self.confidence,
+                        self.precision,
+                        &self.properties,
+                        scan,
+                    );
+                });
+                Ok(self.verify_tree::<O>(model.to_owned(), scan))
+            })
+        } else {
+            Ok(self.verify_tree::<O>(model.to_owned(), scan))
+        }
+    }
+
+    pub(crate) fn verify_tree<'a, O>(&self, model: String, scan: &'a Scan<O>) -> Report
+    where
+        O: OracleTree + Clone + Sync + 'a,
+    {
+        let report = scan
+            .adaptive_tree(
                 self.confidence,
                 self.precision,
                 self.scheduler.unwrap_or_default().into(),

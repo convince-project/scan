@@ -36,3 +36,11 @@ pub trait Oracle: Sync {
         [true].into_iter()
     }
 }
+
+pub trait OracleTree: Oracle {
+    fn new_node(&mut self, branches: usize);
+
+    fn close_branch(&mut self);
+
+    fn branch_end(&mut self);
+}

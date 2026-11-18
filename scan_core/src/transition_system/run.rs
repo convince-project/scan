@@ -1,4 +1,4 @@
-use std::hash::{Hash, Hasher};
+// use std::hash::{Hash, Hasher};
 
 use bumpalo::Bump;
 use bumpalo::collections::CollectIn;
@@ -33,13 +33,13 @@ impl<'def> PartialEq for TransitionSystemRun<'def> {
 
 impl<'def> Eq for TransitionSystemRun<'def> {}
 
-impl<'def> Hash for TransitionSystemRun<'def> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.cs.hash(state);
-        self.vals.hash(state);
-        self.last_event.hash(state);
-    }
-}
+// impl<'def> Hash for TransitionSystemRun<'def> {
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         self.cs.hash(state);
+//         self.vals.hash(state);
+//         self.last_event.hash(state);
+//     }
+// }
 
 impl<'def> TransitionSystemRun<'def> {
     pub(super) fn new(ts: &'def TransitionSystem) -> Self {

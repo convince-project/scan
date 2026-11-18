@@ -4,6 +4,7 @@ mod fsm;
 mod omg_types;
 mod property;
 mod rye;
+mod rye_ctl;
 mod vocabulary;
 
 pub use self::fsm::*;

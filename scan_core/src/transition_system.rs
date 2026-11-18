@@ -17,9 +17,9 @@ use rand::rngs::SmallRng;
 use thiserror::Error;
 
 use crate::channel_system::{
-    Action, Channel, ChannelSystem, CsError, Event, EventType, PgId, PgIndex,
+    Action, Channel, ChannelSystem, CsError, Event, EventType, Location, PgId, PgIndex,
 };
-use crate::{BooleanExpr, Oracle, RunOutcome, Scheduler, Time, Tracer, Val};
+use crate::{BooleanExpr, Oracle, OracleTree, RunOutcome, Scheduler, Time, Tracer, Val};
 use run::TransitionSystemRun;
 
 type Dag = Acyclic<DiGraph<(), (), PgIndex>>;
@@ -234,6 +234,26 @@ impl TransitionSystem {
             Scheduler::Sampling => todo!(),
             Scheduler::Exhaustive => self.experiment_exhaustive(oracle, tracer, running),
             Scheduler::Priority => self.experiment_priority(oracle, tracer, running),
+        }
+    }
+
+    pub(crate) fn experiment_tree<O: OracleTree + Clone>(
+        &self,
+        oracle: O,
+        running: Arc<AtomicBool>,
+        scheduler: Scheduler,
+    ) -> RunOutcome {
+        // NOTE: Uniform scheduler writes the trace on-the-fly,
+        // whether or not it violates the guarantees,
+        // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
+        // or nothing if all guarantees where satisfied by all considered schedulers.
+        match scheduler {
+            Scheduler::Uniform => todo!(),
+            // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
+            Scheduler::Sampling => todo!(),
+            Scheduler::Exhaustive => self.experiment_tree_exhaustive(oracle, running),
+            // Scheduler::Exhaustive => self.experiment_exhaustive(oracle, tracer, running),
+            Scheduler::Priority => todo!(),
         }
     }
 
@@ -526,6 +546,126 @@ impl TransitionSystem {
             "run stopped: processed {branches} branches in {:?}",
             start_time.elapsed()
         );
+        None
+    }
+
+    fn experiment_tree_exhaustive<O: OracleTree + Clone>(
+        &self,
+        mut oracle: O,
+        running: Arc<AtomicBool>,
+    ) -> RunOutcome {
+        // Diagnostics/stats
+        let start_time = Instant::now();
+
+        type BranchData<'a> = (
+            TransitionSystemRun<'a>,
+            Box<[(FixedBitSet, bool)]>,
+            Vec<(Action, Vec<Location>)>,
+        );
+        let mut executions_stack: Vec<BranchData> = Vec::new();
+        let pgs = self.pg_list.len();
+        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
+        let mut bump = Bump::new();
+        let mut run = self.new_run();
+
+        // Initialize oracle with TS initial state
+        let state: Box<[bool]> = run.labels().collect();
+        run.fastforward(&bump);
+        // NOTE: root of the oracle tree should be initial state
+        oracle.update_state(&state);
+        oracle.new_node(1);
+
+        // FILO stack: depth-first search
+        while running.load(Ordering::Relaxed) {
+            let determined = oracle.output_guarantees().all(|o| o.is_some())
+                || oracle.output_guarantees().any(|o| o.is_some_and(|b| !b));
+
+            if !determined {
+                bump.reset();
+                run.fastforward(&bump);
+                run.ample(&mut amples);
+
+                // Find most suitable ample set
+                if let Some((ample, _)) = amples
+                    .iter()
+                    // only consider viable sets (i.e., neither invalidated nor empty)
+                    .filter(|(set, _invalid)| !set.is_clear())
+                    // .filter(|(set, invalid)| !(*invalid || set.is_clear()))
+                    .min_by_key(|(set, _)| set.len())
+                {
+                    let mut transitions = ample
+                        .ones()
+                        .flat_map(|b| {
+                            run.possible_transitions_pg(PgId(b as PgIndex))
+                                .unwrap()
+                                .flat_map(|(action, posts)| {
+                                    posts
+                                        .multi_cartesian_product()
+                                        .map(move |posts| (action, posts))
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                    // There must be active transitions because we checked earlier
+                    let (action, posts) = transitions.pop().expect("valid transition");
+                    if !transitions.is_empty() {
+                        oracle.new_node(transitions.len());
+                        executions_stack.push((run.clone(), amples.clone(), transitions));
+                    }
+                    bump.reset();
+                    let _event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
+                    // Update DAG
+                    let action_pg_idx = u16::from(action.program_graph_id()) as usize;
+                    // NOTE: Ample sets, in this case, are closed under intersection,
+                    // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
+                    // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
+                    amples
+                        .iter_mut()
+                        .for_each(|(set, invalidate)| *invalidate |= set.contains(action_pg_idx));
+                    continue;
+                } else if run.is_waiting() {
+                    trace!("time tick");
+                    run.time_tick();
+                    oracle.update_time(run.time());
+                    amples
+                        .iter_mut()
+                        .for_each(|(_set, invalidate)| *invalidate = true);
+                    continue;
+                } else {
+                    oracle.branch_end();
+                }
+            }
+
+            oracle.close_branch();
+            if let Some((branch_run, branch_amples, actions)) = executions_stack.last_mut() {
+                // continue loop with next run and oracle
+                let (action, posts) = actions.pop().unwrap();
+                if actions.is_empty() {
+                    trace!("pop branch");
+                    let (branch_run, branch_amples, actions) = executions_stack.pop().unwrap();
+                    assert!(actions.is_empty());
+                    run = branch_run;
+                    amples = branch_amples;
+                } else {
+                    trace!("switch branch");
+                    run = branch_run.clone();
+                    amples.clone_from(branch_amples);
+                }
+                let _event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
+                // Update DAG
+                let action_pg_idx = u16::from(action.program_graph_id()) as usize;
+                // NOTE: Ample sets, in this case, are closed under intersection,
+                // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
+                // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
+                amples
+                    .iter_mut()
+                    .for_each(|(set, invalidate)| *invalidate |= set.contains(action_pg_idx));
+            } else {
+                // Model execution terminates
+                trace!("run terminates in {:?}", start_time.elapsed());
+                return Some(Vec::from_iter(oracle.final_output_guarantees()));
+            }
+        }
+        trace!("run stopped in {:?}", start_time.elapsed());
         None
     }
 

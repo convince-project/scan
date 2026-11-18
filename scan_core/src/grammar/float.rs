@@ -1,7 +1,7 @@
 use std::ops::{Add, Div, Mul, Neg};
 
 use get_size2::GetSize;
-use num_rational::Rational64;
+// use num_rational::Rational64;
 use rand::{Rng, RngExt};
 
 use crate::{
@@ -10,11 +10,10 @@ use crate::{
 };
 
 /// Floating-point values.
-pub type Float = Rational64;
+pub type Float = f64;
 
 /// Floating-point numerical expression.
 #[derive(Debug, Clone, GetSize)]
-#[get_size(ignore(Float))]
 pub enum FloatExpr<V>
 where
     V: Clone,
@@ -109,19 +108,26 @@ where
             }
             // NOTE WARN: the u64 as f64 is lossy!
             FloatExpr::Nat(natural_expr) => {
-                Float::from_integer(natural_expr.eval(vars, rng) as i64)
+                natural_expr.eval(vars, rng) as Float
+                // Float::from_integer(natural_expr.eval(vars, rng) as i64)
             }
             // NOTE WARN: the i64 as f64 is lossy!
-            FloatExpr::Int(integer_expr) => Float::from_integer(integer_expr.eval(vars, rng)),
+            FloatExpr::Int(integer_expr) => {
+                integer_expr.eval(vars, rng) as Float
+                // Float::from_integer(integer_expr.eval(vars, rng))
+            }
             FloatExpr::Rand(bounds) => {
                 let (lower_bound_expr, upper_bound_expr) = bounds.as_ref();
                 let lower_bound = lower_bound_expr.eval(vars, rng.as_deref_mut());
                 let upper_bound = upper_bound_expr.eval(vars, rng.as_deref_mut());
-                let random = rng.as_mut().expect("rng").random_range(
-                    (*lower_bound.numer() as f64 / *lower_bound.denom() as f64)
-                        ..(*upper_bound.numer() as f64 / *upper_bound.denom() as f64),
-                );
-                Float::approximate_float(random).expect("Ratio approximating float")
+                rng.as_mut()
+                    .expect("rng")
+                    .random_range(lower_bound..upper_bound)
+                // let random = rng.as_mut().expect("rng").random_range(
+                //     (*lower_bound.numer() as f64 / *lower_bound.denom() as f64)
+                //         ..(*upper_bound.numer() as f64 / *upper_bound.denom() as f64),
+                // );
+                // Float::approximate_float(random).expect("Ratio approximating float")
             }
             FloatExpr::Opposite(float_expr) => -float_expr.eval(vars, rng),
             FloatExpr::Sum(float_exprs) => float_exprs

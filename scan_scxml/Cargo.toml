@@ -18,6 +18,7 @@ crate-type = ["lib"]  # The crate types to generate.
 [dependencies]
 smc_scan_core = { version = "0.3.0", path = "../scan_core" }
 smc_scan_pmtl = { version = "0.2.0", path = "../scan_pmtl" }
+smc_scan_ctl = { version = "0.1.0", path = "../scan_ctl" }
 anyhow = { workspace = true }
 boa_ast = "0.22.0"
 boa_interner = "0.22.0"
@@ -26,5 +27,5 @@ log = { workspace = true }
 quick-xml = "0.42.0"
 thiserror = { workspace = true }
 logos = "0.16.1"
-chumsky = "0.13.0"
+chumsky = "0.14.2"
 csv = { workspace = true }

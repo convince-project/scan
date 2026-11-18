@@ -263,7 +263,7 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                args.run_verification::<_>(model, progress, json, &scan_def)?
+                args.run_verification_tree::<_>(model, progress, json, &scan_def)?
                     .print(json);
             }
             Commands::Validate => {

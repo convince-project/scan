@@ -11,6 +11,7 @@ use anyhow::{Context, anyhow, bail};
 use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
+use scan_ctl::{Ctl, CtlOracle};
 use scan_pmtl::{Pmtl, PmtlOracle};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,8 +69,10 @@ pub struct ModelBuilder {
     event_indexes: BTreeMap<String, usize>,
     parameter_channels: BTreeMap<(PgId, PgId, usize), Channel>,
     // Properties
-    guarantees: Vec<(String, Pmtl<usize>)>,
-    assumes: Vec<(String, Pmtl<usize>)>,
+    // guarantees: Vec<(String, Pmtl<usize>)>,
+    // assumes: Vec<(String, Pmtl<usize>)>,
+    guarantees: Vec<(String, Ctl<usize>)>,
+    assumes: Vec<(String, Ctl<usize>)>,
     predicates: Vec<BooleanExpr<Atom>>,
     // port vars are (in general) expressions over atoms on the same channel
     port_vars: BTreeMap<String, (OmgType, Vec<Expression<Atom>>)>,
@@ -89,7 +92,8 @@ impl ModelBuilder {
         mut parser: Parser,
         properties: &[String],
         all_properties: bool,
-    ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
+    ) -> anyhow::Result<(TransitionSystem, CtlOracle, ScxmlModel)> {
+        // ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder
             .prebuild_processes(&mut parser)
@@ -1412,7 +1416,8 @@ impl ModelBuilder {
         Ok(())
     }
 
-    fn build_model(mut self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
+    fn build_model(mut self, parser: Parser) -> (TransitionSystem, CtlOracle, ScxmlModel) {
+        // fn build_model(mut self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
         let cs = self.cs.build();
         let mut model = TransitionSystem::new(cs);
         let port_vars = self
@@ -1431,7 +1436,10 @@ impl ModelBuilder {
         model.shrink();
         let (guarantee_names, guarantees): (Vec<_>, Vec<_>) = self.guarantees.into_iter().unzip();
         let (assume_names, assumes): (Vec<_>, Vec<_>) = self.assumes.into_iter().unzip();
-        let oracle = PmtlOracle::new(assumes.as_slice(), guarantees.as_slice());
+        // let oracle = PmtlOracle::new(assumes.as_slice(), guarantees.as_slice());
+        assert!(assumes.is_empty());
+        assert_eq!(guarantees.len(), 1);
+        let oracle = CtlOracle::new(&Ctl::True, &guarantees[0]);
         let mut events = Vec::from_iter(self.event_indexes);
         events.sort_unstable_by_key(|(_, idx)| *idx);
         let events = events

@@ -5,6 +5,7 @@ use boa_ast::scope::Scope;
 use boa_interner::Interner;
 use log::{error, info, trace};
 use quick_xml::{Reader, XmlVersion, events::Event};
+use scan_ctl::{Ctl, PathCtl};
 use scan_pmtl::Pmtl;
 use std::{collections::BTreeMap, io::BufRead};
 
@@ -53,8 +54,8 @@ impl From<&PropertyTag> for &'static str {
 pub struct Properties {
     pub(crate) ports: BTreeMap<String, ParserPort>,
     pub(crate) predicates: Vec<boa_ast::Expression>,
-    pub(crate) guarantees: Vec<(String, Pmtl<usize>)>,
-    pub(crate) assumes: Vec<(String, Pmtl<usize>)>,
+    pub(crate) guarantees: Vec<(String, Ctl<usize>)>,
+    pub(crate) assumes: Vec<(String, Ctl<usize>)>,
 }
 
 impl Properties {
@@ -223,13 +224,13 @@ impl Properties {
                                     })?;
                             let id = attrs[ATTR_ID].to_owned();
                             let expr = attrs[ATTR_EXPR].as_str();
-                            let formula = super::rye::parse(expr)
+                            let formula = super::rye_ctl::parse(expr)
                                 .map_err(|err| anyhow!(err))
                                 .with_context(|| {
-                                    format!("failed to parse '{expr}' Rye expression")
-                                })?;
+                                format!("failed to parse '{expr}' Rye expression")
+                            })?;
                             let property =
-                                parse_predicates(formula, &mut self.predicates, interner)
+                                parse_predicates_ctl(formula, &mut self.predicates, interner)
                                     .context("failed to parse predicates in Rye expression")?;
                             if self.assumes.iter().any(|(i, _)| i == &id)
                                 || self.guarantees.iter().any(|(i, _)| i == &id)
@@ -338,6 +339,72 @@ fn parse_predicates(
                 Box::new((
                     parse_predicates(lhs, predicates, interner)?,
                     parse_predicates(rhs, predicates, interner)?,
+                )),
+                range,
+            ))
+        }
+    }
+}
+
+fn parse_predicates_ctl(
+    formula: Ctl<String>,
+    predicates: &mut Vec<boa_ast::Expression>,
+    interner: &mut Interner,
+) -> anyhow::Result<Ctl<usize>> {
+    match formula {
+        Ctl::True => Ok(Ctl::True),
+        Ctl::False => Ok(Ctl::False),
+        Ctl::Atom(expr) => {
+            let pred = ecmascript(&expr, &Scope::new_global(), interner)?;
+            let idx = predicates.len();
+            predicates.push(pred);
+            Ok(Ctl::Atom(idx))
+        }
+        Ctl::And(vec) => vec
+            .into_iter()
+            .map(|f| parse_predicates_ctl(f, predicates, interner))
+            .collect::<Result<Box<[_]>, _>>()
+            .map(Ctl::And),
+        Ctl::Or(vec) => vec
+            .into_iter()
+            .map(|f| parse_predicates_ctl(f, predicates, interner))
+            .collect::<Result<Box<[_]>, _>>()
+            .map(Ctl::Or),
+        Ctl::Not(pmtl) => {
+            parse_predicates_ctl(*pmtl, predicates, interner).map(|f| Ctl::Not(Box::new(f)))
+        }
+        Ctl::Implies(args) => {
+            let (lhs, rhs) = *args;
+            Ok(Ctl::Implies(Box::new((
+                parse_predicates_ctl(lhs, predicates, interner)?,
+                parse_predicates_ctl(rhs, predicates, interner)?,
+            ))))
+        }
+        Ctl::Exists(path_ctl) => {
+            parse_predicates_path_ctl(path_ctl, predicates, interner).map(Ctl::Exists)
+        }
+        Ctl::All(path_ctl) => {
+            parse_predicates_path_ctl(path_ctl, predicates, interner).map(Ctl::All)
+        }
+    }
+}
+
+fn parse_predicates_path_ctl(
+    formula: PathCtl<String>,
+    predicates: &mut Vec<boa_ast::Expression>,
+    interner: &mut Interner,
+) -> anyhow::Result<PathCtl<usize>> {
+    match formula {
+        PathCtl::Historically(pmtl, range) => parse_predicates_ctl(*pmtl, predicates, interner)
+            .map(|f| PathCtl::Historically(Box::new(f), range)),
+        PathCtl::Once(pmtl, range) => parse_predicates_ctl(*pmtl, predicates, interner)
+            .map(|f| PathCtl::Once(Box::new(f), range)),
+        PathCtl::Since(args, range) => {
+            let (lhs, rhs) = *args;
+            Ok(PathCtl::Since(
+                Box::new((
+                    parse_predicates_ctl(lhs, predicates, interner)?,
+                    parse_predicates_ctl(rhs, predicates, interner)?,
                 )),
                 range,
             ))

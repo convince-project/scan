@@ -10,7 +10,7 @@ use bumpalo::{Bump, collections::CollectIn};
 use rand::rngs::SmallRng;
 use std::{
     collections::VecDeque,
-    hash::{Hash, Hasher},
+    // hash::{Hash, Hasher},
 };
 
 /// Representation of a CS that can be executed transition-by-transition.
@@ -55,14 +55,14 @@ impl<'def> PartialEq for ChannelSystemRun<'def> {
 
 impl<'def> Eq for ChannelSystemRun<'def> {}
 
-impl<'def> Hash for ChannelSystemRun<'def> {
-    #[inline]
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.time.hash(state);
-        self.message_queue.hash(state);
-        self.program_graphs.hash(state);
-    }
-}
+// impl<'def> Hash for ChannelSystemRun<'def> {
+//     #[inline]
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         self.time.hash(state);
+//         self.message_queue.hash(state);
+//         self.program_graphs.hash(state);
+//     }
+// }
 
 impl<'def> ChannelSystemRun<'def> {
     /// Creates a new [`ChannelSystemRun`] which allows to execute the CS as defined.

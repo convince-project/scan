@@ -339,6 +339,107 @@ where
     }
 }
 
+impl<O> Scan<O>
+where
+    O: OracleTree + Clone + Sync,
+{
+    fn verification_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) {
+        assert!(0f64 < confidence && confidence < 1f64);
+        assert!(0f64 < precision && precision < 1f64);
+
+        let oracle = self.oracle.clone();
+        let running = Arc::clone(&self.running);
+        let outcome = self.model.experiment_tree::<O>(oracle, running, scheduler);
+        if let Some(guarantees) = outcome
+            && self.running.load(Ordering::Relaxed)
+        {
+            assert_eq!(guarantees.len(), self.violations().count());
+            let local_successes;
+            let local_failures;
+            if guarantees.iter().all(|b| *b) {
+                local_successes = self.successes.fetch_add(1, Ordering::Relaxed) + 1;
+                local_failures = self.failures.load(Ordering::Relaxed);
+                // If all guarantees are satisfied, the execution is successful
+                trace!("runs: {local_successes} successes");
+            } else {
+                local_successes = self.successes.load(Ordering::Relaxed);
+                local_failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
+                guarantees
+                    .into_iter()
+                    .zip(self.violations.iter())
+                    .filter(|(success, _)| !success)
+                    .for_each(|(_, violations)| {
+                        let _ = violations.fetch_add(1, Ordering::Relaxed);
+                    });
+                // If guarantee is violated, we have found a counter-example!
+                trace!("runs: {local_failures} failures");
+            }
+            let runs = local_successes + local_failures;
+            // Division by 0 leads to Inf/NaN, which is not less than any other float number
+            // so this actually works as expected even for runs = 0.
+            let avg = local_successes as f64 / runs as f64;
+            if adaptive_bound(avg, confidence, precision) <= runs as f64 {
+                info!("adaptive bound satisfied");
+                self.running.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
+    pub fn adaptive_tree(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+        single_thread: bool,
+    ) -> Result<Report, ScanError> {
+        if !(0f64 < confidence && confidence < 1f64) {
+            return Err(ScanError::OutOfBoundsConfidence(confidence));
+        }
+        if !(0f64 < precision && precision < 1f64) {
+            return Err(ScanError::OutOfBoundsPrecision(precision));
+        }
+
+        self.reset();
+
+        // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
+        info!("verification starting");
+        let start_time = Instant::now();
+
+        let runs = if single_thread {
+            self.seq_adaptive_tree(confidence, precision, scheduler)
+        } else {
+            self.par_adaptive_tree(confidence, precision, scheduler)
+        };
+
+        let elapsed = start_time.elapsed();
+        info!("verification completed in {elapsed:0.2?}");
+        Ok(Report {
+            runs,
+            successes: self.successes(),
+            failures: self.failures(),
+            violations: self.violations().collect(),
+        })
+    }
+
+    /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
+    /// spawning multiple threads.
+    fn par_adaptive_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+        (0..usize::MAX)
+            .into_par_iter()
+            .map(|_| self.verification_tree(confidence, precision, scheduler))
+            .take_any_while(|_| self.running.load(Ordering::Relaxed))
+            .count() as u32
+    }
+
+    fn seq_adaptive_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+        (0..)
+            .map(|_| self.verification_tree(confidence, precision, scheduler))
+            .take_while(|_| self.running.load(Ordering::Relaxed))
+            .count() as u32
+    }
+}
+
 fn create_traces_dirs_tree(path: &Path) -> std::io::Result<()> {
     create_dir_all(path)?;
     let mut path = path.join(TEMP);

@@ -160,7 +160,8 @@ impl JaniBuilder {
 
         for element in jani_model.system.elements.iter() {
             let rng = cs
-                .new_var(pg_id, Val::from(Float::from_integer(0)))
+                .new_var(pg_id, Val::from(0 as Float))
+                // .new_var(pg_id, Val::from(Float::from_integer(0)))
                 .expect("new var");
 
             let mut automaton_builder = AutomatonBuilder::new(rng);
@@ -295,8 +296,10 @@ impl JaniBuilder {
                     sync_action,
                     automaton_builder.rng,
                     CsExpression::Float(FloatExpr::Rand(Box::new((
-                        FloatExpr::from(Float::from_integer(0)),
-                        FloatExpr::from(Float::from_integer(1)),
+                        FloatExpr::from(0 as Float),
+                        FloatExpr::from(1 as Float),
+                        // FloatExpr::from(Float::from_integer(0)),
+                        // FloatExpr::from(Float::from_integer(1)),
                     )))),
                 )
                 .expect("add effect");
@@ -476,7 +479,8 @@ impl JaniBuilder {
                                     prob_lower_bound.clone(),
                                     FloatExpr::Var(automaton_builder.rng),
                                 ));
-                                *prob_lower_bound = FloatExpr::Const(Float::from_integer(1));
+                                *prob_lower_bound = FloatExpr::Const(1 as Float);
+                                // *prob_lower_bound = FloatExpr::Const(Float::from_integer(1));
                             } else {
                                 prob_expr = None;
                             }
@@ -797,18 +801,20 @@ impl JaniBuilder {
                 parser::ConstantValue::Boolean(b) => Ok(CsExpression::from(*b)),
                 parser::ConstantValue::Constant(constant) => match constant {
                     parser::Constant::Euler => Ok(CsExpression::from(
-                        Float::approximate_float(std::f64::consts::E).expect("approximate float"),
+                        std::f64::consts::E, // Float::approximate_float(std::f64::consts::E).expect("approximate float"),
                     )),
                     parser::Constant::Pi => Ok(CsExpression::from(
-                        Float::approximate_float(std::f64::consts::PI).expect("approximate float"),
+                        std::f64::consts::PI, // Float::approximate_float(std::f64::consts::PI).expect("approximate float"),
                     )),
                 },
                 parser::ConstantValue::NumberReal(num) => Ok(CsExpression::from(
-                    Float::approximate_float(*num).expect("approximate float"),
+                    *num, // Float::approximate_float(*num).expect("approximate float"),
                 )),
                 parser::ConstantValue::NumberInt(num) => match type_hint {
-                    Some(Type::Float) => Ok(CsExpression::from(Float::from_integer(*num))),
+                    Some(Type::Float) => Ok(CsExpression::from(*num as Float)),
+                    // Some(Type::Float) => Ok(CsExpression::from(Float::from_integer(*num))),
                     Some(Type::Natural) => Ok(CsExpression::from(*num as Natural)),
+                    // Some(Type::Natural) => Ok(CsExpression::from(*num as Natural)),
                     _ => Ok(CsExpression::from(*num as Integer)),
                 },
             },
@@ -998,19 +1004,21 @@ impl JaniBuilder {
                     parser::ConstantValue::Boolean(b) => Expression::from(*b),
                     parser::ConstantValue::Constant(constant) => match constant {
                         parser::Constant::Euler => Expression::from(
-                            Float::approximate_float(std::f64::consts::E)
-                                .expect("approximate float"),
+                            std::f64::consts::E, // Float::approximate_float(std::f64::consts::E)
+                                                 //     .expect("approximate float"),
                         ),
                         parser::Constant::Pi => Expression::from(
-                            Float::approximate_float(std::f64::consts::PI)
-                                .expect("approximate float"),
+                            std::f64::consts::PI, // Float::approximate_float(std::f64::consts::PI)
+                                                  //     .expect("approximate float"),
                         ),
                     },
                     parser::ConstantValue::NumberReal(num) => {
-                        Expression::from(Float::approximate_float(*num).expect("approximate float"))
+                        Expression::from(*num)
+                        // Expression::from(Float::approximate_float(*num).expect("approximate float"))
                     }
                     parser::ConstantValue::NumberInt(num) => {
-                        Expression::from(Float::from_integer(*num))
+                        Expression::from(*num as Float)
+                        // Expression::from(Float::from_integer(*num))
                     }
                 }))
             }

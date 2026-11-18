@@ -14,6 +14,7 @@ pub use builder::ScxmlModel;
 use log::info;
 pub use scan_core;
 use scan_core::Scan;
+use scan_ctl::CtlOracle;
 use scan_pmtl::PmtlOracle;
 pub use tracer::TracePrinter;
 
@@ -21,7 +22,8 @@ pub fn load(
     path: &Path,
     properties: &[String],
     all_properties: bool,
-) -> anyhow::Result<(Scan<PmtlOracle>, ScxmlModel)> {
+    // ) -> anyhow::Result<(Scan<PmtlOracle>, ScxmlModel)> {
+) -> anyhow::Result<(Scan<CtlOracle>, ScxmlModel)> {
     let time = std::time::Instant::now();
     info!(target: "parser", "parse SCXML model");
     let parser = parser::Parser::parse(path)?;
