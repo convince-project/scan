@@ -82,16 +82,16 @@ impl ValPathCtl {
         }
     }
 
-    pub fn update_state(&mut self, state: &[bool], time: Time, last_branch: bool) {
+    pub fn update_state(&mut self, state: &[bool], time: Time) {
         match self {
             ValPathCtl::Historically(sub, range, valuation) => {
-                sub.update_state(state, time, last_branch);
+                sub.update_state(state, time);
                 if !sub.output() {
                     *valuation += range.shift(time);
                 }
             }
             ValPathCtl::Once(sub, range, valuation) => {
-                sub.update_state(state, time, last_branch);
+                sub.update_state(state, time);
                 if sub.output() {
                     *valuation += range.shift(time);
                 }
@@ -99,9 +99,9 @@ impl ValPathCtl {
             ValPathCtl::Since(subformulae, range, valuation) => {
                 let (lhs, rhs) = subformulae.as_mut();
                 // Make sure all subformulae are updated
-                lhs.update_state(state, time, last_branch);
+                lhs.update_state(state, time);
                 let out_lhs = lhs.output();
-                rhs.update_state(state, time, last_branch);
+                rhs.update_state(state, time);
                 let out_rhs = rhs.output();
                 if out_lhs {
                     if out_rhs {
@@ -116,16 +116,16 @@ impl ValPathCtl {
         }
     }
 
-    pub fn update_time(&mut self, time: Time, last_branch: bool) {
+    pub fn update_time(&mut self, time: Time) {
         match self {
             ValPathCtl::Historically(sub, range, valuation) => {
-                sub.update_time(time, last_branch);
+                sub.update_time(time);
                 if !sub.output() {
                     *valuation += range.shift(time);
                 }
             }
             ValPathCtl::Once(sub, range, valuation) => {
-                sub.update_time(time, last_branch);
+                sub.update_time(time);
                 if sub.output() {
                     *valuation += range.shift(time);
                 }
@@ -133,9 +133,9 @@ impl ValPathCtl {
             ValPathCtl::Since(subformulae, range, valuation) => {
                 let (lhs, rhs) = subformulae.as_mut();
                 // Make sure all subformulae are updated
-                lhs.update_time(time, last_branch);
+                lhs.update_time(time);
                 let out_lhs = lhs.output();
-                rhs.update_time(time, last_branch);
+                rhs.update_time(time);
                 let out_rhs = rhs.output();
                 if out_lhs {
                     if out_rhs {
@@ -175,20 +175,20 @@ impl ValPathCtl {
     }
 
     // Represents the knowledge that the given formula is always true, or always false, from the current moment.
-    pub fn valuation(&self, time: Time, last_branch: bool) -> Option<bool> {
+    pub fn valuation(&self, time: Time) -> Option<bool> {
         match self {
             // Valuation of Historically represents the set of time moments in which we know the formula to be false.
             // If the argument of the operator is know to be always true, then Historically is always true.
             // If the argument of the operator is know to be always false, then Historically is always false provided that the lower time bound is 0.
             ValPathCtl::Historically(subformula, range, valuation) => subformula
-                .valuation(time, last_branch)
+                .valuation(time)
                 .and_then(|v| (range.contains(&0) || v).then_some(v))
                 .or_else(|| valuation.contains_unbounded_interval(time).then_some(false)),
             // Valuation of Previously represents the set of time moments in which we know the formula to be false.
             // If the argument of the operator is know to be always true, then Previously is always true provided that the lower time bound is 0.
             // If the argument of the operator is know to be always false, then Previously is always false.
             ValPathCtl::Once(subformula, range, valuation) => subformula
-                .valuation(time, last_branch)
+                .valuation(time)
                 .and_then(|v| (range.contains(&0) || !v).then_some(v))
                 .or_else(|| valuation.contains_unbounded_interval(time).then_some(true)),
             // Valuation of Since represents the set of time moments in which we know the formula to be true if its lhs argument is true from then on.
@@ -196,12 +196,12 @@ impl ValPathCtl {
             // If the Since valuation is always true and the lhs argument of the operator is know to be always true, then Since is always true.
             // If the Since valuation is always true and the lhs argument of the operator is know to be always false, then Since is always false provided that the lower time bound is 0.
             ValPathCtl::Since(subformulae, range, valuation) => {
-                if let Some(false) = subformulae.1.valuation(time, last_branch) {
+                if let Some(false) = subformulae.1.valuation(time) {
                     Some(false)
                 } else if valuation.contains_unbounded_interval(time) {
                     subformulae
                         .0
-                        .valuation(time, last_branch)
+                        .valuation(time)
                         .and_then(|v| (range.contains(&0) || v).then_some(v))
                 } else {
                     None
@@ -272,34 +272,33 @@ impl ValCtl {
         }
     }
 
-    pub fn update_state(&mut self, state: &[bool], time: Time, last_branch: bool) {
+    pub fn update_state(&mut self, state: &[bool], time: Time) {
         match self {
             ValCtl::Atom(atom, b) => {
                 *b = state[*atom];
             }
             ValCtl::And(subs) | ValCtl::Or(subs) => {
                 // Make sure all subformulae are updated
-                subs.iter_mut()
-                    .for_each(|f| f.update_state(state, time, last_branch));
+                subs.iter_mut().for_each(|f| f.update_state(state, time));
             }
             ValCtl::Not(subformula) => {
-                subformula.update_state(state, time, last_branch);
+                subformula.update_state(state, time);
             }
             ValCtl::Implies(subformulae) => {
                 let (lhs, rhs) = subformulae.as_mut();
                 // Make sure all subformulae are updated
-                lhs.update_state(state, time, last_branch);
-                rhs.update_state(state, time, last_branch);
+                lhs.update_state(state, time);
+                rhs.update_state(state, time);
             }
             ValCtl::Exists(val_path_ctl, val) => {
-                val_path_ctl.update_state(state, time, last_branch);
-                if let Some(n_val) = val_path_ctl.valuation(time, last_branch) {
+                val_path_ctl.update_state(state, time);
+                if let Some(n_val) = val_path_ctl.valuation(time) {
                     *val |= n_val
                 }
             }
             ValCtl::All(val_path_ctl, val) => {
-                val_path_ctl.update_state(state, time, last_branch);
-                if let Some(n_val) = val_path_ctl.valuation(time, last_branch) {
+                val_path_ctl.update_state(state, time);
+                if let Some(n_val) = val_path_ctl.valuation(time) {
                     *val &= n_val
                 }
             }
@@ -309,31 +308,30 @@ impl ValCtl {
         }
     }
 
-    pub fn update_time(&mut self, time: Time, last_branch: bool) {
+    pub fn update_time(&mut self, time: Time) {
         match self {
             ValCtl::And(subs) | ValCtl::Or(subs) => {
                 // Make sure all subformulae are updated
-                subs.iter_mut()
-                    .for_each(|f| f.update_time(time, last_branch));
+                subs.iter_mut().for_each(|f| f.update_time(time));
             }
             ValCtl::Not(subformula) => {
-                subformula.update_time(time, last_branch);
+                subformula.update_time(time);
             }
             ValCtl::Implies(subformulae) => {
                 let (lhs, rhs) = subformulae.as_mut();
                 // Make sure all subformulae are updated
-                lhs.update_time(time, last_branch);
-                rhs.update_time(time, last_branch);
+                lhs.update_time(time);
+                rhs.update_time(time);
             }
             ValCtl::Exists(val_path_ctl, val) => {
-                val_path_ctl.update_time(time, last_branch);
-                if let Some(n_val) = val_path_ctl.valuation(time, last_branch) {
+                val_path_ctl.update_time(time);
+                if let Some(n_val) = val_path_ctl.valuation(time) {
                     *val |= n_val
                 }
             }
             ValCtl::All(val_path_ctl, val) => {
-                val_path_ctl.update_time(time, last_branch);
-                if let Some(n_val) = val_path_ctl.valuation(time, last_branch) {
+                val_path_ctl.update_time(time);
+                if let Some(n_val) = val_path_ctl.valuation(time) {
                     *val &= n_val
                 }
             }
@@ -344,21 +342,21 @@ impl ValCtl {
     }
 
     // Represents the knowledge that the given formula is always true, or always false, from the current moment.
-    pub fn valuation(&self, time: Time, last_branch: bool) -> Option<bool> {
+    pub fn valuation(&self, time: Time) -> Option<bool> {
         match self {
             ValCtl::True => Some(true),
             ValCtl::False => Some(false),
             ValCtl::Atom(_, _) => None,
             ValCtl::And(items) => items
                 .iter()
-                .try_fold(true, |b, f| f.valuation(time, last_branch).map(|v| b && v)),
+                .try_fold(true, |b, f| f.valuation(time).map(|v| b && v)),
             ValCtl::Or(items) => items
                 .iter()
-                .try_fold(false, |b, f| f.valuation(time, last_branch).map(|v| b || v)),
-            ValCtl::Not(f) => f.valuation(time, last_branch).map(|b| !b),
+                .try_fold(false, |b, f| f.valuation(time).map(|v| b || v)),
+            ValCtl::Not(f) => f.valuation(time).map(|b| !b),
             ValCtl::Implies(subformulae) => {
-                let lhs_val = subformulae.0.valuation(time, last_branch);
-                let rhs_val = subformulae.1.valuation(time, last_branch);
+                let lhs_val = subformulae.0.valuation(time);
+                let rhs_val = subformulae.1.valuation(time);
                 if rhs_val.is_some_and(|b| b) || lhs_val.is_some_and(|b| !b) {
                     Some(true)
                 } else if rhs_val.is_some_and(|b| !b) && lhs_val.is_some_and(|b| b) {
@@ -367,12 +365,15 @@ impl ValCtl {
                     None
                 }
             }
-            ValCtl::Exists(val_path_ctl, val) | ValCtl::All(val_path_ctl, val)
-                if last_branch && val_path_ctl.valuation(time, last_branch).is_some() =>
+            ValCtl::Exists(val_path_ctl, val)
+                if let Some(path_val) = val_path_ctl.valuation(time) =>
             {
-                Some(*val)
+                Some(*val | path_val)
             }
             ValCtl::Exists(_val_path_ctl, val) => val.then_some(true),
+            ValCtl::All(val_path_ctl, val) if let Some(path_val) = val_path_ctl.valuation(time) => {
+                Some(*val & path_val)
+            }
             ValCtl::All(_val_path_ctl, val) => (!val).then_some(false),
         }
     }
@@ -450,18 +451,18 @@ impl ValCtl {
 }
 
 #[derive(Debug, Clone)]
-struct NodeData {
-    assume: ValCtl,
-    guarantee: ValCtl,
+struct BranchData {
+    assumes: Box<[ValCtl]>,
+    guarantees: Box<[ValCtl]>,
     time: Time,
     children: usize,
 }
 
-impl NodeData {
-    fn new(assume: ValCtl, guarantee: ValCtl) -> Self {
+impl BranchData {
+    fn new(assumes: Box<[ValCtl]>, guarantees: Box<[ValCtl]>) -> Self {
         Self {
-            assume,
-            guarantee,
+            assumes,
+            guarantees,
             time: 0,
             // number of yet-to-explore children
             children: 0,
@@ -472,14 +473,17 @@ impl NodeData {
 /// An oracle for PMTL properties over timed, dense traces.
 #[derive(Debug, Clone)]
 pub struct CtlOracle {
-    nodes: Vec<NodeData>,
+    nodes: Vec<BranchData>,
 }
 
 impl CtlOracle {
     /// Creates an oracle from assumes and guarantees PMTL formulae.
-    pub fn new(assume: &Ctl<usize>, guarantee: &Ctl<usize>) -> Self {
+    pub fn new(assumes: &[Ctl<usize>], guarantees: &[Ctl<usize>]) -> Self {
         Self {
-            nodes: vec![NodeData::new(assume.into(), guarantee.into())],
+            nodes: vec![BranchData::new(
+                assumes.iter().map(|f| f.into()).collect(),
+                guarantees.iter().map(|f| f.into()).collect(),
+            )],
         }
     }
 }
@@ -501,12 +505,18 @@ impl OracleTree for CtlOracle {
         let current_branch = self.nodes.last_mut().unwrap();
         assert!(current_branch.children > 0);
         current_branch.children -= 1;
-        current_branch
-            .assume
-            .close_branch(closed_branch.assume, closed_branch.time);
-        current_branch
-            .guarantee
-            .close_branch(closed_branch.guarantee, closed_branch.time);
+        for (current_formula, closed_formula) in
+            current_branch.assumes.iter_mut().zip(closed_branch.assumes)
+        {
+            current_formula.close_branch(closed_formula, closed_branch.time);
+        }
+        for (current_formula, closed_formula) in current_branch
+            .guarantees
+            .iter_mut()
+            .zip(closed_branch.guarantees)
+        {
+            current_formula.close_branch(closed_formula, closed_branch.time);
+        }
         if current_branch.children > 0 {
             let mut new_node = current_branch.clone();
             new_node.children = 0;
@@ -516,8 +526,12 @@ impl OracleTree for CtlOracle {
 
     fn branch_end(&mut self) {
         let current_branch = self.nodes.last_mut().unwrap();
-        current_branch.assume.branch_end(current_branch.time);
-        current_branch.guarantee.branch_end(current_branch.time);
+        for assume in current_branch.assumes.iter_mut() {
+            assume.branch_end(current_branch.time);
+        }
+        for guarantee in current_branch.guarantees.iter_mut() {
+            guarantee.branch_end(current_branch.time);
+        }
     }
 }
 
@@ -525,60 +539,57 @@ impl Oracle for CtlOracle {
     #[inline]
     fn output_assumes(&self) -> impl Iterator<Item = Option<bool>> {
         let current_branch = self.nodes.last().unwrap();
-        let last_branch = current_branch.children == 0;
-        [current_branch
-            .assume
-            .valuation(current_branch.time, last_branch)]
-        .into_iter()
+        current_branch
+            .assumes
+            .iter()
+            .map(move |f| f.valuation(current_branch.time))
     }
 
     #[inline]
     fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>> {
         let current_branch = self.nodes.last().unwrap();
-        let last_branch = current_branch.children == 0;
-        [current_branch
-            .guarantee
-            .valuation(current_branch.time, last_branch)]
-        .into_iter()
+        current_branch
+            .guarantees
+            .iter()
+            .map(move |f| f.valuation(current_branch.time))
     }
 
     #[inline]
     fn final_output_assumes(&self) -> impl Iterator<Item = bool> {
         assert_eq!(self.nodes.len(), 1);
         let current_branch = self.nodes.last().unwrap();
-        [current_branch.assume.output()].into_iter()
+        current_branch.assumes.iter().map(move |f| f.output())
     }
 
     #[inline]
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool> {
         assert_eq!(self.nodes.len(), 1);
         let current_branch = self.nodes.last().unwrap();
-        [current_branch.guarantee.output()].into_iter()
+        current_branch.guarantees.iter().map(move |f| f.output())
     }
 
     // From Ulus 2024: Online monitoring of metric temporal logic using sequential networks. Link: <http://arxiv.org/abs/1901.00175v2>
     fn update_state(&mut self, state: &[bool]) {
         let current_branch = self.nodes.last_mut().unwrap();
-        let last_branch = current_branch.children == 0;
-        current_branch
-            .assume
-            .update_state(state, current_branch.time, last_branch);
-        current_branch
-            .guarantee
-            .update_state(state, current_branch.time, last_branch);
+
+        for f in current_branch.assumes.iter_mut() {
+            f.update_state(state, current_branch.time)
+        }
+        for f in current_branch.guarantees.iter_mut() {
+            f.update_state(state, current_branch.time)
+        }
     }
 
     // From Ulus 2024: Online monitoring of metric temporal logic using sequential networks. Link: <http://arxiv.org/abs/1901.00175v2>
     fn update_time(&mut self, time: Time) {
         let current_branch = self.nodes.last_mut().unwrap();
-        let last_branch = current_branch.children == 0;
         current_branch.time = time;
-        current_branch
-            .assume
-            .update_time(current_branch.time, last_branch);
-        current_branch
-            .guarantee
-            .update_time(current_branch.time, last_branch);
+        for f in current_branch.assumes.iter_mut() {
+            f.update_time(current_branch.time)
+        }
+        for f in current_branch.guarantees.iter_mut() {
+            f.update_time(current_branch.time)
+        }
     }
 }
 

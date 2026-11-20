@@ -1437,9 +1437,7 @@ impl ModelBuilder {
         let (guarantee_names, guarantees): (Vec<_>, Vec<_>) = self.guarantees.into_iter().unzip();
         let (assume_names, assumes): (Vec<_>, Vec<_>) = self.assumes.into_iter().unzip();
         // let oracle = PmtlOracle::new(assumes.as_slice(), guarantees.as_slice());
-        assert!(assumes.is_empty());
-        assert_eq!(guarantees.len(), 1);
-        let oracle = CtlOracle::new(&Ctl::True, &guarantees[0]);
+        let oracle = CtlOracle::new(assumes.as_slice(), guarantees.as_slice());
         let mut events = Vec::from_iter(self.event_indexes);
         events.sort_unstable_by_key(|(_, idx)| *idx);
         let events = events
