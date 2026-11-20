@@ -557,12 +557,13 @@ impl TransitionSystem {
         // Diagnostics/stats
         let start_time = Instant::now();
 
-        type BranchData<'a> = (
+        type BranchData<'a, O> = (
             TransitionSystemRun<'a>,
             Box<[(FixedBitSet, bool)]>,
             Vec<(Action, Vec<Location>)>,
+            O,
         );
-        let mut executions_stack: Vec<BranchData> = Vec::new();
+        let mut executions_stack: Vec<BranchData<O>> = Vec::new();
         let pgs = self.pg_list.len();
         let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
         let mut bump = Bump::new();
@@ -573,7 +574,8 @@ impl TransitionSystem {
         run.fastforward(&bump);
         // NOTE: root of the oracle tree should be initial state
         oracle.update_state(&state);
-        oracle.new_node(1);
+        // add initial system state as root node so that CTL state semantics correct even without top-level quantifier
+        executions_stack.push((run.clone(), amples.clone(), Vec::new(), oracle.clone()));
 
         // FILO stack: depth-first search
         while running.load(Ordering::Relaxed) {
@@ -608,8 +610,12 @@ impl TransitionSystem {
                     // There must be active transitions because we checked earlier
                     let (action, posts) = transitions.pop().expect("valid transition");
                     if !transitions.is_empty() {
-                        oracle.new_node(transitions.len());
-                        executions_stack.push((run.clone(), amples.clone(), transitions));
+                        executions_stack.push((
+                            run.clone(),
+                            amples.clone(),
+                            transitions,
+                            oracle.clone(),
+                        ));
                     }
                     bump.reset();
                     let _event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
@@ -623,7 +629,6 @@ impl TransitionSystem {
                         .for_each(|(set, invalidate)| *invalidate |= set.contains(action_pg_idx));
                     continue;
                 } else if run.is_waiting() {
-                    trace!("time tick");
                     run.time_tick();
                     oracle.update_time(run.time());
                     amples
@@ -631,24 +636,28 @@ impl TransitionSystem {
                         .for_each(|(_set, invalidate)| *invalidate = true);
                     continue;
                 } else {
-                    oracle.branch_end();
+                    oracle.end_branch();
                 }
             }
 
-            oracle.close_branch();
-            if let Some((branch_run, branch_amples, actions)) = executions_stack.last_mut() {
+            if let Some((branch_run, branch_amples, actions, branch_oracle)) =
+                executions_stack.last_mut()
+                // below pattern is always matched except at root node
+                && let Some((action, posts)) = actions.pop()
+            {
                 // continue loop with next run and oracle
-                let (action, posts) = actions.pop().unwrap();
+                branch_oracle.fold_branch(oracle);
                 if actions.is_empty() {
-                    trace!("pop branch");
-                    let (branch_run, branch_amples, actions) = executions_stack.pop().unwrap();
+                    let (branch_run, branch_amples, actions, branch_oracle) =
+                        executions_stack.pop().unwrap();
                     assert!(actions.is_empty());
                     run = branch_run;
                     amples = branch_amples;
+                    oracle = branch_oracle;
                 } else {
-                    trace!("switch branch");
                     run = branch_run.clone();
                     amples.clone_from(branch_amples);
+                    oracle = branch_oracle.clone();
                 }
                 let _event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
                 // Update DAG

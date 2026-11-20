@@ -450,87 +450,41 @@ impl ValCtl {
     }
 }
 
+/// An oracle for PCTL properties over timed, dense traces.
 #[derive(Debug, Clone)]
-struct BranchData {
+pub struct CtlOracle {
     assumes: Box<[ValCtl]>,
     guarantees: Box<[ValCtl]>,
     time: Time,
-    children: usize,
-}
-
-impl BranchData {
-    fn new(assumes: Box<[ValCtl]>, guarantees: Box<[ValCtl]>) -> Self {
-        Self {
-            assumes,
-            guarantees,
-            time: 0,
-            // number of yet-to-explore children
-            children: 0,
-        }
-    }
-}
-
-/// An oracle for PMTL properties over timed, dense traces.
-#[derive(Debug, Clone)]
-pub struct CtlOracle {
-    nodes: Vec<BranchData>,
 }
 
 impl CtlOracle {
-    /// Creates an oracle from assumes and guarantees PMTL formulae.
+    /// Creates an oracle from assumes and guarantees CMTL formulae.
     pub fn new(assumes: &[Ctl<usize>], guarantees: &[Ctl<usize>]) -> Self {
         Self {
-            nodes: vec![BranchData::new(
-                assumes.iter().map(|f| f.into()).collect(),
-                guarantees.iter().map(|f| f.into()).collect(),
-            )],
+            assumes: assumes.iter().map(|f| f.into()).collect(),
+            guarantees: guarantees.iter().map(|f| f.into()).collect(),
+            time: 0,
         }
     }
 }
 
 impl OracleTree for CtlOracle {
-    fn new_node(&mut self, branches: usize) {
-        // duplicate last set of formulae
-        let current_node = self.nodes.last_mut().unwrap();
-        current_node.children = branches;
-        let mut new_node = current_node.clone();
-        new_node.children = 0;
-        self.nodes.push(new_node);
-    }
-
-    fn close_branch(&mut self) {
-        assert!(self.nodes.len() > 1);
-        let closed_branch = self.nodes.pop().unwrap();
-        assert_eq!(closed_branch.children, 0);
-        let current_branch = self.nodes.last_mut().unwrap();
-        assert!(current_branch.children > 0);
-        current_branch.children -= 1;
-        for (current_formula, closed_formula) in
-            current_branch.assumes.iter_mut().zip(closed_branch.assumes)
-        {
-            current_formula.close_branch(closed_formula, closed_branch.time);
+    fn fold_branch(&mut self, closed: Self) {
+        for (current_formula, closed_formula) in self.assumes.iter_mut().zip(closed.assumes) {
+            current_formula.close_branch(closed_formula, self.time);
         }
-        for (current_formula, closed_formula) in current_branch
-            .guarantees
-            .iter_mut()
-            .zip(closed_branch.guarantees)
-        {
-            current_formula.close_branch(closed_formula, closed_branch.time);
-        }
-        if current_branch.children > 0 {
-            let mut new_node = current_branch.clone();
-            new_node.children = 0;
-            self.nodes.push(new_node);
+        for (current_formula, closed_formula) in self.guarantees.iter_mut().zip(closed.guarantees) {
+            current_formula.close_branch(closed_formula, self.time);
         }
     }
 
-    fn branch_end(&mut self) {
-        let current_branch = self.nodes.last_mut().unwrap();
-        for assume in current_branch.assumes.iter_mut() {
-            assume.branch_end(current_branch.time);
+    fn end_branch(&mut self) {
+        for assume in self.assumes.iter_mut() {
+            assume.branch_end(self.time);
         }
-        for guarantee in current_branch.guarantees.iter_mut() {
-            guarantee.branch_end(current_branch.time);
+        for guarantee in self.guarantees.iter_mut() {
+            guarantee.branch_end(self.time);
         }
     }
 }
@@ -538,57 +492,42 @@ impl OracleTree for CtlOracle {
 impl Oracle for CtlOracle {
     #[inline]
     fn output_assumes(&self) -> impl Iterator<Item = Option<bool>> {
-        let current_branch = self.nodes.last().unwrap();
-        current_branch
-            .assumes
-            .iter()
-            .map(move |f| f.valuation(current_branch.time))
+        self.assumes.iter().map(move |f| f.valuation(self.time))
     }
 
     #[inline]
     fn output_guarantees(&self) -> impl Iterator<Item = Option<bool>> {
-        let current_branch = self.nodes.last().unwrap();
-        current_branch
-            .guarantees
-            .iter()
-            .map(move |f| f.valuation(current_branch.time))
+        self.guarantees.iter().map(move |f| f.valuation(self.time))
     }
 
     #[inline]
     fn final_output_assumes(&self) -> impl Iterator<Item = bool> {
-        assert_eq!(self.nodes.len(), 1);
-        let current_branch = self.nodes.last().unwrap();
-        current_branch.assumes.iter().map(move |f| f.output())
+        self.assumes.iter().map(move |f| f.output())
     }
 
     #[inline]
     fn final_output_guarantees(&self) -> impl Iterator<Item = bool> {
-        assert_eq!(self.nodes.len(), 1);
-        let current_branch = self.nodes.last().unwrap();
-        current_branch.guarantees.iter().map(move |f| f.output())
+        self.guarantees.iter().map(move |f| f.output())
     }
 
     // From Ulus 2024: Online monitoring of metric temporal logic using sequential networks. Link: <http://arxiv.org/abs/1901.00175v2>
     fn update_state(&mut self, state: &[bool]) {
-        let current_branch = self.nodes.last_mut().unwrap();
-
-        for f in current_branch.assumes.iter_mut() {
-            f.update_state(state, current_branch.time)
+        for f in self.assumes.iter_mut() {
+            f.update_state(state, self.time)
         }
-        for f in current_branch.guarantees.iter_mut() {
-            f.update_state(state, current_branch.time)
+        for f in self.guarantees.iter_mut() {
+            f.update_state(state, self.time)
         }
     }
 
     // From Ulus 2024: Online monitoring of metric temporal logic using sequential networks. Link: <http://arxiv.org/abs/1901.00175v2>
     fn update_time(&mut self, time: Time) {
-        let current_branch = self.nodes.last_mut().unwrap();
-        current_branch.time = time;
-        for f in current_branch.assumes.iter_mut() {
-            f.update_time(current_branch.time)
+        self.time = time;
+        for f in self.assumes.iter_mut() {
+            f.update_time(time)
         }
-        for f in current_branch.guarantees.iter_mut() {
-            f.update_time(current_branch.time)
+        for f in self.guarantees.iter_mut() {
+            f.update_time(time)
         }
     }
 }
