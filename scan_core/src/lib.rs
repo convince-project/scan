@@ -128,7 +128,6 @@ impl<O: Oracle> Scan<O> {
     }
 
     fn reset(&self) {
-        self.running.store(true, Ordering::Relaxed);
         self.successes.store(0, Ordering::Relaxed);
         self.failures.store(0, Ordering::Relaxed);
         self.violations
@@ -159,53 +158,55 @@ impl<O: Oracle> Scan<O> {
     pub fn violations(&self) -> impl Iterator<Item = u32> {
         self.violations.iter().map(|v| v.load(Ordering::Relaxed))
     }
+
+    fn process_outcome(&self, outcome: &[bool]) {
+        assert_eq!(outcome.len(), self.violations().count());
+        if self.running.load(Ordering::Relaxed) {
+            if outcome.iter().all(|b| *b) {
+                let local_successes = self.successes.fetch_add(1, Ordering::Relaxed) + 1;
+                // If all guarantees are satisfied, the execution is successful
+                trace!("runs: {local_successes} successes");
+            } else {
+                let local_failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
+                outcome
+                    .iter()
+                    .zip(self.violations.iter())
+                    .for_each(|(success, violations)| {
+                        // branchless execution
+                        let _ = violations.fetch_add(!success as u32, Ordering::Relaxed);
+                    });
+                // If guarantee is violated, we have found a counter-example!
+                trace!("runs: {local_failures} failures");
+            }
+        }
+    }
+
+    fn adaptive_bound(&self, confidence: f64, precision: f64) {
+        let local_successes = self.successes.load(Ordering::Relaxed);
+        let local_failures = self.failures.load(Ordering::Relaxed);
+        let runs = local_successes + local_failures;
+        // Division by 0 leads to Inf/NaN, which is not less than any other float number
+        // so this actually works as expected even for runs = 0.
+        let avg = local_successes as f64 / runs as f64;
+        if adaptive_bound(avg, confidence, precision) <= runs as f64 {
+            info!("adaptive bound satisfied");
+            self.running.store(false, Ordering::Relaxed);
+        }
+    }
 }
 
 impl<O> Scan<O>
 where
     O: Oracle + Clone + Sync,
 {
-    fn verification(&self, confidence: f64, precision: f64, scheduler: Scheduler) {
-        assert!(0f64 < confidence && confidence < 1f64);
-        assert!(0f64 < precision && precision < 1f64);
-
+    fn verification(&self, scheduler: Scheduler) {
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
-        let outcome = self
+        if let Some(outcome) = self
             .model
-            .experiment::<O, DummyTracer>(oracle, None, running, scheduler);
-        if let Some(guarantees) = outcome
-            && self.running.load(Ordering::Relaxed)
+            .experiment::<O, DummyTracer>(oracle, None, running, scheduler)
         {
-            assert_eq!(guarantees.len(), self.violations().count());
-            let local_successes;
-            let local_failures;
-            if guarantees.iter().all(|b| *b) {
-                local_successes = self.successes.fetch_add(1, Ordering::Relaxed) + 1;
-                local_failures = self.failures.load(Ordering::Relaxed);
-                // If all guarantees are satisfied, the execution is successful
-                trace!("runs: {local_successes} successes");
-            } else {
-                local_successes = self.successes.load(Ordering::Relaxed);
-                local_failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
-                guarantees
-                    .into_iter()
-                    .zip(self.violations.iter())
-                    .filter(|(success, _)| !success)
-                    .for_each(|(_, violations)| {
-                        let _ = violations.fetch_add(1, Ordering::Relaxed);
-                    });
-                // If guarantee is violated, we have found a counter-example!
-                trace!("runs: {local_failures} failures");
-            }
-            let runs = local_successes + local_failures;
-            // Division by 0 leads to Inf/NaN, which is not less than any other float number
-            // so this actually works as expected even for runs = 0.
-            let avg = local_successes as f64 / runs as f64;
-            if adaptive_bound(avg, confidence, precision) <= runs as f64 {
-                info!("adaptive bound satisfied");
-                self.running.store(false, Ordering::Relaxed);
-            }
+            self.process_outcome(&outcome);
         }
     }
 
@@ -224,11 +225,10 @@ where
             return Err(ScanError::OutOfBoundsPrecision(precision));
         }
 
-        self.reset();
-
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("verification starting");
         let start_time = Instant::now();
+        self.running.store(true, Ordering::Relaxed);
 
         let runs = if single_thread {
             self.seq_adaptive(confidence, precision, scheduler)
@@ -251,15 +251,21 @@ where
     fn par_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
         (0..usize::MAX)
             .into_par_iter()
-            .map(|_| self.verification(confidence, precision, scheduler))
-            .take_any_while(|_| self.running.load(Ordering::Relaxed))
+            .take_any_while(|_| {
+                self.verification(scheduler);
+                self.adaptive_bound(confidence, precision);
+                self.is_running()
+            })
             .count() as u32
     }
 
     fn seq_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
         (0..)
-            .map(|_| self.verification(confidence, precision, scheduler))
-            .take_while(|_| self.running.load(Ordering::Relaxed))
+            .take_while(|_| {
+                self.verification(scheduler);
+                self.adaptive_bound(confidence, precision);
+                self.is_running()
+            })
             .count() as u32
     }
 
@@ -343,45 +349,11 @@ impl<O> Scan<O>
 where
     O: OracleTree + Clone + Sync,
 {
-    fn verification_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) {
-        assert!(0f64 < confidence && confidence < 1f64);
-        assert!(0f64 < precision && precision < 1f64);
-
+    fn verification_tree(&self, scheduler: Scheduler) {
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
-        let outcome = self.model.experiment_tree::<O>(oracle, running, scheduler);
-        if let Some(guarantees) = outcome
-            && self.running.load(Ordering::Relaxed)
-        {
-            assert_eq!(guarantees.len(), self.violations().count());
-            let local_successes;
-            let local_failures;
-            if guarantees.iter().all(|b| *b) {
-                local_successes = self.successes.fetch_add(1, Ordering::Relaxed) + 1;
-                local_failures = self.failures.load(Ordering::Relaxed);
-                // If all guarantees are satisfied, the execution is successful
-                trace!("runs: {local_successes} successes");
-            } else {
-                local_successes = self.successes.load(Ordering::Relaxed);
-                local_failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
-                guarantees
-                    .into_iter()
-                    .zip(self.violations.iter())
-                    .filter(|(success, _)| !success)
-                    .for_each(|(_, violations)| {
-                        let _ = violations.fetch_add(1, Ordering::Relaxed);
-                    });
-                // If guarantee is violated, we have found a counter-example!
-                trace!("runs: {local_failures} failures");
-            }
-            let runs = local_successes + local_failures;
-            // Division by 0 leads to Inf/NaN, which is not less than any other float number
-            // so this actually works as expected even for runs = 0.
-            let avg = local_successes as f64 / runs as f64;
-            if adaptive_bound(avg, confidence, precision) <= runs as f64 {
-                info!("adaptive bound satisfied");
-                self.running.store(false, Ordering::Relaxed);
-            }
+        if let Some(outcome) = self.model.experiment_tree::<O>(oracle, running, scheduler) {
+            self.process_outcome(&outcome);
         }
     }
 
@@ -400,11 +372,10 @@ where
             return Err(ScanError::OutOfBoundsPrecision(precision));
         }
 
-        self.reset();
-
         // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
         info!("verification starting");
         let start_time = Instant::now();
+        self.running.store(true, Ordering::Relaxed);
 
         let runs = if single_thread {
             self.seq_adaptive_tree(confidence, precision, scheduler)
@@ -427,15 +398,21 @@ where
     fn par_adaptive_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
         (0..usize::MAX)
             .into_par_iter()
-            .map(|_| self.verification_tree(confidence, precision, scheduler))
-            .take_any_while(|_| self.running.load(Ordering::Relaxed))
+            .take_any_while(|_| {
+                self.verification_tree(scheduler);
+                self.adaptive_bound(confidence, precision);
+                self.is_running()
+            })
             .count() as u32
     }
 
     fn seq_adaptive_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
         (0..)
-            .map(|_| self.verification_tree(confidence, precision, scheduler))
-            .take_while(|_| self.running.load(Ordering::Relaxed))
+            .take_while(|_| {
+                self.verification_tree(scheduler);
+                self.adaptive_bound(confidence, precision);
+                self.is_running()
+            })
             .count() as u32
     }
 }

@@ -579,10 +579,7 @@ impl TransitionSystem {
 
         // FILO stack: depth-first search
         while running.load(Ordering::Relaxed) {
-            let determined = oracle.output_guarantees().all(|o| o.is_some())
-                || oracle.output_guarantees().any(|o| o.is_some_and(|b| !b));
-
-            if !determined {
+            if oracle.output_guarantees().any(|o| o.is_none()) {
                 bump.reset();
                 run.fastforward(&bump);
                 run.ample(&mut amples);
@@ -609,6 +606,8 @@ impl TransitionSystem {
                         .collect::<Vec<_>>();
                     // There must be active transitions because we checked earlier
                     let (action, posts) = transitions.pop().expect("valid transition");
+                    // NOTE: for optimization, avoid pushing and popping first execution branch into/out of stack
+                    // and do not add new node to stack if that is the only branch
                     if !transitions.is_empty() {
                         executions_stack.push((
                             run.clone(),
@@ -627,6 +626,7 @@ impl TransitionSystem {
                     amples
                         .iter_mut()
                         .for_each(|(set, invalidate)| *invalidate |= set.contains(action_pg_idx));
+                    // Continue execution of same TS and oracle
                     continue;
                 } else if run.is_waiting() {
                     run.time_tick();
@@ -634,18 +634,19 @@ impl TransitionSystem {
                     amples
                         .iter_mut()
                         .for_each(|(_set, invalidate)| *invalidate = true);
+                    // Continue execution of same TS and oracle
                     continue;
                 } else {
                     oracle.end_branch();
                 }
             }
 
+            // Close current tree branch exploration and pop next one (if any)
             if let Some((branch_run, branch_amples, actions, branch_oracle)) =
                 executions_stack.last_mut()
                 // below pattern is always matched except at root node
                 && let Some((action, posts)) = actions.pop()
             {
-                // continue loop with next run and oracle
                 branch_oracle.fold_branch(oracle);
                 if actions.is_empty() {
                     let (branch_run, branch_amples, actions, branch_oracle) =
