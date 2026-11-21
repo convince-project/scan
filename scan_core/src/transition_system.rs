@@ -342,7 +342,6 @@ impl TransitionSystem {
                     .iter()
                     // only consider viable sets (i.e., neither invalidated nor empty)
                     .filter(|(set, _invalid)| !set.is_clear())
-                    // .filter(|(set, invalid)| !(*invalid || set.is_clear()))
                     .min_by_key(|(set, _)| set.len())
                 {
                     let mut transitions = ample

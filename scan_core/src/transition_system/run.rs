@@ -166,11 +166,6 @@ impl<'def> TransitionSystemRun<'def> {
             .map(|idx| &self.vals[self.vals_idx[idx]..self.vals_idx[idx + 1]])
     }
 
-    #[inline]
-    pub(super) fn whole_state(&self) -> &[Val] {
-        &self.vals
-    }
-
     pub(super) fn transition<'a, O: Oracle>(
         &mut self,
         oracle: &mut O,
