@@ -4,6 +4,7 @@ mod fsm;
 mod omg_types;
 mod property;
 mod rye;
+mod rye_ctl;
 mod vocabulary;
 
 pub use self::fsm::*;
@@ -183,8 +184,9 @@ impl Parser {
         let mut model_found = false;
         for entry in std::fs::read_dir(path)
             .with_context(|| format!("failed to read directory '{}'", path.display()))?
+            .map(|entry| entry.map(|e| e.path()))
         {
-            let path = entry.context("failed to read directory entry")?.path();
+            let path = entry.context("failed to read directory entry")?;
             if path.is_dir() {
                 model_found |= self.parse_directory_check(&path)?;
             } else {

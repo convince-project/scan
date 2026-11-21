@@ -22,6 +22,14 @@ impl Bar {
     ) {
         const FINE_BAR: &str = "█▉▊▋▌▍▎▏  ";
         const ASCII_BAR: &str = "#--";
+
+        // Give SCAN time to start,
+        // and also avoid drawing TUI if run is very fast
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if !scan.is_running() {
+            return;
+        }
+
         let progress_chars = if let Bar::Plain = self {
             ASCII_BAR
         } else {
@@ -77,8 +85,7 @@ impl Bar {
         // Spinner
         // Trailing spaces because bar does not overwrite after itself
         let spinner_style =
-            ProgressStyle::with_template("{elapsed_precise} {msg}: {pos}/{len} ({eta})   ")
-                .unwrap();
+            ProgressStyle::with_template("{elapsed_precise} {msg}: {pos}/{len}").unwrap();
         let spinner = ProgressBar::new(0)
             .with_style(spinner_style)
             .with_message("verification progress");
@@ -95,51 +102,46 @@ impl Bar {
         progress_bar.tick();
 
         bars.set_move_cursor(true);
-        while scan.running() || (scan.successes() == 0 && scan.failures() == 0) {
+        while scan.is_running() {
             let successes = scan.successes();
             let failures = scan.failures();
             let runs = (successes + failures) as u64;
-            let rate = successes as f64 / runs as f64;
             if runs > progress_bar.position() {
+                let rate = successes as f64 / runs as f64;
                 let bound = adaptive_bound(rate, confidence, precision);
                 // let derived_precision =
                 //     derive_precision(run_status.successes, run_status.failures, confidence);
                 // Status spinner
                 let violations = scan.violations();
-                for (i, (header, property)) in bars_guarantees.iter().enumerate() {
-                    let violations = violations.get(i).copied().unwrap_or(0);
+                for ((header, property), violations) in bars_guarantees
+                    .iter()
+                    .zip(violations.chain([0].into_iter().cycle()))
+                {
                     let pos = runs.saturating_sub(violations as u64);
                     header.set_message(format!("{pos}/{violations}"));
-                    header.tick();
                     property.set_position(pos);
                     property.set_length(runs);
-                    property.tick();
                 }
 
                 // overall property bar
                 if !overall_line.is_hidden() {
                     overall_line.set_message(format!("{successes}/{failures}"));
-                    overall_line.tick();
                 }
                 if !overall_bar.is_hidden() {
                     overall_bar.set_position(successes.into());
                     overall_bar.set_length(runs);
-                    overall_bar.tick();
                 }
 
                 // task progress bar
                 spinner.set_position(runs);
                 spinner.set_length(bound.ceil() as u64);
-                spinner.tick();
                 progress_bar.set_position(runs);
                 progress_bar.set_length(bound.ceil() as u64);
-                progress_bar.tick();
-            } else {
-                // update time/eta
-                spinner.tick();
             }
-            // Sleep a while to limit update/refresh rate.
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            // update time
+            spinner.tick();
+            // Hint that this is a busy loop.
+            std::hint::spin_loop();
         }
 
         // Clean up terminal

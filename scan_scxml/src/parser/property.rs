@@ -5,6 +5,7 @@ use boa_ast::scope::Scope;
 use boa_interner::Interner;
 use log::{error, info, trace};
 use quick_xml::{Reader, XmlVersion, events::Event};
+use scan_ctl::{Ctlp, PathCtl};
 use scan_pmtl::Pmtl;
 use std::{collections::BTreeMap, io::BufRead};
 
@@ -18,6 +19,8 @@ const TAG_STATE_VAR: &str = "state_var";
 const TAG_EVENT_VAR: &str = "event_var";
 const ATTR_ORIGIN: &str = "origin";
 const ATTR_LOGIC: &str = "logic";
+const PMTL: &str = "pmtl";
+const CTLP: &str = "ctlp";
 
 #[derive(Debug, Clone)]
 enum PropertyTag {
@@ -50,11 +53,17 @@ impl From<&PropertyTag> for &'static str {
 }
 
 #[derive(Debug, Clone)]
+pub enum Property {
+    Pmtl(Pmtl<usize>),
+    Ctlp(Ctlp<usize>),
+}
+
+#[derive(Debug, Clone)]
 pub struct Properties {
     pub(crate) ports: BTreeMap<String, ParserPort>,
     pub(crate) predicates: Vec<boa_ast::Expression>,
-    pub(crate) guarantees: Vec<(String, Pmtl<usize>)>,
-    pub(crate) assumes: Vec<(String, Pmtl<usize>)>,
+    pub(crate) guarantees: Vec<(String, Property)>,
+    pub(crate) assumes: Vec<(String, Property)>,
 }
 
 impl Properties {
@@ -222,20 +231,42 @@ impl Properties {
                                         format!("failed to parse '{TAG_PROPERTY}' tag attributes")
                                     })?;
                             let id = attrs[ATTR_ID].to_owned();
-                            let expr = attrs[ATTR_EXPR].as_str();
-                            let formula = super::rye::parse(expr)
-                                .map_err(|err| anyhow!(err))
-                                .with_context(|| {
-                                    format!("failed to parse '{expr}' Rye expression")
-                                })?;
-                            let property =
-                                parse_predicates(formula, &mut self.predicates, interner)
-                                    .context("failed to parse predicates in Rye expression")?;
                             if self.assumes.iter().any(|(i, _)| i == &id)
                                 || self.guarantees.iter().any(|(i, _)| i == &id)
                             {
-                                bail!("property defined multiple times");
+                                bail!("property {id} defined multiple times");
                             }
+                            let expr = attrs[ATTR_EXPR].as_str();
+                            let logic = attrs.get(ATTR_LOGIC).map_or(PMTL, |v| v.as_str());
+                            let property = match logic {
+                                CTLP => {
+                                    let formula = super::rye_ctl::parse(expr)
+                                        .with_context(|| {
+                                            format!("failed to parse '{expr}' Rye expression in property {id}")
+                                        })?;
+                                    let ctl = parse_predicates_ctl(
+                                        formula,
+                                        &mut self.predicates,
+                                        interner,
+                                    )
+                                    .with_context(|| format!("failed to parse predicates in Rye expression in property {id}"))?;
+                                    Property::Ctlp(ctl)
+                                }
+                                PMTL => {
+                                    let formula = super::rye::parse(expr)
+                                        .with_context(|| {
+                                            format!("failed to parse '{expr}' Rye expression in property {id}")
+                                        })?;
+                                    let pmtl = parse_predicates_pmtl(
+                                        formula,
+                                        &mut self.predicates,
+                                        interner,
+                                    )
+                                    .with_context(|| format!("failed to parse predicates in Rye expression in property {id}"))?;
+                                    Property::Pmtl(pmtl)
+                                }
+                                _ => bail!("logic {logic} of property {id} unknown or unsupported"),
+                            };
                             match stack.last() {
                                 Some(PropertyTag::Guarantees) => {
                                     self.guarantees.push((id, property))
@@ -256,30 +287,28 @@ impl Properties {
                     if !text.trim().is_empty() {
                         error!(target: "parser", "text elements not allowed, ignoring");
                     }
-                    continue;
                 }
-                Event::Comment(_comment) => continue,
+                Event::Comment(_comment) => {
+                    // nothing to do
+                }
                 Event::CData(_) => {
-                    return Err(anyhow!("CData not supported"));
+                    bail!("CData not supported");
                 }
                 Event::Decl(decl) => {
                     xml_version = decl.xml_version()?;
                 }
                 Event::PI(_) => {
-                    return Err(anyhow!("Processing Instructions not supported"));
+                    bail!("Processing Instructions not supported");
                 }
                 Event::DocType(_) => {
-                    return Err(anyhow!("DocType not supported"));
+                    bail!("DocType not supported");
                 }
                 Event::Eof => {
                     info!("parsing completed");
-                    if !stack.is_empty() {
-                        return Err(anyhow!(ParserError::UnclosedTags,));
-                    }
                     break;
                 }
                 Event::GeneralRef(_bytes_ref) => {
-                    return Err(anyhow!("General References not supported"));
+                    bail!("General References not supported");
                 }
             }
             // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
@@ -293,7 +322,7 @@ impl Properties {
     }
 }
 
-fn parse_predicates(
+fn parse_predicates_pmtl(
     formula: Pmtl<String>,
     predicates: &mut Vec<boa_ast::Expression>,
     interner: &mut Interner,
@@ -309,35 +338,100 @@ fn parse_predicates(
         }
         Pmtl::And(vec) => vec
             .into_iter()
-            .map(|f| parse_predicates(f, predicates, interner))
-            .collect::<Result<Vec<_>, _>>()
+            .map(|f| parse_predicates_pmtl(f, predicates, interner))
+            .collect::<Result<Box<[_]>, _>>()
             .map(Pmtl::And),
         Pmtl::Or(vec) => vec
             .into_iter()
-            .map(|f| parse_predicates(f, predicates, interner))
-            .collect::<Result<Vec<_>, _>>()
+            .map(|f| parse_predicates_pmtl(f, predicates, interner))
+            .collect::<Result<Box<[_]>, _>>()
             .map(Pmtl::Or),
         Pmtl::Not(pmtl) => {
-            parse_predicates(*pmtl, predicates, interner).map(|f| Pmtl::Not(Box::new(f)))
+            parse_predicates_pmtl(*pmtl, predicates, interner).map(|f| Pmtl::Not(Box::new(f)))
         }
         Pmtl::Implies(args) => {
             let (lhs, rhs) = *args;
             Ok(Pmtl::Implies(Box::new((
-                parse_predicates(lhs, predicates, interner)?,
-                parse_predicates(rhs, predicates, interner)?,
+                parse_predicates_pmtl(lhs, predicates, interner)?,
+                parse_predicates_pmtl(rhs, predicates, interner)?,
             ))))
         }
-        Pmtl::Historically(pmtl, range) => parse_predicates(*pmtl, predicates, interner)
+        Pmtl::Historically(pmtl, range) => parse_predicates_pmtl(*pmtl, predicates, interner)
             .map(|f| Pmtl::Historically(Box::new(f), range)),
-        Pmtl::Once(pmtl, range) => {
-            parse_predicates(*pmtl, predicates, interner).map(|f| Pmtl::Once(Box::new(f), range))
-        }
+        Pmtl::Once(pmtl, range) => parse_predicates_pmtl(*pmtl, predicates, interner)
+            .map(|f| Pmtl::Once(Box::new(f), range)),
         Pmtl::Since(args, range) => {
             let (lhs, rhs) = *args;
             Ok(Pmtl::Since(
                 Box::new((
-                    parse_predicates(lhs, predicates, interner)?,
-                    parse_predicates(rhs, predicates, interner)?,
+                    parse_predicates_pmtl(lhs, predicates, interner)?,
+                    parse_predicates_pmtl(rhs, predicates, interner)?,
+                )),
+                range,
+            ))
+        }
+    }
+}
+
+fn parse_predicates_ctl(
+    formula: Ctlp<String>,
+    predicates: &mut Vec<boa_ast::Expression>,
+    interner: &mut Interner,
+) -> anyhow::Result<Ctlp<usize>> {
+    match formula {
+        Ctlp::True => Ok(Ctlp::True),
+        Ctlp::False => Ok(Ctlp::False),
+        Ctlp::Atom(expr) => {
+            let pred = ecmascript(&expr, &Scope::new_global(), interner)?;
+            let idx = predicates.len();
+            predicates.push(pred);
+            Ok(Ctlp::Atom(idx))
+        }
+        Ctlp::And(vec) => vec
+            .into_iter()
+            .map(|f| parse_predicates_ctl(f, predicates, interner))
+            .collect::<Result<Box<[_]>, _>>()
+            .map(Ctlp::And),
+        Ctlp::Or(vec) => vec
+            .into_iter()
+            .map(|f| parse_predicates_ctl(f, predicates, interner))
+            .collect::<Result<Box<[_]>, _>>()
+            .map(Ctlp::Or),
+        Ctlp::Not(pmtl) => {
+            parse_predicates_ctl(*pmtl, predicates, interner).map(|f| Ctlp::Not(Box::new(f)))
+        }
+        Ctlp::Implies(args) => {
+            let (lhs, rhs) = *args;
+            Ok(Ctlp::Implies(Box::new((
+                parse_predicates_ctl(lhs, predicates, interner)?,
+                parse_predicates_ctl(rhs, predicates, interner)?,
+            ))))
+        }
+        Ctlp::Exists(path_ctl) => {
+            parse_predicates_path_ctl(path_ctl, predicates, interner).map(Ctlp::Exists)
+        }
+        Ctlp::All(path_ctl) => {
+            parse_predicates_path_ctl(path_ctl, predicates, interner).map(Ctlp::All)
+        }
+    }
+}
+
+fn parse_predicates_path_ctl(
+    formula: PathCtl<String>,
+    predicates: &mut Vec<boa_ast::Expression>,
+    interner: &mut Interner,
+) -> anyhow::Result<PathCtl<usize>> {
+    match formula {
+        PathCtl::Historically(pmtl, range) => parse_predicates_ctl(*pmtl, predicates, interner)
+            .map(|f| PathCtl::Historically(Box::new(f), range)),
+        PathCtl::Once(pmtl, range) => parse_predicates_ctl(*pmtl, predicates, interner)
+            .map(|f| PathCtl::Once(Box::new(f), range)),
+        PathCtl::Since(args, range) => {
+            let (lhs, rhs) = *args;
+            Ok(PathCtl::Since(
+                Box::new((
+                    parse_predicates_ctl(lhs, predicates, interner)?,
+                    parse_predicates_ctl(rhs, predicates, interner)?,
                 )),
                 range,
             ))

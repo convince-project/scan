@@ -5,6 +5,9 @@
 
 /// Computes Okamoto bound for given confidence and precision.
 pub fn okamoto_bound(confidence: f64, precision: f64) -> f64 {
+    assert!(0f64 < confidence && confidence < 1f64);
+    assert!(0f64 < precision && precision < 1f64);
+
     (2f64 / (1f64 - confidence)).ln() * 0.5f64 / precision.powi(2)
 }
 
@@ -20,6 +23,8 @@ pub fn adaptive_bound(avg: f64, confidence: f64, precision: f64) -> f64 {
 /// Computes precision for given experimental results and confidence
 /// deriving it from adaptive bound through quadratic equation.
 pub fn derive_precision(s: u32, f: u32, confidence: f64) -> f64 {
+    assert!(0f64 < confidence && confidence < 1f64);
+
     let n = s + f;
     let avg = s as f64 / n as f64;
     let k = 2f64 * (2f64 / (1f64 - confidence)).ln();
