@@ -42,7 +42,7 @@ const TEMP: &str = ".temp";
 const SUCCESSES: &str = "successes";
 const FAILURES: &str = "failures";
 
-/// Errors that can be returned by a `[Scan]` method
+/// Errors that can be returned by a [`Scan`] method
 #[derive(Debug, Error)]
 pub enum ScanError {
     /// Precision value is out-of-bounds
@@ -51,10 +51,10 @@ pub enum ScanError {
     /// Confidence value is out-of-bounds
     #[error("out-of-bounds confidence value: {0}")]
     OutOfBoundsConfidence(f64),
-    /// Error returned by the underlying `[TransitionSystem]`.
+    /// Error returned by the underlying [`TransitionSystem`].
     #[error("error from transition system: {0:?}")]
     TransitionSystem(#[from] TsError),
-    /// Error from `[std::io]`.
+    /// Error from [`std::io`].
     #[error("I/O error: {0:?}")]
     Io(#[from] std::io::Error),
 }

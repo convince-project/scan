@@ -20,7 +20,7 @@ use thiserror::Error;
 use crate::channel_system::{
     Action, Channel, ChannelSystem, CsError, Event, EventType, Location, PgId, PgIndex,
 };
-use crate::{BooleanExpr, Oracle, OracleTree, RunOutcome, Scheduler, Time, Tracer, Val};
+use crate::{BooleanExpr, Oracle, OracleTree, RunOutcome, Scheduler, Tracer, Val};
 use run::TransitionSystemRun;
 
 type Dag = Acyclic<DiGraph<(), (), PgIndex>>;
@@ -95,12 +95,12 @@ impl From<EventType<'_>> for OwnedEventType {
     }
 }
 
-type Trace<'a> = Vec<(Time, Action, OwnedEvent, Box<[Val]>)>;
+// type Trace<'a> = Vec<(Time, Action, OwnedEvent, Box<[Val]>)>;
 
 /// Errors produced by a [`TransitionSystem`].
 #[derive(Debug, Clone, Copy, Error)]
 pub enum TsError {
-    /// Error returned by the underlying `[ChannelSystem]`.
+    /// Error returned by the underlying [`ChannelSystem`].
     #[error("error from channel system: {0:?}")]
     ChannelSystem(#[from] CsError),
     /// The default value set for the port is not the right type,
@@ -166,14 +166,14 @@ impl TransitionSystem {
         Ok(())
     }
 
-    fn port_idxs(&self) -> Box<[usize]> {
-        [0].into_iter()
-            .chain(self.vals.iter().scan(0, |counter, val| {
-                *counter += val.len();
-                Some(*counter)
-            }))
-            .collect()
-    }
+    // fn port_idxs(&self) -> Box<[usize]> {
+    //     [0].into_iter()
+    //         .chain(self.vals.iter().scan(0, |counter, val| {
+    //             *counter += val.len();
+    //             Some(*counter)
+    //         }))
+    //         .collect()
+    // }
 
     /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
@@ -241,18 +241,12 @@ impl TransitionSystem {
         running: Arc<AtomicBool>,
         scheduler: Scheduler,
     ) -> Result<RunOutcome, TsError> {
-        // NOTE: Uniform scheduler writes the trace on-the-fly,
-        // whether or not it violates the guarantees,
-        // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
-        // or nothing if all guarantees where satisfied by all considered schedulers.
         match scheduler {
-            // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
             Scheduler::Uniform | Scheduler::Sampling => {
                 Err(TsError::UnsupportedScheduler(type_name::<O>(), scheduler))
             }
             Scheduler::Exhaustive => Ok(self.experiment_tree_exhaustive(oracle, running)),
-            // Scheduler::Exhaustive => self.experiment_exhaustive(oracle, tracer, running),
-            Scheduler::Priority => todo!(),
+            Scheduler::Priority => Ok(self.experiment_tree_priority(oracle, running)),
         }
     }
 
@@ -296,257 +290,17 @@ impl TransitionSystem {
         Some(Vec::from_iter(oracle.final_output_guarantees()))
     }
 
-    fn record_trace<'a, T: Tracer<'a>>(&self, mut tracer: T, trace: Trace) {
-        let ports_idxs = self.port_idxs();
-        for (time, action, event, state) in trace {
-            tracer.trace(action, (&event).into(), time, &|channel| {
-                self.ports
-                    .binary_search(&channel)
-                    .ok()
-                    .map(|idx| &state[ports_idxs[idx]..ports_idxs[idx + 1]])
-            });
-        }
-    }
-
-    fn experiment_exhaustive<'a, O: Oracle + Clone, T: Tracer<'a>>(
-        &self,
-        mut oracle: O,
-        tracer: Option<T>,
-        running: Arc<AtomicBool>,
-    ) -> RunOutcome {
-        // Diagnostics/stats
-        let start_time = Instant::now();
-        let mut branches: u32 = 0;
-        let oracle = &mut oracle;
-
-        type BranchData<'a, O> = (
-            O,
-            TransitionSystemRun<'a>,
-            Box<[(FixedBitSet, bool)]>,
-            usize,
-        );
-        let mut executions_stack: Vec<BranchData<O>> = Vec::new();
-        // TODO: measure impact of recycling memory to check wether it is worth it
-        let mut recycling_sets: Vec<Box<[(FixedBitSet, bool)]>> = Vec::new();
-        let pgs = self.pg_list.len();
-        let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
-        let mut bump = Bump::new();
-        let mut run = self.new_run();
-        let mut trace = Vec::new();
-
-        // Initialize oracle with TS initial state
-        let state: Box<[bool]> = run.labels().collect();
-        oracle.update_state(&state);
-        run.fastforward(&bump);
-
-        // FILO stack: depth-first search
-        'l: while running.load(Ordering::Relaxed) {
-            // NOTE: at the start of the loop, ample sets need to be updated.
-            // Do so only if no viable set is left,
-            // to reduce expensive calls to the ample method.
-            if amples
-                .iter()
-                .all(|(set, invalid)| *invalid || set.is_clear())
-            {
-                run.ample(&mut amples);
-            }
-
-            // Find most suitable ample set
-            if let Some((ample, _)) = amples
-                .iter()
-                // only consider viable sets (i.e., neither invalidated nor empty)
-                .filter(|(set, invalid)| !(*invalid || set.is_clear()))
-                .min_by_key(|(set, _)| set.len())
-            {
-                let mut transitions = ample
-                    .ones()
-                    .flat_map(|b| {
-                        run.possible_transitions_pg(PgId(b as PgIndex))
-                            .unwrap()
-                            .flat_map(|(action, posts)| {
-                                posts
-                                    .multi_cartesian_product()
-                                    .map(move |posts| (action, posts))
-                            })
-                    })
-                    .peekable();
-                // There must be active transitions because we checked earlier
-                assert!(transitions.peek().is_some());
-                'w: while let Some((action, posts)) = transitions.next() {
-                    if transitions.peek().is_some() {
-                        let mut branch_run = run.clone();
-                        let mut branch_oracle = oracle.clone();
-                        bump.reset();
-                        branch_run
-                            .transition(&mut branch_oracle, action, &posts, &bump)
-                            .unwrap();
-                        if branch_oracle
-                            .output_guarantees()
-                            .any(|b| b.is_some_and(|b| !b))
-                        {
-                            // Guarantee violated
-                            branches += 1;
-                            trace!(
-                                "run violates a guarantee: processed {branches} branches in {:?}",
-                                start_time.elapsed()
-                            );
-                            if let Some(tracer) = tracer {
-                                self.record_trace(tracer, trace);
-                            }
-                            return Some(Vec::from_iter(
-                                branch_oracle
-                                    .output_guarantees()
-                                    .map(|b| b.is_none_or(|b| b)),
-                            ));
-                        } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
-                            branch_run.fastforward(&bump);
-                            let a = u16::from(action.program_graph_id()) as usize;
-                            let mut branch_amples = if let Some(mut set) = recycling_sets.pop() {
-                                // clone amples into recycled set;
-                                set.iter_mut().zip(amples.iter()).for_each(
-                                    |((to_set, to_invalid), (from_set, from_invalid))| {
-                                        to_set.clone_from(from_set);
-                                        *to_invalid = *from_invalid;
-                                    },
-                                );
-                                set
-                            } else {
-                                amples.clone()
-                            };
-                            branch_amples
-                                .iter_mut()
-                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
-                            executions_stack.push((
-                                branch_oracle,
-                                branch_run,
-                                branch_amples,
-                                trace.len(),
-                            ));
-                        } else {
-                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
-                            branches += 1;
-                        }
-                    } else {
-                        drop(transitions);
-                        bump.reset();
-                        let event = run.transition(oracle, action, &posts, &bump).unwrap();
-                        if tracer.is_some()
-                            && let Some(event) = event
-                        {
-                            trace.push((
-                                run.time(),
-                                action,
-                                event.into(),
-                                run.whole_state().into(),
-                            ));
-                        }
-                        if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                            // Guarantee violated
-                            branches += 1;
-                            trace!(
-                                "run violates a guarantee: processed {branches} branches in {:?}",
-                                start_time.elapsed()
-                            );
-                            if let Some(tracer) = tracer {
-                                self.record_trace(tracer, trace);
-                            }
-                            return Some(Vec::from_iter(
-                                oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                            ));
-                        } else if oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
-                            run.fastforward(&bump);
-                            // Update DAG
-                            let a = u16::from(action.program_graph_id()) as usize;
-                            // NOTE: Ample sets, in this case, are closed under intersection,
-                            // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
-                            // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
-                            amples
-                                .iter_mut()
-                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
-                            // continue loop with same run and oracle
-                            continue 'l;
-                        } else {
-                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
-                            branches += 1;
-                            recycling_sets.push(amples);
-                            // No transitions left in this branch so exit transitions iteration
-                            // NOTE: break while loop needed to satisfy borrow checker
-                            break 'w;
-                        }
-                    }
-                }
-            } else if run.is_waiting() {
-                run.time_tick();
-                oracle.update_time(run.time());
-                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                    // Guarantee violated
-                    branches += 1;
-                    trace!(
-                        "run violates a guarantee: processed {branches} branches in {:?}",
-                        start_time.elapsed()
-                    );
-                    if let Some(tracer) = tracer {
-                        self.record_trace(tracer, trace);
-                    }
-                    return Some(Vec::from_iter(
-                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                    ));
-                } else if oracle.output_guarantees().any(|b| b.is_none()) {
-                    bump.reset();
-                    run.fastforward(&bump);
-                    amples
-                        .iter_mut()
-                        .for_each(|(_set, invalidate)| *invalidate = true);
-                    // continue loop with same run and oracle
-                    continue 'l;
-                } else {
-                    // Branch satisfies all guarantees and can be discarded even though execution is incomplete
-                    branches += 1;
-                    recycling_sets.push(amples);
-                }
-            } else if oracle.final_output_guarantees().all(|b| b) {
-                // Branch execution terminates and satisfies all guarantees and thus can be discarded
-                branches += 1;
-                recycling_sets.push(amples);
-            } else {
-                // Branch execution terminates without satisfying all guarantees
-                branches += 1;
-                trace!(
-                    "run violates a guarantee: processed {branches} branches in {:?}",
-                    start_time.elapsed()
-                );
-                if let Some(tracer) = tracer {
-                    self.record_trace(tracer, trace);
-                }
-                return Some(Vec::from_iter(oracle.final_output_guarantees()));
-            }
-
-            if let Some((branch_oracle, branch_run, branch_amples, trace_len)) =
-                executions_stack.pop()
-            {
-                // restore branch state of trace
-                trace.truncate(trace_len);
-                // continue loop with next run and oracle
-                run = branch_run;
-                *oracle = branch_oracle;
-                amples = branch_amples;
-            } else {
-                // Model execution terminates and satisfies all guarantees
-                trace!(
-                    "run verifies all guarantees: processed {branches} branches in {:?}",
-                    start_time.elapsed()
-                );
-                return Some(Vec::from_iter(oracle.final_output_guarantees()));
-            }
-        }
-        trace!(
-            "run stopped: processed {branches} branches in {:?}",
-            start_time.elapsed()
-        );
-        None
-    }
+    // fn record_trace<'a, T: Tracer<'a>>(&self, mut tracer: T, trace: Trace) {
+    //     let ports_idxs = self.port_idxs();
+    //     for (time, action, event, state) in trace {
+    //         tracer.trace(action, (&event).into(), time, &|channel| {
+    //             self.ports
+    //                 .binary_search(&channel)
+    //                 .ok()
+    //                 .map(|idx| &state[ports_idxs[idx]..ports_idxs[idx + 1]])
+    //         });
+    //     }
+    // }
 
     fn experiment_tree_exhaustive<O: OracleTree + Clone>(
         &self,
@@ -678,65 +432,59 @@ impl TransitionSystem {
         None
     }
 
-    fn experiment_priority<'a, O: Oracle + Clone, T: Tracer<'a>>(
+    fn experiment_tree_priority<O: OracleTree + Clone>(
         &self,
         mut oracle: O,
-        tracer: Option<T>,
         running: Arc<AtomicBool>,
     ) -> RunOutcome {
         // Diagnostics/stats
         let start_time = Instant::now();
-        let mut branches: u32 = 0;
-        let oracle = &mut oracle;
 
         type BranchData<'a, O> = (
-            O,
             TransitionSystemRun<'a>,
-            Box<[(FixedBitSet, bool)]>,
             Dag,
-            usize,
+            Box<[(FixedBitSet, bool)]>,
+            Vec<(Action, Vec<Location>)>,
+            FixedBitSet,
+            O,
         );
         let mut executions_stack: Vec<BranchData<O>> = Vec::new();
-        // TODO: measure impact of recycling memory to check wether it is worth it
-        let mut recycling_sets: Vec<Box<[(FixedBitSet, bool)]>> = Vec::new();
-        let mut recycling_dags: Vec<Dag> = Vec::new();
         let pgs = self.pg_list.len();
         let mut amples = vec![(FixedBitSet::with_capacity(pgs), true); pgs].into_boxed_slice();
+        let mut bump = Bump::new();
         let mut restricted_ample = FixedBitSet::with_capacity(pgs);
         let mut restricted_ample_temp = FixedBitSet::with_capacity(pgs);
-        let mut bump = Bump::new();
         let mut run = self.new_run();
         let mut dag = Dag::new();
         let dag_ids = (0..pgs).map(|_| dag.add_node(())).collect::<Vec<_>>();
-        let mut trace = Vec::new();
 
         // Initialize oracle with TS initial state
-        oracle.update_state(&Vec::from_iter(run.labels()));
+        let state: Box<[bool]> = run.labels().collect();
         run.fastforward(&bump);
+        // NOTE: root of the oracle tree should be initial state
+        oracle.update_state(&state);
+        // add initial system state as root node so that CTL state semantics correct even without top-level quantifier
+        executions_stack.push((
+            run.clone(),
+            dag.clone(),
+            amples.clone(),
+            Vec::new(),
+            restricted_ample.clone(),
+            oracle.clone(),
+        ));
 
-        let mut len_lower_bound = 1;
-
-        let mut posts_last = None;
-        let mut action_l = None;
         // FILO stack: depth-first search
-        'l: while running.load(Ordering::Relaxed) {
-            // NOTE: at the start of the loop, ample sets need to be updated.
-            // Do so only if no viable set is left,
-            // to reduce expensive calls to the ample method.
-            if amples
-                .iter()
-                .all(|(set, invalid)| *invalid || set.is_clear())
-            {
+        while running.load(Ordering::Relaxed) {
+            if oracle.output_guarantees().any(|o| o.is_none()) {
+                bump.reset();
+                run.fastforward(&bump);
                 run.ample(&mut amples);
-                len_lower_bound = 1;
-            }
 
-            // Find most suitable ample set
-            let mut len_min = usize::MAX;
-            let mut ample = None;
-            'f: for (set, invalid) in amples.iter() {
-                // only consider viable sets (i.e., neither invalidated nor empty)
-                if !(*invalid || set.is_clear()) {
+                // Find most suitable ample set
+                let mut len_min = usize::MAX;
+                restricted_ample.clear();
+                // only consider non-empty sets
+                'f: for (set, _) in amples.iter().filter(|(set, _)| !set.is_clear()) {
                     restricted_ample_temp.clear();
                     let mut len = 0;
                     for i in set.ones().filter(|&i| {
@@ -754,244 +502,128 @@ impl TransitionSystem {
                     }
                     // new set is smaller than previous ones
                     mem::swap(&mut restricted_ample, &mut restricted_ample_temp);
-                    ample = Some(set);
                     len_min = len;
-                    assert!(len >= len_lower_bound);
-                    if len == len_lower_bound {
-                        break 'f;
-                    }
                 }
-            }
-            assert!(len_min >= len_lower_bound);
-            len_lower_bound = len_min;
-            if let Some(ample) = ample {
-                assert!(!restricted_ample.is_clear());
-                assert!(restricted_ample.is_subset(ample));
-                let mut transitions = restricted_ample
-                    .ones()
-                    .flat_map(|b| {
-                        run.possible_transitions_pg(PgId(b as u16))
-                            .unwrap()
-                            .flat_map(|(action, posts)| {
-                                posts
-                                    .multi_cartesian_product()
-                                    .map(move |posts| (action, posts))
-                            })
-                    })
-                    .peekable();
-                // There must be active transitions because we checked earlier
-                assert!(transitions.peek().is_some());
-                'w: while let Some((action, posts)) = transitions.next() {
-                    action_l = Some(action);
-                    if transitions.peek().is_some() {
-                        let mut branch_run = run.clone();
-                        let mut branch_oracle = oracle.clone();
-                        bump.reset();
-                        branch_run
-                            .transition(&mut branch_oracle, action, &posts, &bump)
-                            .unwrap();
-                        if branch_oracle
-                            .output_guarantees()
-                            .any(|b| b.is_some_and(|b| !b))
-                        {
-                            // Guarantee violated
-                            branches += 1;
-                            trace!(
-                                "run violates a guarantee: processed {branches} branches in {:?}",
-                                start_time.elapsed()
-                            );
-                            if let Some(tracer) = tracer {
-                                self.record_trace(tracer, trace);
-                            }
-                            return Some(Vec::from_iter(
-                                branch_oracle
-                                    .output_guarantees()
-                                    .map(|b| b.is_none_or(|b| b)),
-                            ));
-                        } else if branch_oracle.output_guarantees().any(|b| b.is_none()) {
-                            bump.reset();
-                            branch_run.fastforward(&bump);
-                            // Prepare new DAG
-                            let mut branch_dag = if let Some(mut rec_dag) = recycling_dags.pop() {
-                                rec_dag.clone_from(&dag);
-                                rec_dag
-                            } else {
-                                dag.clone()
-                            };
-                            let a = u16::from(action.program_graph_id()) as usize;
-                            let node_a = dag_ids[a];
-                            restricted_ample.ones().for_each(|b| {
-                                if b != a {
-                                    let node_b = dag_ids[b];
-                                    let _ = branch_dag
-                                        .try_update_edge(node_a, node_b, ())
-                                        .expect("edge must be valid");
-                                }
-                            });
-                            let mut branch_amples = if let Some(mut set) = recycling_sets.pop() {
-                                // clone amples into recycled set;
-                                set.iter_mut().zip(amples.iter()).for_each(
-                                    |((to_set, to_invalid), (from_set, from_invalid))| {
-                                        to_set.clone_from(from_set);
-                                        *to_invalid = *from_invalid;
-                                    },
-                                );
-                                set
-                            } else {
-                                amples.clone()
-                            };
-                            branch_amples
-                                .iter_mut()
-                                .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
-                            executions_stack.push((
-                                branch_oracle,
-                                branch_run,
-                                branch_amples,
-                                branch_dag,
-                                trace.len(),
-                            ));
-                        } else {
-                            // Branch satisfies all guarantees and can be discarded even though execution is incomplete
-                            branches += 1;
-                        }
-                    } else {
-                        posts_last = Some(posts);
-                        break 'w;
+
+                if !restricted_ample.is_clear() {
+                    let mut transitions = restricted_ample
+                        .ones()
+                        .flat_map(|b| {
+                            run.possible_transitions_pg(PgId(b as PgIndex))
+                                .unwrap()
+                                .flat_map(|(action, posts)| {
+                                    posts
+                                        .multi_cartesian_product()
+                                        .map(move |posts| (action, posts))
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                    // There must be active transitions because we checked earlier
+                    let (action, posts) = transitions.pop().expect("valid transition");
+                    // NOTE: for optimization, avoid pushing and popping first execution branch into/out of stack
+                    // and do not add new node to stack if that is the only branch
+                    if !transitions.is_empty() {
+                        executions_stack.push((
+                            run.clone(),
+                            dag.clone(),
+                            amples.clone(),
+                            transitions,
+                            restricted_ample.clone(),
+                            oracle.clone(),
+                        ));
                     }
-                }
-                assert!(transitions.next().is_none());
-                drop(transitions);
-                let action = action_l.expect("active transition");
-                bump.reset();
-                let event = run
-                    .transition(
-                        oracle,
-                        action,
-                        posts_last.as_ref().expect("active transition"),
-                        &bump,
-                    )
-                    .unwrap();
-                if tracer.is_some()
-                    && let Some(event) = event
-                {
-                    trace.push((run.time(), action, event.into(), run.whole_state().into()));
-                }
-                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                    // Guarantee violated
-                    branches += 1;
-                    trace!(
-                        "run violates a guarantee: processed {branches} branches in {:?}",
-                        start_time.elapsed()
-                    );
-                    if let Some(tracer) = tracer {
-                        self.record_trace(tracer, trace);
-                    }
-                    return Some(Vec::from_iter(
-                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                    ));
-                } else if oracle.output_guarantees().any(|b| b.is_none()) {
                     bump.reset();
-                    run.fastforward(&bump);
+                    let _event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
                     // Update DAG
+                    let action_pg_idx = u16::from(action.program_graph_id()) as usize;
+                    // NOTE: Ample sets, in this case, are closed under intersection,
+                    // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
+                    // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
+                    amples
+                        .iter_mut()
+                        .for_each(|(set, invalidate)| *invalidate |= set.contains(action_pg_idx));
+                    // Prepare DAG
                     let a = u16::from(action.program_graph_id()) as usize;
                     let node_a = dag_ids[a];
                     restricted_ample.ones().for_each(|b| {
                         if b != a {
                             let node_b = dag_ids[b];
-                            // update_edge avoids creating duplicated edges
                             let _ = dag
                                 .try_update_edge(node_a, node_b, ())
                                 .expect("edge must be valid");
                         }
                     });
-                    // NOTE: Ample sets, in this case, are closed under intersection,
-                    // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
-                    // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
-                    // NOTE: restricted_ample is **not** an ample set,
-                    // and ample is not necessarily the smallest ample set containing restricted_ample!
-                    amples
-                        .iter_mut()
-                        .for_each(|(set, invalidate)| *invalidate |= set.contains(a));
-                    // continue loop with same run and oracle
-                    continue 'l;
-                } else {
-                    // Branch satisfies all guarantees and can be discarded even though execution is incomplete
-                    branches += 1;
-                    recycling_sets.push(amples);
-                    recycling_dags.push(dag);
-                    // No transitions left in this branch so exit transitions iteration
-                }
-            } else if run.is_waiting() {
-                run.time_tick();
-                oracle.update_time(run.time());
-                if oracle.output_guarantees().any(|b| b.is_some_and(|b| !b)) {
-                    // Guarantee violated
-                    branches += 1;
-                    trace!(
-                        "run violates a guarantee: processed {branches} branches in {:?}",
-                        start_time.elapsed()
-                    );
-                    if let Some(tracer) = tracer {
-                        self.record_trace(tracer, trace);
-                    }
-                    return Some(Vec::from_iter(
-                        oracle.output_guarantees().map(|b| b.is_none_or(|b| b)),
-                    ));
-                } else if oracle.output_guarantees().any(|b| b.is_none()) {
-                    bump.reset();
-                    run.fastforward(&bump);
+                    // Continue execution of same TS and oracle
+                    continue;
+                } else if run.is_waiting() {
+                    run.time_tick();
+                    oracle.update_time(run.time());
                     amples
                         .iter_mut()
                         .for_each(|(_set, invalidate)| *invalidate = true);
-                    // continue loop with same run and oracle
-                    continue 'l;
+                    // Continue execution of same TS and oracle
+                    continue;
                 } else {
-                    // Branch satisfies all guarantees and can be discarded even though execution is incomplete
-                    branches += 1;
-                    recycling_sets.push(amples);
-                    recycling_dags.push(dag);
+                    oracle.end_branch();
                 }
-            } else if oracle.final_output_guarantees().all(|b| b) {
-                // Branch execution terminates and satisfies all guarantees and thus can be discarded
-                branches += 1;
-                recycling_sets.push(amples);
-                recycling_dags.push(dag);
-            } else {
-                // Branch execution terminates without satisfying all guarantees
-                branches += 1;
-                trace!(
-                    "run violates a guarantee: processed {branches} branches in {:?}",
-                    start_time.elapsed()
-                );
-                if let Some(tracer) = tracer {
-                    self.record_trace(tracer, trace);
-                }
-                return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
 
-            if let Some((branch_oracle, branch_run, branch_amples, branch_dag, trace_len)) =
-                executions_stack.pop()
+            // Close current tree branch exploration and pop next one (if any)
+            if let Some((branch_run, branch_dag, branch_amples, actions, branch_restricted_ample, branch_oracle)) =
+                executions_stack.last_mut()
+                // below pattern is always matched except at root node
+                && let Some((action, posts)) = actions.pop()
             {
-                // restore branch state of trace
-                trace.truncate(trace_len);
-                // continue loop with next run and oracle
-                run = branch_run;
-                *oracle = branch_oracle;
-                dag = branch_dag;
-                amples = branch_amples;
+                branch_oracle.fold_branch(oracle);
+                if actions.is_empty() {
+                    let (
+                        branch_run,
+                        branch_dag,
+                        branch_amples,
+                        actions,
+                        branch_restricted_ample,
+                        branch_oracle,
+                    ) = executions_stack.pop().unwrap();
+                    assert!(actions.is_empty());
+                    run = branch_run;
+                    dag = branch_dag;
+                    amples = branch_amples;
+                    restricted_ample = branch_restricted_ample;
+                    oracle = branch_oracle;
+                } else {
+                    run = branch_run.clone();
+                    dag.clone_from(branch_dag);
+                    amples.clone_from(branch_amples);
+                    restricted_ample.clone_from(branch_restricted_ample);
+                    oracle = branch_oracle.clone();
+                }
+                let _event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
+                // Update DAG
+                let action_pg_idx = u16::from(action.program_graph_id()) as usize;
+                // NOTE: Ample sets, in this case, are closed under intersection,
+                // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
+                // so A ∩ B = ⋃ {Ample(a) | a ∈ A ∩ B} is an ample set.
+                amples
+                    .iter_mut()
+                    .for_each(|(set, invalidate)| *invalidate |= set.contains(action_pg_idx));
+                // Prepare DAG
+                let a = u16::from(action.program_graph_id()) as usize;
+                let node_a = dag_ids[a];
+                restricted_ample.ones().for_each(|b| {
+                    if b != a {
+                        let node_b = dag_ids[b];
+                        let _ = dag
+                            .try_update_edge(node_a, node_b, ())
+                            .expect("edge must be valid");
+                    }
+                });
             } else {
-                // Model execution terminates and satisfies all guarantees
-                trace!(
-                    "run verifies all guarantees: processed {branches} branches in {:?}",
-                    start_time.elapsed()
-                );
+                // Model execution terminates
+                trace!("run terminates in {:?}", start_time.elapsed());
                 return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
         }
-        trace!(
-            "run stopped: processed {branches} branches in {:?}",
-            start_time.elapsed()
-        );
+        trace!("run stopped in {:?}", start_time.elapsed());
         None
     }
 }
