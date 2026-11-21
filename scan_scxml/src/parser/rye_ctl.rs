@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail};
 use chumsky::{IterParser, Parser, prelude::*, select};
 use logos::Logos;
 use scan_core::{Time, TimeRange};
-use scan_ctl::{Ctl, PathCtl};
+use scan_ctl::{Ctlp, PathCtl};
 
 #[derive(Logos, Debug, PartialEq, Eq, Hash, Clone)]
 #[logos(skip r"[ \t\n]+")]
@@ -78,7 +78,7 @@ enum Token {
     Predicate(String),
 }
 
-fn parser<'src>() -> impl Parser<'src, &'src [Token], Ctl<String>, extra::Err<Simple<'src, Token>>>
+fn parser<'src>() -> impl Parser<'src, &'src [Token], Ctlp<String>, extra::Err<Simple<'src, Token>>>
 {
     let integer = select! {
         Token::Integer(n) => n as Time,
@@ -123,35 +123,37 @@ fn parser<'src>() -> impl Parser<'src, &'src [Token], Ctl<String>, extra::Err<Si
         ))
     });
 
-    let all = just(Token::All).ignore_then(ctl_path.clone()).map(Ctl::All);
-    let exists = just(Token::Exist).ignore_then(ctl_path).map(Ctl::Exists);
+    let all = just(Token::All)
+        .ignore_then(ctl_path.clone())
+        .map(Ctlp::All);
+    let exists = just(Token::Exist).ignore_then(ctl_path).map(Ctlp::Exists);
     let not = just(Token::Not)
         .ignore_then(ctl_state.clone())
-        .map(|ctl| Ctl::Not(Box::new(ctl)));
+        .map(|ctl| Ctlp::Not(Box::new(ctl)));
     let implies = ctl_state
         .clone()
         .then_ignore(just(Token::Implies))
         .then(ctl_state.clone())
-        .map(|(lhs, rhs)| Ctl::Implies(Box::new((lhs, rhs))));
+        .map(|(lhs, rhs)| Ctlp::Implies(Box::new((lhs, rhs))));
     let and = ctl_state
         .clone()
         .separated_by(just(Token::And))
         .at_least(2)
         .collect::<Box<[_]>>()
-        .map(Ctl::And);
+        .map(Ctlp::And);
     let or = ctl_state
         .clone()
         .separated_by(just(Token::Or))
         .at_least(2)
         .collect::<Box<[_]>>()
-        .map(Ctl::Or);
+        .map(Ctlp::Or);
 
     ctl_state.define({
         choice((
             select! {
-                Token::Predicate(pred) => Ctl::Atom(pred),
-                Token::True => Ctl::True,
-                Token::False => Ctl::False,
+                Token::Predicate(pred) => Ctlp::Atom(pred),
+                Token::True => Ctlp::True,
+                Token::False => Ctlp::False,
             },
             all,
             exists,
@@ -168,7 +170,7 @@ fn parser<'src>() -> impl Parser<'src, &'src [Token], Ctl<String>, extra::Err<Si
     ctl_state.then_ignore(end())
 }
 
-pub fn parse(input: &str) -> anyhow::Result<Ctl<String>> {
+pub fn parse(input: &str) -> anyhow::Result<Ctlp<String>> {
     //creates a lexer instance from the input
     let lexer = Token::lexer(input);
 

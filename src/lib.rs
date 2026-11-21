@@ -263,8 +263,15 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                args.run_verification_tree::<_>(model, progress, json, &scan_def)?
-                    .print(json);
+                match scan_def {
+                    ScxmlScan::Pmtl(scan) => {
+                        args.run_verification::<_>(model, progress, json, &scan)
+                    }
+                    ScxmlScan::Ctlp(scan) => {
+                        args.run_verification_tree::<_>(model, progress, json, &scan)
+                    }
+                }?
+                .print(json);
             }
             Commands::Validate => {
                 let (_scan, _scxml_model) = load(&self.model, &[], true)?;
@@ -277,7 +284,14 @@ impl Cli {
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
-                args.trace::<_, TracePrinter>(model, &scan_def, &scxml_model)?;
+                match scan_def {
+                    ScxmlScan::Pmtl(scan) => {
+                        args.trace::<_, TracePrinter>(model, &scan, &scxml_model)?;
+                    }
+                    ScxmlScan::Ctlp(_scan) => {
+                        bail!("tracing not supported on CTLp properties");
+                    }
+                }
             }
         }
         Ok(())

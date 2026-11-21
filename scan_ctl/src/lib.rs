@@ -7,4 +7,4 @@
 
 mod oracle;
 
-pub use oracle::{Ctl, CtlOracle, PathCtl};
+pub use oracle::{Ctlp, CtlpOracle, PathCtl};

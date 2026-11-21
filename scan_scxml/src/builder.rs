@@ -3,16 +3,19 @@
 mod expression;
 
 use self::expression::{expression, infer_type};
-use crate::parser::{
-    Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send, State,
-    Target,
+use crate::{
+    ScxmlScan,
+    parser::{
+        Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send,
+        State, Target,
+    },
 };
 use anyhow::{Context, anyhow, bail};
 use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
-use scan_ctl::{Ctl, CtlOracle};
-use scan_pmtl::{Pmtl, PmtlOracle};
+use scan_ctl::CtlpOracle;
+use scan_pmtl::PmtlOracle;
 use std::collections::{BTreeMap, BTreeSet};
 
 // TODO:
@@ -68,11 +71,6 @@ pub struct ModelBuilder {
     events: Vec<EventBuilder>,
     event_indexes: BTreeMap<String, usize>,
     parameter_channels: BTreeMap<(PgId, PgId, usize), Channel>,
-    // Properties
-    // guarantees: Vec<(String, Pmtl<usize>)>,
-    // assumes: Vec<(String, Pmtl<usize>)>,
-    guarantees: Vec<(String, Ctl<usize>)>,
-    assumes: Vec<(String, Ctl<usize>)>,
     predicates: Vec<BooleanExpr<Atom>>,
     // port vars are (in general) expressions over atoms on the same channel
     port_vars: BTreeMap<String, (OmgType, Vec<Expression<Atom>>)>,
@@ -92,7 +90,7 @@ impl ModelBuilder {
         mut parser: Parser,
         properties: &[String],
         all_properties: bool,
-    ) -> anyhow::Result<(TransitionSystem, CtlOracle, ScxmlModel)> {
+    ) -> anyhow::Result<(ScxmlScan, ScxmlModel)> {
         // ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder
@@ -135,9 +133,7 @@ impl ModelBuilder {
             .build_properties(&mut parser, properties, all_properties)
             .context("failed building properties")?;
 
-        let model = model_builder.build_model(parser);
-
-        Ok(model)
+        model_builder.build_model(parser)
     }
 
     fn event_index(&mut self, id: &str) -> usize {
@@ -1411,13 +1407,10 @@ impl ModelBuilder {
                 .guarantees
                 .retain(|(name, _)| properties.contains(name));
         }
-        self.guarantees = parser.properties.guarantees.clone();
-        self.assumes = parser.properties.assumes.clone();
         Ok(())
     }
 
-    fn build_model(mut self, parser: Parser) -> (TransitionSystem, CtlOracle, ScxmlModel) {
-        // fn build_model(mut self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
+    fn build_model(mut self, parser: Parser) -> anyhow::Result<(ScxmlScan, ScxmlModel)> {
         let cs = self.cs.build();
         let mut model = TransitionSystem::new(cs);
         let port_vars = self
@@ -1434,10 +1427,51 @@ impl ModelBuilder {
         }
         // Shrink model storage (just an optimization);
         model.shrink();
-        let (guarantee_names, guarantees): (Vec<_>, Vec<_>) = self.guarantees.into_iter().unzip();
-        let (assume_names, assumes): (Vec<_>, Vec<_>) = self.assumes.into_iter().unzip();
-        // let oracle = PmtlOracle::new(assumes.as_slice(), guarantees.as_slice());
-        let oracle = CtlOracle::new(assumes.as_slice(), guarantees.as_slice());
+
+        // build properties (same logic)
+        let pmtl_properties: Option<(Vec<_>, Vec<_>)> = parser
+            .properties
+            .guarantees
+            .iter()
+            .map(|(name, prop)| {
+                if let crate::parser::Property::Pmtl(pmtl_prop) = prop {
+                    Some((name.clone(), pmtl_prop.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let assume_names = Vec::new();
+        let ctlp_properties: Option<(Vec<_>, Vec<_>)> = parser
+            .properties
+            .guarantees
+            .iter()
+            .map(|(name, prop)| {
+                if let crate::parser::Property::Ctlp(ctlp_prop) = prop {
+                    Some((name.clone(), ctlp_prop.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let guarantee_names;
+        let scan = match (pmtl_properties, ctlp_properties) {
+            (None, None) => bail!("properties not found"),
+            (None, Some((ctlp_guarantee_names, ctlp_guarantees))) => {
+                let assumes = Vec::new();
+                let oracle = CtlpOracle::new(assumes.as_slice(), ctlp_guarantees.as_slice());
+                guarantee_names = ctlp_guarantee_names;
+                ScxmlScan::Ctlp(Scan::new(model, oracle))
+            }
+            (Some((pmtl_guarantee_names, pmtl_guarantees)), None) => {
+                let assumes = Vec::new();
+                let oracle = PmtlOracle::new(assumes.as_slice(), pmtl_guarantees.as_slice());
+                guarantee_names = pmtl_guarantee_names;
+                ScxmlScan::Pmtl(Scan::new(model, oracle))
+            }
+            (Some(_), Some(_)) => bail!("properties have different logics"),
+        };
+
         let mut events = Vec::from_iter(self.event_indexes);
         events.sort_unstable_by_key(|(_, idx)| *idx);
         let events = events
@@ -1456,9 +1490,8 @@ impl ModelBuilder {
             })
             .collect();
 
-        (
-            model,
-            oracle,
+        Ok((
+            scan,
             ScxmlModel {
                 fsm_names: self.fsm_names,
                 parameters: self
@@ -1479,6 +1512,6 @@ impl ModelBuilder {
                 omg_types: parser.types,
                 ports: self.ports.iter().map(|(c, _)| *c).collect(),
             },
-        )
+        ))
     }
 }

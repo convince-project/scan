@@ -6,7 +6,7 @@ use std::{hash::Hash, ops::RangeBounds};
 
 /// A Past-time Metric Temporal Logic (PMTL) formula.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Ctl<V>
+pub enum Ctlp<V>
 where
     V: Clone,
 {
@@ -17,13 +17,13 @@ where
     /// An atomic formula.
     Atom(V),
     /// Logical disjunction of a list of formulae.
-    And(Box<[Ctl<V>]>),
+    And(Box<[Ctlp<V>]>),
     /// Logical conjunction of a list of formulae.
-    Or(Box<[Ctl<V>]>),
+    Or(Box<[Ctlp<V>]>),
     /// Logical negation of a formula.
-    Not(Box<Ctl<V>>),
+    Not(Box<Ctlp<V>>),
     /// Logical implication of a antecedent formula and a consequent formula.
-    Implies(Box<(Ctl<V>, Ctl<V>)>),
+    Implies(Box<(Ctlp<V>, Ctlp<V>)>),
     /// Exists path
     Exists(PathCtl<V>),
     /// All paths
@@ -37,11 +37,11 @@ where
     V: Clone,
 {
     /// Temporal historical predicate over a formula (with bounds).
-    Historically(Box<Ctl<V>>, TimeRange),
+    Historically(Box<Ctlp<V>>, TimeRange),
     /// Temporal previously predicate over a formula (with bounds).
-    Once(Box<Ctl<V>>, TimeRange),
+    Once(Box<Ctlp<V>>, TimeRange),
     /// Temporal since predicate over a formula (with bounds).
-    Since(Box<(Ctl<V>, Ctl<V>)>, TimeRange),
+    Since(Box<(Ctlp<V>, Ctlp<V>)>, TimeRange),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,20 +235,20 @@ enum ValCtl {
     All(ValPathCtl, bool),
 }
 
-impl From<&Ctl<usize>> for ValCtl {
-    fn from(value: &Ctl<usize>) -> Self {
+impl From<&Ctlp<usize>> for ValCtl {
+    fn from(value: &Ctlp<usize>) -> Self {
         match value {
-            Ctl::True => ValCtl::True,
-            Ctl::False => ValCtl::False,
-            Ctl::Atom(a) => ValCtl::Atom(*a, false),
-            Ctl::And(pmtls) => ValCtl::And(pmtls.iter().map(|f| f.into()).collect()),
-            Ctl::Or(pmtls) => ValCtl::Or(pmtls.iter().map(|f| f.into()).collect()),
-            Ctl::Not(pmtl) => ValCtl::Not(Box::new(pmtl.as_ref().into())),
-            Ctl::Implies(pmtls) => {
+            Ctlp::True => ValCtl::True,
+            Ctlp::False => ValCtl::False,
+            Ctlp::Atom(a) => ValCtl::Atom(*a, false),
+            Ctlp::And(pmtls) => ValCtl::And(pmtls.iter().map(|f| f.into()).collect()),
+            Ctlp::Or(pmtls) => ValCtl::Or(pmtls.iter().map(|f| f.into()).collect()),
+            Ctlp::Not(pmtl) => ValCtl::Not(Box::new(pmtl.as_ref().into())),
+            Ctlp::Implies(pmtls) => {
                 ValCtl::Implies(Box::new(((&pmtls.0).into(), (&pmtls.1).into())))
             }
-            Ctl::Exists(path_ctl) => ValCtl::Exists(path_ctl.into(), false),
-            Ctl::All(path_ctl) => ValCtl::All(path_ctl.into(), true),
+            Ctlp::Exists(path_ctl) => ValCtl::Exists(path_ctl.into(), false),
+            Ctlp::All(path_ctl) => ValCtl::All(path_ctl.into(), true),
         }
     }
 }
@@ -452,15 +452,15 @@ impl ValCtl {
 
 /// An oracle for PCTL properties over timed, dense traces.
 #[derive(Debug, Clone)]
-pub struct CtlOracle {
+pub struct CtlpOracle {
     assumes: Box<[ValCtl]>,
     guarantees: Box<[ValCtl]>,
     time: Time,
 }
 
-impl CtlOracle {
+impl CtlpOracle {
     /// Creates an oracle from assumes and guarantees CMTL formulae.
-    pub fn new(assumes: &[Ctl<usize>], guarantees: &[Ctl<usize>]) -> Self {
+    pub fn new(assumes: &[Ctlp<usize>], guarantees: &[Ctlp<usize>]) -> Self {
         Self {
             assumes: assumes.iter().map(|f| f.into()).collect(),
             guarantees: guarantees.iter().map(|f| f.into()).collect(),
@@ -469,7 +469,7 @@ impl CtlOracle {
     }
 }
 
-impl OracleTree for CtlOracle {
+impl OracleTree for CtlpOracle {
     fn fold_branch(&mut self, closed: Self) {
         for (current_formula, closed_formula) in self.assumes.iter_mut().zip(closed.assumes) {
             current_formula.close_branch(closed_formula, self.time);
@@ -489,7 +489,7 @@ impl OracleTree for CtlOracle {
     }
 }
 
-impl Oracle for CtlOracle {
+impl Oracle for CtlpOracle {
     #[inline]
     fn output_assumes(&self) -> impl Iterator<Item = Option<bool>> {
         self.assumes.iter().map(move |f| f.valuation(self.time))
