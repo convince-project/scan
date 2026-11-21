@@ -1,5 +1,6 @@
 mod run;
 
+use std::any::type_name;
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -99,20 +100,16 @@ type Trace<'a> = Vec<(Time, Action, OwnedEvent, Box<[Val]>)>;
 /// Errors produced by a [`TransitionSystem`].
 #[derive(Debug, Clone, Copy, Error)]
 pub enum TsError {
-    /// The CS returned an error of its own.
-    #[error("error from channel system {0:?}")]
-    ChannelSystem(CsError),
+    /// Error returned by the underlying `[ChannelSystem]`.
+    #[error("error from channel system: {0:?}")]
+    ChannelSystem(#[from] CsError),
     /// The default value set for the port is not the right type,
     /// i.e., the type of messages of the channel.
     #[error("default port value is not the type of the channel {0:?}")]
     WrongPortType(Channel),
-}
-
-impl From<CsError> for TsError {
-    #[inline]
-    fn from(value: CsError) -> Self {
-        Self::ChannelSystem(value)
-    }
+    /// The oracle tasked with the verification does not support the chosen kind of scheduler.
+    #[error("the oracle {0} does not support the scheduler {1:?}")]
+    UnsupportedScheduler(&'static str, Scheduler),
 }
 
 /// An atomic variable exposed by the [`ChannelSystem to the TransitionSystem`].
@@ -223,17 +220,18 @@ impl TransitionSystem {
         tracer: Option<T>,
         running: Arc<AtomicBool>,
         scheduler: Scheduler,
-    ) -> RunOutcome {
+    ) -> Result<RunOutcome, TsError> {
         // NOTE: Uniform scheduler writes the trace on-the-fly,
         // whether or not it violates the guarantees,
         // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
         // or nothing if all guarantees where satisfied by all considered schedulers.
         match scheduler {
-            Scheduler::Uniform => self.experiment_sample(oracle, tracer, running),
+            Scheduler::Uniform => Ok(self.experiment_sample(oracle, tracer, running)),
             // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
             Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => self.experiment_exhaustive(oracle, tracer, running),
-            Scheduler::Priority => self.experiment_priority(oracle, tracer, running),
+            Scheduler::Exhaustive | Scheduler::Priority => {
+                Err(TsError::UnsupportedScheduler(type_name::<O>(), scheduler))
+            }
         }
     }
 
@@ -242,16 +240,17 @@ impl TransitionSystem {
         oracle: O,
         running: Arc<AtomicBool>,
         scheduler: Scheduler,
-    ) -> RunOutcome {
+    ) -> Result<RunOutcome, TsError> {
         // NOTE: Uniform scheduler writes the trace on-the-fly,
         // whether or not it violates the guarantees,
         // while Exhaustive and Priority schedulers return a complete trace that violates the guarantees,
         // or nothing if all guarantees where satisfied by all considered schedulers.
         match scheduler {
-            Scheduler::Uniform => todo!(),
             // WARN FIXME TODO: Implement algorithm for 2.4 Distributed sample generation in Budde et al.
-            Scheduler::Sampling => todo!(),
-            Scheduler::Exhaustive => self.experiment_tree_exhaustive(oracle, running),
+            Scheduler::Uniform | Scheduler::Sampling => {
+                Err(TsError::UnsupportedScheduler(type_name::<O>(), scheduler))
+            }
+            Scheduler::Exhaustive => Ok(self.experiment_tree_exhaustive(oracle, running)),
             // Scheduler::Exhaustive => self.experiment_exhaustive(oracle, tracer, running),
             Scheduler::Priority => todo!(),
         }
@@ -1008,6 +1007,12 @@ mod test {
 
     impl Oracle for DummyOracle {}
 
+    impl OracleTree for DummyOracle {
+        fn fold_branch(&mut self, _closed: Self) {}
+
+        fn end_branch(&mut self) {}
+    }
+
     #[test]
     fn counter_pg() {
         let mut cs = ChannelSystemBuilder::new();
@@ -1039,18 +1044,21 @@ mod test {
             None,
             AtomicBool::new(true).into(),
             Scheduler::Uniform,
-        );
+        )
+        .expect("run experiment");
         ts.experiment::<_, DummyTracer>(
             oracle,
             None,
             AtomicBool::new(true).into(),
             Scheduler::Exhaustive,
-        );
+        )
+        .expect("run experiment");
         ts.experiment::<_, DummyTracer>(
             oracle,
             None,
             AtomicBool::new(true).into(),
             Scheduler::Priority,
-        );
+        )
+        .expect("run experiment");
     }
 }

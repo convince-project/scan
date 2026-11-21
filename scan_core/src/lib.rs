@@ -36,14 +36,14 @@ pub use time::*;
 pub use tracer::{TraceWriter, Tracer};
 pub use transition_system::{Atom, TransitionSystem};
 
-use crate::tracer::DummyTracer;
+use crate::{tracer::DummyTracer, transition_system::TsError};
 
 const TEMP: &str = ".temp";
 const SUCCESSES: &str = "successes";
 const FAILURES: &str = "failures";
 
 /// Errors that can be returned by a `[Scan]` method
-#[derive(Clone, Copy, Debug, Error)]
+#[derive(Debug, Error)]
 pub enum ScanError {
     /// Precision value is out-of-bounds
     #[error("out-of-bounds precision value: {0}")]
@@ -51,6 +51,12 @@ pub enum ScanError {
     /// Confidence value is out-of-bounds
     #[error("out-of-bounds confidence value: {0}")]
     OutOfBoundsConfidence(f64),
+    /// Error returned by the underlying `[TransitionSystem]`.
+    #[error("error from transition system: {0:?}")]
+    TransitionSystem(#[from] TsError),
+    /// Error from `[std::io]`.
+    #[error("I/O error: {0:?}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Scheduling strategy used to sample executions
@@ -199,15 +205,16 @@ impl<O> Scan<O>
 where
     O: Oracle + Clone + Sync,
 {
-    fn verification(&self, scheduler: Scheduler) {
+    fn verification(&self, scheduler: Scheduler) -> Result<(), TsError> {
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
         if let Some(outcome) = self
             .model
-            .experiment::<O, DummyTracer>(oracle, None, running, scheduler)
+            .experiment::<O, DummyTracer>(oracle, None, running, scheduler)?
         {
             self.process_outcome(&outcome);
         }
+        Ok(())
     }
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
@@ -234,7 +241,8 @@ where
             self.seq_adaptive(confidence, precision, scheduler)
         } else {
             self.par_adaptive(confidence, precision, scheduler)
-        };
+        }
+        .inspect_err(|_| self.running.store(false, Ordering::Relaxed))?;
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
@@ -248,25 +256,43 @@ where
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.
-    fn par_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+    fn par_adaptive(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+    ) -> Result<u32, TsError> {
         (0..usize::MAX)
             .into_par_iter()
-            .take_any_while(|_| {
-                self.verification(scheduler);
+            .map(|_| {
+                self.verification(scheduler)?;
                 self.adaptive_bound(confidence, precision);
-                self.is_running()
+                Ok(())
             })
-            .count() as u32
+            .take_any_while(|_| self.is_running())
+            .try_fold(
+                || 0u32,
+                |counter, res: Result<(), TsError>| res.map(|_| counter + 1),
+            )
+            .try_reduce(|| 0, |a, b| Ok(a + b))
     }
 
-    fn seq_adaptive(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+    fn seq_adaptive(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+    ) -> Result<u32, TsError> {
         (0..)
-            .take_while(|_| {
-                self.verification(scheduler);
+            .map(|_| {
+                self.verification(scheduler)?;
                 self.adaptive_bound(confidence, precision);
-                self.is_running()
+                Ok(())
             })
-            .count() as u32
+            .take_while(|_| self.is_running())
+            .try_fold(0u32, |counter, res: Result<(), TsError>| {
+                res.map(|_| counter + 1)
+            })
     }
 
     /// Produces and saves the traces for the given number of runs,
@@ -278,7 +304,7 @@ where
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
         single_thread: bool,
-    ) -> std::io::Result<()>
+    ) -> Result<(), ScanError>
     where
         T: Tracer<'a>,
         T::ModelData: Sync,
@@ -289,12 +315,13 @@ where
         create_traces_dirs_tree(path)?;
 
         if single_thread {
-            (0..runs).try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
+            (0..runs).try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))
         } else {
             (0..runs)
                 .into_par_iter()
-                .try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))?;
+                .try_for_each(|idx| self.trace::<T>(path, model_data, scheduler, idx))
         }
+        .inspect_err(|_| self.running.store(false, Ordering::Relaxed))?;
 
         let elapsed = start_time.elapsed();
         info!("tracing completed in {elapsed:0.2?}");
@@ -307,7 +334,7 @@ where
         model_data: &'a T::ModelData,
         scheduler: Scheduler,
         idx: usize,
-    ) -> std::io::Result<()>
+    ) -> Result<(), ScanError>
     where
         T: Tracer<'a>,
     {
@@ -325,7 +352,7 @@ where
         let tracer = Some(T::init(writer, model_data));
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
-        let outcome = self.model.experiment(oracle, tracer, running, scheduler);
+        let outcome = self.model.experiment(oracle, tracer, running, scheduler)?;
         if let Some(verified) = outcome {
             let dest_folder = if verified.into_iter().all(|b| b) {
                 SUCCESSES
@@ -349,12 +376,16 @@ impl<O> Scan<O>
 where
     O: OracleTree + Clone + Sync,
 {
-    fn verification_tree(&self, scheduler: Scheduler) {
+    fn verification_tree(&self, scheduler: Scheduler) -> Result<(), TsError> {
         let oracle = self.oracle.clone();
         let running = Arc::clone(&self.running);
-        if let Some(outcome) = self.model.experiment_tree::<O>(oracle, running, scheduler) {
+        if let Some(outcome) = self
+            .model
+            .experiment_tree::<O>(oracle, running, scheduler)?
+        {
             self.process_outcome(&outcome);
         }
+        Ok(())
     }
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters.
@@ -381,7 +412,8 @@ where
             self.seq_adaptive_tree(confidence, precision, scheduler)
         } else {
             self.par_adaptive_tree(confidence, precision, scheduler)
-        };
+        }
+        .inspect_err(|_| self.running.store(false, Ordering::Relaxed))?;
 
         let elapsed = start_time.elapsed();
         info!("verification completed in {elapsed:0.2?}");
@@ -395,25 +427,43 @@ where
 
     /// Statistically verifies the provided [`TransitionSystem`] using adaptive bound and the given parameters,
     /// spawning multiple threads.
-    fn par_adaptive_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+    fn par_adaptive_tree(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+    ) -> Result<u32, TsError> {
         (0..usize::MAX)
             .into_par_iter()
-            .take_any_while(|_| {
-                self.verification_tree(scheduler);
+            .map(|_| {
+                self.verification_tree(scheduler)?;
                 self.adaptive_bound(confidence, precision);
-                self.is_running()
+                Ok(())
             })
-            .count() as u32
+            .take_any_while(|_| self.is_running())
+            .try_fold(
+                || 0u32,
+                |counter, res: Result<(), TsError>| res.map(|_| counter + 1),
+            )
+            .try_reduce(|| 0, |a, b| Ok(a + b))
     }
 
-    fn seq_adaptive_tree(&self, confidence: f64, precision: f64, scheduler: Scheduler) -> u32 {
+    fn seq_adaptive_tree(
+        &self,
+        confidence: f64,
+        precision: f64,
+        scheduler: Scheduler,
+    ) -> Result<u32, TsError> {
         (0..)
-            .take_while(|_| {
-                self.verification_tree(scheduler);
+            .map(|_| {
+                self.verification_tree(scheduler)?;
                 self.adaptive_bound(confidence, precision);
-                self.is_running()
+                Ok(())
             })
-            .count() as u32
+            .take_while(|_| self.is_running())
+            .try_fold(0u32, |counter, res: Result<(), TsError>| {
+                res.map(|_| counter + 1)
+            })
     }
 }
 

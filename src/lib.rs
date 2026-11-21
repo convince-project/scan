@@ -266,9 +266,18 @@ impl Cli {
                     ScxmlScan::Pmtl(scan) => {
                         args.run_verification::<_>(model, progress, json, &scan)
                     }
-                    ScxmlScan::Ctlp(scan) => {
-                        args.run_verification_tree::<_>(model, progress, json, &scan)
-                    }
+                    ScxmlScan::Ctlp(scan) => match args.scheduler {
+                        Some(scheduler) => match scheduler {
+                            CliScheduler::Uniform => {
+                                args.run_verification::<_>(model, progress, json, &scan)
+                            }
+                            CliScheduler::Sampling => todo!(),
+                            CliScheduler::Exhaustive | CliScheduler::Priority => {
+                                args.run_verification_tree::<_>(model, progress, json, &scan)
+                            }
+                        },
+                        None => args.run_verification_tree::<_>(model, progress, json, &scan),
+                    },
                 }?
                 .print(json);
             }

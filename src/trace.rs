@@ -58,7 +58,7 @@ impl TraceArgs {
         model: &str,
         scan: &'a Scan<Od>,
         model_data: &'a Tr::ModelData,
-    ) -> std::io::Result<()>
+    ) -> anyhow::Result<()>
     where
         Od: Oracle + Clone + Sync + 'a,
         Tr: Tracer<'a>,
