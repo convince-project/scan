@@ -78,11 +78,10 @@ enum Format {
 }
 
 /// Scheduling strategy used to sample executions
-#[derive(Debug, Default, Clone, Copy, Parser, ValueEnum)]
+#[derive(Debug, Clone, Copy, Parser, ValueEnum)]
 #[deny(missing_docs)]
 enum CliScheduler {
     /// Uniform distribution over non-deterministic choices.
-    #[default]
     Uniform,
     /// Schedulers sampled from uniform distribution over scheduler space.
     ///

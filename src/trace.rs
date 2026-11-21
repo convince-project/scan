@@ -69,7 +69,7 @@ impl TraceArgs {
             self.traces,
             &path,
             model_data,
-            self.scheduler.unwrap_or_default().into(),
+            self.scheduler.unwrap_or(CliScheduler::Uniform).into(),
             self.single_thread,
         )?;
         println!("trace computation for model '{model}' completed");

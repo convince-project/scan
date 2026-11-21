@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use clap::Parser;
-use scan_core::{OracleTree, Oracle, Scan};
+use scan_core::{Oracle, OracleTree, Report as ScanReport, Scan};
 
 use crate::{CliScheduler, progress::Bar};
 
@@ -101,7 +101,7 @@ impl VerifyArgs {
         }
         if let Some(bar) = progress {
             std::thread::scope(|s| {
-                s.spawn(|| {
+                let bar = s.spawn(|| {
                     bar.print_progress_bar::<O>(
                         self.confidence,
                         self.precision,
@@ -109,45 +109,27 @@ impl VerifyArgs {
                         scan,
                     );
                 });
-                Ok(self.verify::<O>(model.to_owned(), scan))
+                let report = self.verify::<O>(model.to_owned(), scan);
+                bar.join().expect("tui thread terminates");
+                report
             })
         } else {
-            Ok(self.verify::<O>(model.to_owned(), scan))
+            self.verify::<O>(model.to_owned(), scan)
         }
     }
 
-    pub(crate) fn verify<'a, O>(&self, model: String, scan: &'a Scan<O>) -> Report
+    pub(crate) fn verify<'a, O>(&self, model: String, scan: &'a Scan<O>) -> anyhow::Result<Report>
     where
         O: Oracle + Clone + Sync + 'a,
     {
-        let report = scan
-            .adaptive(
-                self.confidence,
-                self.precision,
-                self.scheduler.unwrap_or_default().into(),
-                self.single_thread,
-            )
-            .expect("verify");
-        let successes = report.successes;
-        let failures = report.failures;
-        let runs = successes + failures;
-        let rate = successes as f64 / runs as f64;
-        let properties = self
-            .properties
-            .iter()
-            .cloned()
-            .zip(report.violations.into_iter().chain([0].into_iter().cycle()))
-            .collect::<Vec<(String, u32)>>();
-        Report {
-            model,
-            properties,
-            precision: self.precision,
-            confidence: self.confidence,
-            rate,
-            runs,
-            successes,
-            failures,
-        }
+        scan.adaptive(
+            self.confidence,
+            self.precision,
+            self.scheduler.unwrap_or(CliScheduler::Uniform).into(),
+            self.single_thread,
+        )
+        .map(|report| self.produce_report(model, report))
+        .map_err(anyhow::Error::from)
     }
 
     pub(crate) fn run_verification_tree<'a, O>(
@@ -168,7 +150,7 @@ impl VerifyArgs {
         }
         if let Some(bar) = progress {
             std::thread::scope(|s| {
-                s.spawn(|| {
+                let bar = s.spawn(|| {
                     bar.print_progress_bar::<O>(
                         self.confidence,
                         self.precision,
@@ -176,25 +158,30 @@ impl VerifyArgs {
                         scan,
                     );
                 });
-                Ok(self.verify_tree::<O>(model.to_owned(), scan))
+                let report = self.verify_tree::<O>(model.to_owned(), scan);
+                bar.join().expect("tui thread terminates");
+                report
             })
         } else {
-            Ok(self.verify_tree::<O>(model.to_owned(), scan))
+            self.verify_tree::<O>(model.to_owned(), scan)
         }
     }
 
-    pub(crate) fn verify_tree<'a, O>(&self, model: String, scan: &'a Scan<O>) -> Report
+    fn verify_tree<'a, O>(&self, model: String, scan: &'a Scan<O>) -> anyhow::Result<Report>
     where
         O: OracleTree + Clone + Sync + 'a,
     {
-        let report = scan
-            .adaptive_tree(
-                self.confidence,
-                self.precision,
-                self.scheduler.unwrap_or_default().into(),
-                self.single_thread,
-            )
-            .expect("verify");
+        scan.adaptive_tree(
+            self.confidence,
+            self.precision,
+            self.scheduler.unwrap_or(CliScheduler::Exhaustive).into(),
+            self.single_thread,
+        )
+        .map(|report| self.produce_report(model, report))
+        .map_err(anyhow::Error::from)
+    }
+
+    fn produce_report(&self, model: String, report: ScanReport) -> Report {
         let successes = report.successes;
         let failures = report.failures;
         let runs = successes + failures;
