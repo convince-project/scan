@@ -3,15 +3,19 @@
 mod expression;
 
 use self::expression::{expression, infer_type};
-use crate::parser::{
-    Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send, State,
-    Target,
+use crate::{
+    ScxmlScan,
+    parser::{
+        Executable, If, OmgBaseType, OmgType, OmgTypeDef, OmgTypes, Param, Parser, Scxml, Send,
+        State, Target,
+    },
 };
 use anyhow::{Context, anyhow, bail};
 use boa_interner::Interner;
 use log::{info, trace, warn};
 use scan_core::{channel_system::*, *};
-use scan_pmtl::{Pmtl, PmtlOracle};
+use scan_ctl::CtlpOracle;
+use scan_pmtl::PmtlOracle;
 use std::collections::{BTreeMap, BTreeSet};
 
 // TODO:
@@ -67,9 +71,6 @@ pub struct ModelBuilder {
     events: Vec<EventBuilder>,
     event_indexes: BTreeMap<String, usize>,
     parameter_channels: BTreeMap<(PgId, PgId, usize), Channel>,
-    // Properties
-    guarantees: Vec<(String, Pmtl<usize>)>,
-    assumes: Vec<(String, Pmtl<usize>)>,
     predicates: Vec<BooleanExpr<Atom>>,
     // port vars are (in general) expressions over atoms on the same channel
     port_vars: BTreeMap<String, (OmgType, Vec<Expression<Atom>>)>,
@@ -89,7 +90,8 @@ impl ModelBuilder {
         mut parser: Parser,
         properties: &[String],
         all_properties: bool,
-    ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
+    ) -> anyhow::Result<(ScxmlScan, ScxmlModel)> {
+        // ) -> anyhow::Result<(TransitionSystem, PmtlOracle, ScxmlModel)> {
         let mut model_builder = ModelBuilder::default();
         model_builder
             .prebuild_processes(&mut parser)
@@ -131,9 +133,7 @@ impl ModelBuilder {
             .build_properties(&mut parser, properties, all_properties)
             .context("failed building properties")?;
 
-        let model = model_builder.build_model(parser);
-
-        Ok(model)
+        model_builder.build_model(parser)
     }
 
     fn event_index(&mut self, id: &str) -> usize {
@@ -529,8 +529,8 @@ impl ModelBuilder {
             }
         }
         // Make non-mut
-        let param_vars = params_vars;
-        let param_actions = params_actions;
+        let params_vars = params_vars;
+        let params_actions = params_actions;
 
         // Consider each of the FSM's states
         for (state_id, state) in scxml.states.iter() {
@@ -616,8 +616,7 @@ impl ModelBuilder {
             let mut known_events = Vec::new();
             // Retrieve external event's parameters
             // We need to set up the parameter-passing channel for every possible event that could be sent,
-            // from any possible other FSM,
-            // and for any parameter of the event.
+            // and from any possible other FSM.
             for (event_index, event_builder) in self
                 .events
                 .iter()
@@ -636,7 +635,7 @@ impl ModelBuilder {
                     );
                     // Add event (and sender) to list of known events.
                     known_events.push(is_event_sender.to_owned());
-                    if let Some(&read_params) = param_actions.get(&(sender_id, event_index)) {
+                    if let Some(&read_params) = params_actions.get(&(sender_id, event_index)) {
                         self.cs
                             .add_transition(
                                 pg_id,
@@ -659,11 +658,8 @@ impl ModelBuilder {
                 }
             }
             // Proceed if event is unknown (without retrieving parameters).
-            let unknown_event = if known_events.is_empty() {
-                None
-            } else {
-                Some(!(BooleanExpr::Or(known_events)))
-            };
+            let unknown_event = (!known_events.is_empty())
+                .then(|| !(BooleanExpr::Or(known_events.into_boxed_slice())));
             self.cs
                 .add_autonomous_transition(
                     pg_id,
@@ -703,7 +699,7 @@ impl ModelBuilder {
                     .or_insert_with(|| self.cs.new_location(pg_id).expect("pg_id should exist"));
 
                 // Set up origin and parameters for conditional/executable content.
-                if let Some(event_name) = transition.event.as_ref() {
+                if let Some(ref event_name) = transition.event {
                     let event_index = *self
                         .event_indexes
                         .get(event_name)
@@ -712,7 +708,7 @@ impl ModelBuilder {
                         (
                             String::from("_EventDataType"),
                             OmgTypeDef::Structure(BTreeMap::from_iter(
-                                param_vars
+                                params_vars
                                     .iter()
                                     .filter(|((ev_ix, _), _)| *ev_ix == event_index)
                                     .map(|((_, param_name), (t, _))| {
@@ -735,7 +731,7 @@ impl ModelBuilder {
                         .params
                         .keys()
                         .flat_map(|param_name| {
-                            &param_vars
+                            &params_vars
                                 .get(&(event_index, param_name.clone()))
                                 .expect("param")
                                 .1
@@ -1351,7 +1347,7 @@ impl ModelBuilder {
                         port_id.to_owned(),
                         (
                             OmgType::Base(OmgBaseType::Boolean),
-                            vec![Expression::Boolean(BooleanExpr::And(vec![
+                            vec![Expression::Boolean(BooleanExpr::And(Box::new([
                                 BooleanExpr::Var(Atom::Event(ext_queue)),
                                 BooleanExpr::NatEqual(
                                     NaturalExpr::Var(Atom::State(ext_queue, 0)),
@@ -1361,7 +1357,7 @@ impl ModelBuilder {
                                     NaturalExpr::Var(Atom::State(ext_queue, 1)),
                                     NaturalExpr::Const(u16::from(origin) as Natural),
                                 ),
-                            ]))],
+                            ])))],
                         ),
                     );
                     // Default values represent a non-existing event/origin
@@ -1411,12 +1407,10 @@ impl ModelBuilder {
                 .guarantees
                 .retain(|(name, _)| properties.contains(name));
         }
-        self.guarantees = parser.properties.guarantees.clone();
-        self.assumes = parser.properties.assumes.clone();
         Ok(())
     }
 
-    fn build_model(mut self, parser: Parser) -> (TransitionSystem, PmtlOracle, ScxmlModel) {
+    fn build_model(mut self, parser: Parser) -> anyhow::Result<(ScxmlScan, ScxmlModel)> {
         let cs = self.cs.build();
         let mut model = TransitionSystem::new(cs);
         let port_vars = self
@@ -1433,9 +1427,51 @@ impl ModelBuilder {
         }
         // Shrink model storage (just an optimization);
         model.shrink();
-        let (guarantee_names, guarantees): (Vec<_>, Vec<_>) = self.guarantees.into_iter().unzip();
-        let (assume_names, assumes): (Vec<_>, Vec<_>) = self.assumes.into_iter().unzip();
-        let oracle = PmtlOracle::new(assumes.as_slice(), guarantees.as_slice());
+
+        // build properties (same logic)
+        let pmtl_properties: Option<(Vec<_>, Vec<_>)> = parser
+            .properties
+            .guarantees
+            .iter()
+            .map(|(name, prop)| {
+                if let crate::parser::Property::Pmtl(pmtl_prop) = prop {
+                    Some((name.clone(), pmtl_prop.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let assume_names = Vec::new();
+        let ctlp_properties: Option<(Vec<_>, Vec<_>)> = parser
+            .properties
+            .guarantees
+            .iter()
+            .map(|(name, prop)| {
+                if let crate::parser::Property::Ctlp(ctlp_prop) = prop {
+                    Some((name.clone(), ctlp_prop.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let guarantee_names;
+        let scan = match (pmtl_properties, ctlp_properties) {
+            (None, None) => bail!("properties not found"),
+            (None, Some((ctlp_guarantee_names, ctlp_guarantees))) => {
+                let assumes = Vec::new();
+                let oracle = CtlpOracle::new(assumes.as_slice(), ctlp_guarantees.as_slice());
+                guarantee_names = ctlp_guarantee_names;
+                ScxmlScan::Ctlp(Scan::new(model, oracle))
+            }
+            (Some((pmtl_guarantee_names, pmtl_guarantees)), None) => {
+                let assumes = Vec::new();
+                let oracle = PmtlOracle::new(assumes.as_slice(), pmtl_guarantees.as_slice());
+                guarantee_names = pmtl_guarantee_names;
+                ScxmlScan::Pmtl(Scan::new(model, oracle))
+            }
+            (Some(_), Some(_)) => bail!("properties have different logics"),
+        };
+
         let mut events = Vec::from_iter(self.event_indexes);
         events.sort_unstable_by_key(|(_, idx)| *idx);
         let events = events
@@ -1454,9 +1490,8 @@ impl ModelBuilder {
             })
             .collect();
 
-        (
-            model,
-            oracle,
+        Ok((
+            scan,
             ScxmlModel {
                 fsm_names: self.fsm_names,
                 parameters: self
@@ -1477,6 +1512,6 @@ impl ModelBuilder {
                 omg_types: parser.types,
                 ports: self.ports.iter().map(|(c, _)| *c).collect(),
             },
-        )
+        ))
     }
 }

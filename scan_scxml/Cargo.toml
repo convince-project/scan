@@ -1,9 +1,8 @@
 [package]
 name = "smc_scan_scxml"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 description = "SCXML frontend for the Scan model checker."
-documentation = "https://convince-project.github.io/scan/crates/scan_scxml/index.html"
 homepage = "https://convince-project.github.io/scan/"
 repository = "https://github.com/convince-project/scan"
 license = "Apache-2.0"
@@ -16,8 +15,9 @@ name = "scan_scxml"  # The name of the target.
 crate-type = ["lib"]  # The crate types to generate.
 
 [dependencies]
-smc_scan_core = { version = "0.2.1", path = "../scan_core" }
-smc_scan_pmtl = { version = "0.1.1", path = "../scan_pmtl" }
+smc_scan_core = { version = "0.3.0", path = "../scan_core" }
+smc_scan_pmtl = { version = "0.2.0", path = "../scan_pmtl" }
+smc_scan_ctl = { version = "0.1.0", path = "../scan_ctl" }
 anyhow = { workspace = true }
 boa_ast = "0.22.0"
 boa_interner = "0.22.0"
@@ -26,5 +26,5 @@ log = { workspace = true }
 quick-xml = "0.42.0"
 thiserror = { workspace = true }
 logos = "0.16.1"
-chumsky = "0.13.0"
+chumsky = "0.14.2"
 csv = { workspace = true }

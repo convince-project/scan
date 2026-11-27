@@ -2,7 +2,7 @@ mod numset;
 
 use numset::NumSet;
 use scan_core::{Oracle, Time, TimeRange};
-use std::{hash::Hash, ops::RangeBounds};
+use std::hash::Hash;
 
 /// A Past-time Metric Temporal Logic (PMTL) formula.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -17,9 +17,9 @@ where
     /// An atomic formula.
     Atom(V),
     /// Logical disjunction of a list of formulae.
-    And(Vec<Pmtl<V>>),
+    And(Box<[Pmtl<V>]>),
     /// Logical conjunction of a list of formulae.
-    Or(Vec<Pmtl<V>>),
+    Or(Box<[Pmtl<V>]>),
     /// Logical negation of a formula.
     Not(Box<Pmtl<V>>),
     /// Logical implication of a antecedent formula and a consequent formula.
@@ -37,8 +37,8 @@ enum ValPmtl {
     True,
     False,
     Atom(usize, bool),
-    And(Vec<ValPmtl>),
-    Or(Vec<ValPmtl>),
+    And(Box<[ValPmtl]>),
+    Or(Box<[ValPmtl]>),
     Not(Box<ValPmtl>),
     Implies(Box<(ValPmtl, ValPmtl)>),
     Historically(Box<ValPmtl>, TimeRange, NumSet),
@@ -220,36 +220,19 @@ impl ValPmtl {
                     None
                 }
             }
-            // Valuation of Historically represents the set of time moments in which we know the formula to be false.
-            // If the argument of the operator is know to be always true, then Historically is always true.
-            // If the argument of the operator is know to be always false, then Historically is always false provided that the lower time bound is 0.
-            ValPmtl::Historically(subformula, range, valuation) => subformula
-                .valuation(time)
-                .and_then(|v| (range.contains(&0) || v).then_some(v))
-                .or_else(|| valuation.contains_unbounded_interval(time).then_some(false)),
-            // Valuation of Previously represents the set of time moments in which we know the formula to be false.
-            // If the argument of the operator is know to be always true, then Previously is always true provided that the lower time bound is 0.
-            // If the argument of the operator is know to be always false, then Previously is always false.
-            ValPmtl::Once(subformula, range, valuation) => subformula
-                .valuation(time)
-                .and_then(|v| (range.contains(&0) || !v).then_some(v))
-                .or_else(|| valuation.contains_unbounded_interval(time).then_some(true)),
-            // Valuation of Since represents the set of time moments in which we know the formula to be true if its lhs argument is true from then on.
-            // If the rhs argument of the operator is know to be always false, then Since is always false.
-            // If the Since valuation is always true and the lhs argument of the operator is know to be always true, then Since is always true.
-            // If the Since valuation is always true and the lhs argument of the operator is know to be always false, then Since is always false provided that the lower time bound is 0.
-            ValPmtl::Since(subformulae, range, valuation) => {
-                if let Some(false) = subformulae.1.valuation(time) {
-                    Some(false)
-                } else if valuation.contains_unbounded_interval(time) {
-                    subformulae
-                        .0
-                        .valuation(time)
-                        .and_then(|v| (range.contains(&0) || v).then_some(v))
-                } else {
-                    None
-                }
+            // Valuation set of Historically represents the set of time moments in which we know the formula to be false.
+            ValPmtl::Historically(_subformula, _rangee, valuation) => {
+                valuation.contains_unbounded_interval(time).then_some(false)
             }
+            // Valuation set of Previously represents the set of time moments in which we know the formula to be true.
+            ValPmtl::Once(_subformula, _range, valuation) => {
+                valuation.contains_unbounded_interval(time).then_some(true)
+            }
+            // Valuation set of Since represents the set of time moments in which we know the formula to be true if its lhs argument is true from then on.
+            ValPmtl::Since(subformulae, _range, valuation) => (valuation
+                .contains_unbounded_interval(time)
+                && matches!(subformulae.0.valuation(time), Some(true)))
+            .then_some(true),
         }
     }
 }
@@ -426,26 +409,18 @@ mod tests {
     //         assert!(state.final_output_guarantees().any(|b| !b));
     //     }
 
-    //     #[test]
-    //     fn historically() {
-    //         let formula = Pmtl::Historically(Box::new(Pmtl::Atom(0)), 1, 2);
-    //         let oracle = PmtlOracle::new(&[], &[formula]);
-    //         let mut state = oracle.generate();
-    //         state.update(&[false], 0);
-    //         assert!(state.final_output_guarantees().any(|b| b));
-    //         state.update(&[false], 0);
-    //         assert!(state.final_output_guarantees().any(|b| b));
-    //         state.update(&[true], 1);
-    //         assert!(state.final_output_guarantees().any(|b| !b));
-    //         state.update(&[true], 2);
-    //         assert!(state.final_output_guarantees().any(|b| !b));
-    //         state.update(&[true], 3);
-    //         assert!(state.final_output_guarantees().any(|b| b));
-    //         state.update(&[false], 3);
-    //         assert!(state.final_output_guarantees().any(|b| b));
-    //         state.update(&[true], 4);
-    //         assert!(state.final_output_guarantees().any(|b| !b));
-    //     }
+    #[test]
+    fn historically_once() {
+        let formula = Pmtl::Historically(
+            Box::new(Pmtl::Once(Box::new(Pmtl::Atom(0)), TimeRange::new(0..))),
+            TimeRange::new(0..),
+        );
+        let mut oracle = PmtlOracle::new(&[], &[formula]);
+        oracle.update_state(&[false]);
+        assert!(oracle.output_guarantees().all(|b| b.is_some_and(|b| !b)));
+        oracle.update_state(&[true]);
+        assert!(oracle.output_guarantees().all(|b| b.is_some_and(|b| !b)));
+    }
 
     //     #[test]
     //     fn previously() {
