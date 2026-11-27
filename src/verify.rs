@@ -94,7 +94,7 @@ impl VerifyArgs {
         O: 'a + Oracle + Clone + Sync,
     {
         if !json {
-            println!(
+            eprintln!(
                 "Verifying {model} (-p {} -c {}) {:?}",
                 self.precision, self.confidence, self.properties
             );
@@ -143,7 +143,7 @@ impl VerifyArgs {
         O: 'a + OracleTree + Clone + Sync,
     {
         if !json {
-            println!(
+            eprintln!(
                 "Verifying {model} (-p {} -c {}) {:?}",
                 self.precision, self.confidence, self.properties
             );

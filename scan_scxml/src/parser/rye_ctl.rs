@@ -60,112 +60,101 @@ enum Token {
     #[token(")")]
     RParen,
 
-    #[token("[")]
-    BracketOpen,
+    #[regex(r#"\[[0-9]*:[0-9]*\]"#, |lex| {
+        let (lhs, rhs) = lex.slice().strip_circumfix("[", "]").unwrap().split_once(":").unwrap();
+        let lb = lhs.parse::<Time>().map_or(Bound::Included(0), Bound::Included);
+        let ub = rhs.parse::<Time>().map_or(Bound::Unbounded, Bound::Included);
+        TimeRange::new((lb, ub))
+    })]
+    TimeBound(TimeRange),
 
-    #[token("]")]
-    BracketClose,
-
-    #[token(":")]
-    Colon,
-
-    #[regex("[0-9]+", |lex| lex.slice().parse::<usize>().unwrap())]
-    Integer(usize),
-
-    // #[regex(r#"\[[0-9]*:[0-9]*\]"#, |lex| lex.slice().strip_circumfix("[", "]").unwrap().split_once(":").map(|(lhs, rhs)| (lhs.parse::<Time>().unwrap(), rhs.parse::<Time>().unwrap())).unwrap())]
-    // TimeBound((Time, Time)),
     #[regex(r#"\{[^{}]*\}"#, |lex| lex.slice().strip_circumfix("{", "}").unwrap().trim().to_owned())]
     Predicate(String),
 }
 
 fn parser<'src>() -> impl Parser<'src, &'src [Token], Ctlp<String>, extra::Err<Simple<'src, Token>>>
 {
-    let integer = select! {
-        Token::Integer(n) => n as Time,
-    };
-
-    let bounds = integer
-        .or_not()
-        .map(|p| p.map(Bound::Included).unwrap_or(Bound::Unbounded))
-        .then_ignore(just(Token::Colon))
-        .then(
-            integer
-                .or_not()
-                .map(|p| p.map(Bound::Included).unwrap_or(Bound::Unbounded)),
-        )
-        .delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
-        .or_not()
-        .map(|bounds| bounds.unwrap_or((Bound::Included(0), Bound::Unbounded)));
-
     let mut ctl_state = Recursive::declare();
 
+    let range = select! {
+        Token::TimeBound(range) => range,
+    };
     let once = just(Token::Once)
-        .ignore_then(bounds.clone())
+        .ignore_then(range.or_not())
         .then(ctl_state.clone())
-        .map(|(bounds, ctl)| PathCtl::Once(Box::new(ctl), TimeRange::new(bounds)));
+        .map(|(bounds, ctl)| PathCtl::Once(Box::new(ctl), bounds.unwrap_or_default()))
+        .labelled("once");
     let historically = just(Token::Historically)
-        .ignore_then(bounds.clone())
+        .ignore_then(range.or_not())
         .then(ctl_state.clone())
-        .map(|(bounds, ctl)| PathCtl::Historically(Box::new(ctl), TimeRange::new(bounds)));
+        .map(|(bounds, ctl)| PathCtl::Historically(Box::new(ctl), bounds.unwrap_or_default()))
+        .labelled("historically");
     let since = ctl_state
         .clone()
         .then_ignore(just(Token::Since))
-        .then(bounds.clone())
+        .then(range.or_not())
         .then(ctl_state.clone())
-        .map(|((lhs, range), rhs)| PathCtl::Since(Box::new((lhs, rhs)), TimeRange::new(range)));
-
+        .map(|((lhs, range), rhs)| PathCtl::Since(Box::new((lhs, rhs)), range.unwrap_or_default()))
+        .labelled("since");
     let ctl_path = chumsky::recursive::recursive(|ctl_path| {
-        choice((
-            once,
-            historically,
-            since,
-            ctl_path.delimited_by(just(Token::LParen), just(Token::RParen)),
-        ))
-    });
+        choice((once, historically, since))
+            .or(ctl_path.delimited_by(just(Token::LParen), just(Token::RParen)))
+    })
+    .labelled("path formula");
 
     let all = just(Token::All)
         .ignore_then(ctl_path.clone())
-        .map(Ctlp::All);
-    let exists = just(Token::Exist).ignore_then(ctl_path).map(Ctlp::Exists);
-    let not = just(Token::Not)
-        .ignore_then(ctl_state.clone())
-        .map(|ctl| Ctlp::Not(Box::new(ctl)));
-    let implies = ctl_state
+        .map(Ctlp::All)
+        .labelled("universal quantifier");
+    let exists = just(Token::Exist)
+        .ignore_then(ctl_path)
+        .map(Ctlp::Exist)
+        .labelled("existential quantifier");
+    let atom = select! {
+        Token::Predicate(pred) => Ctlp::Atom(pred),
+        Token::True => Ctlp::True,
+        Token::False => Ctlp::False,
+    }
+    .labelled("atomic predicate")
+    .or(ctl_state
         .clone()
-        .then_ignore(just(Token::Implies))
-        .then(ctl_state.clone())
-        .map(|(lhs, rhs)| Ctlp::Implies(Box::new((lhs, rhs))));
-    let and = ctl_state
+        .delimited_by(just(Token::LParen), just(Token::RParen)))
+    .or(choice((all, exists)));
+    let not = just(Token::Not)
+        .ignored()
+        .repeated()
+        .at_least(1)
+        .foldr(atom.clone(), |_, ctl| Ctlp::Not(Box::new(ctl)))
+        .labelled("negation")
+        .or(atom);
+    let unary = not;
+    let conjunction = unary
         .clone()
         .separated_by(just(Token::And))
         .at_least(2)
-        .collect::<Box<[_]>>()
-        .map(Ctlp::And);
-    let or = ctl_state
+        .collect::<Box<[Ctlp<_>]>>()
+        .map(Ctlp::And)
+        .labelled("conjunction")
+        .or(unary);
+    let disjunction = conjunction
         .clone()
         .separated_by(just(Token::Or))
         .at_least(2)
-        .collect::<Box<[_]>>()
-        .map(Ctlp::Or);
-
-    ctl_state.define({
-        choice((
-            select! {
-                Token::Predicate(pred) => Ctlp::Atom(pred),
-                Token::True => Ctlp::True,
-                Token::False => Ctlp::False,
-            },
-            all,
-            exists,
-            not,
-            ctl_state
-                .clone()
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
-            implies,
-            and,
-            or,
-        ))
-    });
+        .collect::<Box<[Ctlp<_>]>>()
+        .map(Ctlp::Or)
+        .labelled("disjunction")
+        .or(conjunction);
+    let implication = disjunction
+        .clone()
+        .foldl(
+            just(Token::Implies)
+                .ignore_then(disjunction.clone())
+                .repeated(),
+            |lhs, rhs| Ctlp::Implies(Box::new((lhs, rhs))),
+        )
+        .labelled("implication")
+        .or(disjunction);
+    ctl_state.define({ implication.labelled("state formula") });
 
     ctl_state.then_ignore(end())
 }

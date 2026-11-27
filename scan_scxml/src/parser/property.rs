@@ -407,8 +407,8 @@ fn parse_predicates_ctl(
                 parse_predicates_ctl(rhs, predicates, interner)?,
             ))))
         }
-        Ctlp::Exists(path_ctl) => {
-            parse_predicates_path_ctl(path_ctl, predicates, interner).map(Ctlp::Exists)
+        Ctlp::Exist(path_ctl) => {
+            parse_predicates_path_ctl(path_ctl, predicates, interner).map(Ctlp::Exist)
         }
         Ctlp::All(path_ctl) => {
             parse_predicates_path_ctl(path_ctl, predicates, interner).map(Ctlp::All)

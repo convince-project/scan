@@ -40,5 +40,5 @@ pub trait Oracle: Sync {
 pub trait OracleTree: Oracle {
     fn fold_branch(&mut self, closed: Self);
 
-    fn end_branch(&mut self);
+    // fn end_branch(&mut self);
 }

@@ -166,15 +166,6 @@ impl TransitionSystem {
         Ok(())
     }
 
-    // fn port_idxs(&self) -> Box<[usize]> {
-    //     [0].into_iter()
-    //         .chain(self.vals.iter().scan(0, |counter, val| {
-    //             *counter += val.len();
-    //             Some(*counter)
-    //         }))
-    //         .collect()
-    // }
-
     /// Adds a new predicate to the [`CsModel`],
     /// which is an expression over the CS's channels.
     pub fn add_predicate(&mut self, predicate: BooleanExpr<Atom>) -> Result<(), TsError> {
@@ -324,11 +315,10 @@ impl TransitionSystem {
 
         // Initialize oracle with TS initial state
         let state: Box<[bool]> = run.labels().collect();
-        run.fastforward(&bump);
         // NOTE: root of the oracle tree should be initial state
         oracle.update_state(&state);
-        // add initial system state as root node so that CTL state semantics correct even without top-level quantifier
-        executions_stack.push((run.clone(), amples.clone(), Vec::new(), oracle.clone()));
+        // // add initial system state as root node so that CTL state semantics correct even without top-level quantifier
+        // executions_stack.push((run.clone(), amples.clone(), Vec::new(), oracle.clone()));
 
         // FILO stack: depth-first search
         while running.load(Ordering::Relaxed) {
@@ -370,7 +360,6 @@ impl TransitionSystem {
                     }
                     bump.reset();
                     let _event = run.transition(&mut oracle, action, &posts, &bump).unwrap();
-                    // Update DAG
                     let action_pg_idx = u16::from(action.program_graph_id()) as usize;
                     // NOTE: Ample sets, in this case, are closed under intersection,
                     // because A = ⋃ {Ample(a) | a ∈ A} for every ample set A
@@ -381,6 +370,12 @@ impl TransitionSystem {
                     // Continue execution of same TS and oracle
                     continue;
                 } else if run.is_waiting() {
+                    executions_stack.push((
+                        run.clone(),
+                        amples.clone(),
+                        Vec::new(),
+                        oracle.clone(),
+                    ));
                     run.time_tick();
                     oracle.update_time(run.time());
                     amples
@@ -388,17 +383,14 @@ impl TransitionSystem {
                         .for_each(|(_set, invalidate)| *invalidate = true);
                     // Continue execution of same TS and oracle
                     continue;
-                } else {
-                    oracle.end_branch();
                 }
             }
 
             // Close current tree branch exploration and pop next one (if any)
             if let Some((branch_run, branch_amples, actions, branch_oracle)) =
                 executions_stack.last_mut()
-                // below pattern is always matched except at root node
-                && let Some((action, posts)) = actions.pop()
             {
+                let (action, posts) = actions.pop().expect("action list is never empty");
                 branch_oracle.fold_branch(oracle);
                 if actions.is_empty() {
                     let (branch_run, branch_amples, actions, branch_oracle) =
@@ -423,6 +415,7 @@ impl TransitionSystem {
                     .for_each(|(set, invalidate)| *invalidate |= set.contains(action_pg_idx));
             } else {
                 // Model execution terminates
+                assert!(executions_stack.is_empty(),);
                 trace!("run terminates in {:?}", start_time.elapsed());
                 return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
@@ -459,18 +452,17 @@ impl TransitionSystem {
 
         // Initialize oracle with TS initial state
         let state: Box<[bool]> = run.labels().collect();
-        run.fastforward(&bump);
         // NOTE: root of the oracle tree should be initial state
         oracle.update_state(&state);
-        // add initial system state as root node so that CTL state semantics correct even without top-level quantifier
-        executions_stack.push((
-            run.clone(),
-            dag.clone(),
-            amples.clone(),
-            Vec::new(),
-            restricted_ample.clone(),
-            oracle.clone(),
-        ));
+        // // add initial system state as root node so that CTL state semantics correct even without top-level quantifier
+        // executions_stack.push((
+        //     run.clone(),
+        //     dag.clone(),
+        //     amples.clone(),
+        //     Vec::new(),
+        //     restricted_ample.clone(),
+        //     oracle.clone(),
+        // ));
 
         // FILO stack: depth-first search
         while running.load(Ordering::Relaxed) {
@@ -546,9 +538,8 @@ impl TransitionSystem {
                     let node_a = dag_ids[a];
                     restricted_ample.ones().for_each(|b| {
                         if b != a {
-                            let node_b = dag_ids[b];
                             let _ = dag
-                                .try_update_edge(node_a, node_b, ())
+                                .try_update_edge(node_a, dag_ids[b], ())
                                 .expect("edge must be valid");
                         }
                     });
@@ -562,28 +553,30 @@ impl TransitionSystem {
                         .for_each(|(_set, invalidate)| *invalidate = true);
                     // Continue execution of same TS and oracle
                     continue;
-                } else {
-                    oracle.end_branch();
                 }
             }
 
             // Close current tree branch exploration and pop next one (if any)
-            if let Some((branch_run, branch_dag, branch_amples, actions, branch_restricted_ample, branch_oracle)) =
-                executions_stack.last_mut()
-                // below pattern is always matched except at root node
-                && let Some((action, posts)) = actions.pop()
+            if let Some((
+                branch_run,
+                branch_dag,
+                branch_amples,
+                actions,
+                branch_restricted_ample,
+                branch_oracle,
+            )) = executions_stack.last_mut()
             {
+                let (action, posts) = actions.pop().expect("action list is never empty");
                 branch_oracle.fold_branch(oracle);
                 if actions.is_empty() {
                     let (
                         branch_run,
                         branch_dag,
                         branch_amples,
-                        actions,
+                        _actions,
                         branch_restricted_ample,
                         branch_oracle,
                     ) = executions_stack.pop().unwrap();
-                    assert!(actions.is_empty());
                     run = branch_run;
                     dag = branch_dag;
                     amples = branch_amples;
@@ -610,14 +603,14 @@ impl TransitionSystem {
                 let node_a = dag_ids[a];
                 restricted_ample.ones().for_each(|b| {
                     if b != a {
-                        let node_b = dag_ids[b];
                         let _ = dag
-                            .try_update_edge(node_a, node_b, ())
+                            .try_update_edge(node_a, dag_ids[b], ())
                             .expect("edge must be valid");
                     }
                 });
             } else {
                 // Model execution terminates
+                assert!(executions_stack.is_empty(),);
                 trace!("run terminates in {:?}", start_time.elapsed());
                 return Some(Vec::from_iter(oracle.final_output_guarantees()));
             }
@@ -641,7 +634,7 @@ mod test {
     impl OracleTree for DummyOracle {
         fn fold_branch(&mut self, _closed: Self) {}
 
-        fn end_branch(&mut self) {}
+        // fn end_branch(&mut self) {}
     }
 
     #[test]

@@ -6,13 +6,20 @@ use get_size2::GetSize;
 pub type Time = u32;
 
 /// A time constraint given by lower bound and upper bounds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, GetSize)]
 pub struct TimeRange {
     lower_bound: Bound<Time>,
     upper_bound: Bound<Time>,
 }
 
-impl GetSize for TimeRange {}
+impl Default for TimeRange {
+    fn default() -> Self {
+        Self {
+            lower_bound: Bound::Included(0),
+            upper_bound: Bound::Unbounded,
+        }
+    }
+}
 
 impl RangeBounds<Time> for TimeRange {
     fn start_bound(&self) -> Bound<&Time> {
