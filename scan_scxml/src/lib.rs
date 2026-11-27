@@ -20,6 +20,7 @@ pub use tracer::TracePrinter;
 pub fn load(
     path: &Path,
     properties: &[String],
+    assumes: &[String],
     all_properties: bool,
 ) -> anyhow::Result<(Scan<PmtlOracle>, ScxmlModel)> {
     let time = std::time::Instant::now();
@@ -29,7 +30,8 @@ pub fn load(
 
     let time = std::time::Instant::now();
     info!(target: "build", "building SCXML model");
-    let (cs, oracle, model) = builder::ModelBuilder::build(parser, properties, all_properties)?;
+    let (cs, oracle, model) =
+        builder::ModelBuilder::build(parser, properties, assumes, all_properties)?;
     info!("building model completed in {:?}", time.elapsed());
     let scan = Scan::new(cs, oracle);
     Ok((scan, model))

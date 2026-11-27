@@ -35,6 +35,9 @@ Example:
 pub(crate) struct VerifyArgs {
     /// Space-separated list of properties to verify.
     pub(crate) properties: Vec<String>,
+    /// Space-separated list of properties to assume.
+    #[arg(long)]
+    pub(crate) assume: Vec<String>,
     /// Verify all properties found in the model specification.
     ///
     /// It is equivalent to listing all of the properties.
