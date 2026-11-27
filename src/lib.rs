@@ -223,20 +223,25 @@ impl Cli {
                 json,
             } => {
                 args.validate()?;
-                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
+                let (scan_def, scxml_model) =
+                    load(&self.model, &args.properties, &args.assume, args.all)?;
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
+                validate_properties(&args.assume, &scxml_model.assumes)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
+                args.assume = scxml_model.assumes.clone();
                 run_verification::<_>(model, &args, progress, json, &scan_def).print(json);
             }
             Commands::Validate => {
-                let (_scan, _scxml_model) = load(&self.model, &[], true)?;
+                let (_scan, _scxml_model) = load(&self.model, &[], &[], true)?;
                 // At this point the model has been validated
                 println!("model '{model}' successfully validated");
             }
             Commands::Trace(mut args) => {
-                let (scan_def, scxml_model) = load(&self.model, &args.properties, args.all)?;
+                let (scan_def, scxml_model) =
+                    load(&self.model, &args.properties, &args.assumes, args.all)?;
                 validate_properties(&args.properties, &scxml_model.guarantees)?;
+                validate_properties(&args.assumes, &scxml_model.guarantees)?;
                 // Reorder properties as they appear in the model
                 args.properties = scxml_model.guarantees.clone();
                 let path = new_traces_dir();

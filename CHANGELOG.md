@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1] - Unreleased
+## [0.3.2] - Unreleased
+
+### New
+
+- Assumptions enforced on the model for assume/guarantee-style verification and conditional probabilities.
+
+### Fixed
+
+- pMTL oracle: Fix wrong valuation computation.
+
+## [0.3.1] - 2026-09-14
 
 ### Changed
 
@@ -16,9 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Off-by-one error failed to account for last sample, causing verification to require one extra sample.
-
-### Fixed
-
 - SCXML: Fix ECMAScript parser occasionally failing to recognize `Math` functions
 
 ## [0.3.0] - 2026-07-13

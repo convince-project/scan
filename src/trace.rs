@@ -17,6 +17,9 @@ Examples:
 pub(crate) struct TraceArgs {
     /// Space-separated list of properties to verify while tracing.
     pub(crate) properties: Vec<String>,
+    /// Space-separated list of properties to assume.
+    #[arg(long)]
+    pub(crate) assumes: Vec<String>,
     /// Verify all properties found in the model specification while tracing.
     /// It is equivalent to listing all of the properties.
     #[arg(short, long)]

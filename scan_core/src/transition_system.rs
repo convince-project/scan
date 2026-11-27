@@ -164,7 +164,7 @@ impl<'def> TransitionSystemRun<'def> {
     /// Perform a random transition.
     ///
     /// Used to generate Montecarlo-like executions
-    pub fn transition(&mut self) {
+    pub fn transition(&mut self) -> bool {
         self.last_event = self.montecarlo_transition();
         if let Some((_, ref event)) = self.last_event
             && let EventType::Send(ref vals) = event.event_type
@@ -175,6 +175,7 @@ impl<'def> TransitionSystemRun<'def> {
             // Copying from slice should be faster than cloning.
             self.vals[index].copy_from_slice(vals);
         }
+        self.last_event.is_some()
     }
 
     /// Returns last event processed by model.
@@ -230,12 +231,23 @@ impl<'def> TransitionSystemRun<'def> {
         let mut labels = Vec::from_iter(self.labels());
         // Initialize oracle with TS initial state
         oracle.update_state(&labels);
-        while oracle.output_guarantees().any(|b| b.is_none()) {
-            self.transition();
+        // Run until all guarantees are determined
+        while (oracle
+            .output_guarantees()
+            .any(|guarantee| guarantee.is_none())
+            // Run until all assumes are satisfied
+            || oracle
+                .output_assumes()
+                .any(|assume| assume.is_none()))
+            // Stop if an assume is violated
+            && oracle
+                .output_assumes()
+                .all(|assume| assume.is_none_or(|a| a))
+        {
             if !running.load(Ordering::Relaxed) {
                 trace!("run stopped");
                 return None;
-            } else if self.last_event().is_some() {
+            } else if self.transition() {
                 labels.clear();
                 labels.extend(self.labels());
                 oracle.update_state(&labels);
@@ -246,9 +258,15 @@ impl<'def> TransitionSystemRun<'def> {
                 break;
             }
         }
-        trace!("run complete");
-        let verified = Vec::from_iter(oracle.final_output_guarantees());
-        Some(verified)
+
+        if oracle.final_output_assumes().all(|assume| assume) {
+            trace!("run complete");
+            let verified = Vec::from_iter(oracle.final_output_guarantees());
+            Some(verified)
+        } else {
+            trace!("run discarded for not satisfying assume");
+            None
+        }
     }
 
     /// Runs a single execution of the [`TransitionSystem`] with a given [`Oracle`]
@@ -269,7 +287,19 @@ impl<'def> TransitionSystemRun<'def> {
         oracle.update_state(&labels);
         // WARN FIXME TODO: Initial state is not written as there is no corresponding action/event
         // Same issue for time-tick events
-        while oracle.output_guarantees().any(|b| b.is_none()) {
+        // Run until all guarantees are determined
+        while (oracle
+            .output_guarantees()
+            .any(|guarantee| guarantee.is_none())
+            // Run until all assumes are satisfied
+            || oracle
+                .output_assumes()
+                .any(|assume| assume.is_none()))
+            // Stop if an assume is violated
+            && oracle
+                .output_assumes()
+                .all(|assume| assume.is_none_or(|a| a))
+        {
             self.transition();
             if let Some((action, event)) = self.last_event() {
                 tracer.trace(model_data, *action, event, self.time(), self.state());
@@ -283,9 +313,14 @@ impl<'def> TransitionSystemRun<'def> {
                 break;
             }
         }
-        trace!("run complete");
-        let verified = Vec::from_iter(oracle.final_output_guarantees());
-        Some(verified)
+        if oracle.final_output_assumes().all(|assume| assume) {
+            trace!("run complete");
+            let verified = Vec::from_iter(oracle.final_output_guarantees());
+            Some(verified)
+        } else {
+            trace!("run discarded for not satisfying assume");
+            None
+        }
     }
 
     fn montecarlo_transition(&mut self) -> Option<(Action, Event)> {
